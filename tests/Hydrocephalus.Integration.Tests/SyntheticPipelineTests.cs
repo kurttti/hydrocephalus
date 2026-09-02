@@ -1,27 +1,164 @@
-using System.Reflection;
+using Hydrocephalus.Application;
+using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Predictions;
+using Hydrocephalus.Domain.Quality;
+using Hydrocephalus.Domain.Reporting;
 
 namespace Hydrocephalus.Integration.Tests;
 
 /// <summary>
-/// Место для synthetic end-to-end теста «импорт → QC → инференс → отчёт»
-/// (M1 в docs/roadmap.md, уровень Integration в tests/README.md).
-/// Сам сценарий появится вместе с доменными контрактами и портами инфраструктуры;
-/// пока проверяется только то, что все три слоя собираются и грузятся вместе.
+/// Synthetic end-to-end: импорт → QC → инференс → отчёт (M1 в docs/roadmap.md,
+/// уровень Integration в tests/README.md). Проверяется последовательность сценария
+/// и его поведение на отказе, отмене и ошибке — реальные адаптеры появятся в M2-M3.
 /// </summary>
 public sealed class SyntheticPipelineTests
 {
     [Fact]
-    public void All_pipeline_layers_load()
+    public async Task Successful_run_produces_a_stored_report_and_an_ordered_audit_trail()
     {
-        foreach (var name in new[]
-                 {
-                     "Hydrocephalus.Domain",
-                     "Hydrocephalus.Application",
-                     "Hydrocephalus.Infrastructure",
-                     "Hydrocephalus.Inference",
-                 })
-        {
-            Assert.NotNull(Assembly.Load(name));
-        }
+        var audit = new RecordingAuditLog();
+        var store = new RecordingReportStore();
+        var quality = QualityAssessment.Clean();
+
+        var prediction = Prediction.Create(
+            quality,
+            Synthetic.Model(),
+            [new ClassProbability(Synthetic.Inph, 0.72), new ClassProbability(Synthetic.Alzheimer, 0.18)],
+            new Uncertainty { LowerBound = 0.6, UpperBound = 0.83, ConfidenceLevel = 0.95 });
+
+        var useCase = UseCase(
+            Synthetic.Study(),
+            new StubInferenceEngine(quality, new AnalysisOutcome.Completed { Prediction = prediction }),
+            store,
+            audit);
+
+        var stages = new List<AnalysisStage>();
+        var progress = new Progress<AnalysisProgress>(update => stages.Add(update.Stage));
+
+        var report = await useCase.ExecuteAsync("source/study-0001", progress, CancellationToken.None);
+
+        var completed = Assert.IsType<AnalysisOutcome.Completed>(report.Outcome);
+        Assert.Equal(Synthetic.Inph, completed.Prediction.MostLikely.Class);
+
+        // Отчёт сохранён ровно один раз и совпадает с возвращённым.
+        Assert.Same(report, Assert.Single(store.Reports));
+
+        // Provenance отчёта заполнено: без версий результат невоспроизводим.
+        Assert.Equal("1.0.0", report.Pipeline.PreprocessingVersion);
+
+        // Порядок событий важнее их наличия: отчёт не может быть сохранён раньше результата QC.
+        Assert.Equal(
+            [
+                AuditEventCode.StudyImported,
+                AuditEventCode.QualityControlCompleted,
+                AuditEventCode.AnalysisStarted,
+                AuditEventCode.AnalysisCompleted,
+                AuditEventCode.ReportStored,
+            ],
+            audit.Codes);
+
+        // Версия модели попадает в аудит (docs/architecture/README.md).
+        Assert.Equal("0.1.0", audit.Events.Single(e => e.Code == AuditEventCode.AnalysisCompleted).ModelVersion);
     }
+
+    [Fact]
+    public async Task Failed_quality_control_refuses_without_reaching_the_classifier()
+    {
+        var audit = new RecordingAuditLog();
+        var store = new RecordingReportStore();
+
+        var blocked = new QualityAssessment
+        {
+            Issues =
+            [
+                new QualityIssue
+                {
+                    Code = QualityIssueCode.MotionArtefact,
+                    Severity = QualityIssueSeverity.Blocking,
+                },
+            ],
+        };
+
+        // Исход анализа не задан: если сценарий дойдёт до классификатора, тест упадёт.
+        var useCase = UseCase(Synthetic.Study(), new StubInferenceEngine(blocked), store, audit);
+
+        var report = await useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None);
+
+        var refused = Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
+        Assert.Equal(RefusalCode.QualityControlFailed, refused.Reason.Code);
+        Assert.Equal(QualityIssueCode.MotionArtefact, Assert.Single(refused.Reason.ContributingIssues).Code);
+
+        // Отказ сохраняется как полноценный отчёт, но анализ не запускался.
+        Assert.Single(store.Reports);
+        Assert.DoesNotContain(AuditEventCode.AnalysisStarted, audit.Codes);
+        Assert.Contains(AuditEventCode.AnalysisRefused, audit.Codes);
+    }
+
+    [Fact]
+    public async Task Baseline_tier_study_is_refused_because_the_pipeline_requires_a_volume()
+    {
+        var audit = new RecordingAuditLog();
+        var store = new RecordingReportStore();
+
+        // Постконтрастная серия — единственная в исследовании, значит анализировать нечего.
+        var study = Synthetic.Study(contrastEnhanced: true);
+
+        var useCase = UseCase(study, new StubInferenceEngine(QualityAssessment.Clean()), store, audit);
+
+        var report = await useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None);
+
+        var refused = Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
+        Assert.Equal(RefusalCode.InsufficientAcquisitionTier, refused.Reason.Code);
+        Assert.DoesNotContain(AuditEventCode.QualityControlCompleted, audit.Codes);
+    }
+
+    [Fact]
+    public async Task Cancellation_stores_no_report_but_leaves_a_trace_in_the_audit_log()
+    {
+        var audit = new RecordingAuditLog();
+        var store = new RecordingReportStore();
+
+        using var cancellation = new CancellationTokenSource();
+
+        var useCase = UseCase(
+            Synthetic.Study(),
+            new StubInferenceEngine(QualityAssessment.Clean(), cancelDuringAnalysis: cancellation),
+            store,
+            audit);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => useCase.ExecuteAsync("source/study-0001", progress: null, cancellation.Token));
+
+        // Наблюдаемое состояние важнее самого исключения.
+        Assert.Empty(store.Reports);
+        Assert.DoesNotContain(AuditEventCode.ReportStored, audit.Codes);
+        Assert.Contains(AuditEventCode.AnalysisCancelled, audit.Codes);
+    }
+
+    [Fact]
+    public async Task Engine_failure_is_audited_and_no_partial_report_is_stored()
+    {
+        var audit = new RecordingAuditLog();
+        var store = new RecordingReportStore();
+
+        var useCase = UseCase(
+            Synthetic.Study(),
+            new StubInferenceEngine(QualityAssessment.Clean(), failWith: new InvalidOperationException("engine failure")),
+            store,
+            audit);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None));
+
+        Assert.Empty(store.Reports);
+        Assert.Contains(AuditEventCode.AnalysisFailed, audit.Codes);
+    }
+
+    private static AnalyzeStudyUseCase UseCase(
+        ImagingStudy study,
+        IInferenceEngine engine,
+        IReportStore store,
+        IAuditLog audit) =>
+        new(new StubImporter(study), engine, store, audit, TimeProvider.System);
 }

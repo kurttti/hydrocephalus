@@ -1,4 +1,5 @@
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Domain.Reporting;
 
@@ -64,6 +65,14 @@ public sealed record AnalysisRequest
 /// </summary>
 public interface IInferenceEngine
 {
+    /// <summary>
+    /// Сообщает версии конвейера, которыми получен результат. Нужны отчёту как provenance:
+    /// без них результат невоспроизводим (docs/ml/README.md).
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Версии предобработки, схемы признаков, label map и сборки приложения.</returns>
+    Task<PipelineIdentity> DescribePipelineAsync(CancellationToken cancellationToken);
+
     /// <summary>
     /// Выполняет входной контроль качества.
     /// </summary>
