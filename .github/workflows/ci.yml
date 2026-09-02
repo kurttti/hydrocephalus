@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Наименьшие права по умолчанию: сборке достаточно чтения репозитория.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  CI: true
+
+jobs:
+  build-test:
+    name: Сборка, линтеры и тесты
+    # WPF собирается только под Windows (ADR 0001).
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          # Версия берётся из global.json, чтобы несовпадение называлось явно.
+          global-json-file: global.json
+
+      - name: Восстановить зависимости
+        run: dotnet restore Hydrocephalus.slnx
+
+      - name: Проверить форматирование
+        run: dotnet format Hydrocephalus.slnx --verify-no-changes --verbosity minimal
+
+      - name: Собрать
+        # Анализаторы включены, TreatWarningsAsErrors делает предупреждение ошибкой.
+        run: dotnet build Hydrocephalus.slnx --configuration Release --no-restore
+
+      - name: Тесты
+        run: dotnet test Hydrocephalus.slnx --configuration Release --no-build --logger trx --results-directory artifacts/test-results
+
+      - name: Опубликовать результаты тестов
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: warn
+
+  sbom:
+    name: SBOM
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Установить CycloneDX
+        run: dotnet tool install --global CycloneDX
+
+      - name: Сформировать SBOM
+        run: dotnet CycloneDX Hydrocephalus.slnx --output artifacts/sbom --json
+
+      - name: Опубликовать SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: artifacts/sbom
+
+  secret-scan:
+    name: Поиск секретов
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Полная история: секрет мог быть добавлен и удалён в прошлых коммитах.
+          fetch-depth: 0
+
+      - name: Gitleaks
+        # --redact: найденное значение не печатается в журнал сборки.
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            detect --source /repo --redact --verbose --no-banner
+
+  dependency-scan:
+    name: Уязвимости зависимостей
+    runs-on: windows-latest
+    # Отчётный, а не блокирующий шаг: docs/security/README.md требует регулярного
+    # сканирования, но транзитивная уязвимость в тестовой цепочке не должна
+    # останавливать несвязанный с ней pull request.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Восстановить зависимости
+        run: dotnet restore Hydrocephalus.slnx
+
+      - name: Проверить уязвимые пакеты
+        shell: pwsh
+        run: |
+          $output = dotnet list Hydrocephalus.slnx package --vulnerable --include-transitive | Out-String
+          Write-Host $output
+          if ($output -match 'has the following vulnerable packages|содержит следующие уязвимые пакеты') {
+            Write-Host '::warning::Обнаружены уязвимые пакеты, требуется разбор.'
+            exit 1
+          }

@@ -20,30 +20,32 @@ internal static class Synthetic
     public static ImagingStudy Study(
         MrAcquisitionType acquisitionType = MrAcquisitionType.ThreeDimensional,
         double sliceThickness = 1.0,
-        bool contrastEnhanced = false) => new()
+        bool contrastEnhanced = false)
     {
-        PseudonymousStudyId = "study-0001",
-        PseudonymousSubjectId = "subject-0001",
-        Series =
-        [
-            new ImagingSeries
+        var series = new ImagingSeries
+        {
+            PseudonymousSeriesId = "series-0001",
+            Weighting = SeriesWeighting.T1,
+            IsContrastEnhanced = contrastEnhanced,
+            Geometry = new SeriesGeometry
             {
-                PseudonymousSeriesId = "series-0001",
-                Weighting = SeriesWeighting.T1,
-                IsContrastEnhanced = contrastEnhanced,
-                Geometry = new SeriesGeometry
-                {
-                    AcquisitionType = acquisitionType,
-                    SliceThicknessMillimetres = sliceThickness,
-                    PixelSpacing = new InPlaneSpacing(1.0, 1.0),
-                    Dimensions = new VolumeDimensions(256, 256, 180),
-                    RowDirection = new SpatialVector(1, 0, 0),
-                    ColumnDirection = new SpatialVector(0, 1, 0),
-                    Origin = new SpatialVector(0, 0, 0),
-                },
+                AcquisitionType = acquisitionType,
+                SliceThicknessMillimetres = sliceThickness,
+                PixelSpacing = new InPlaneSpacing(1.0, 1.0),
+                Dimensions = new VolumeDimensions(256, 256, 180),
+                RowDirection = new SpatialVector(1, 0, 0),
+                ColumnDirection = new SpatialVector(0, 1, 0),
+                Origin = new SpatialVector(0, 0, 0),
             },
-        ],
-    };
+        };
+
+        return new ImagingStudy
+        {
+            PseudonymousStudyId = "study-0001",
+            PseudonymousSubjectId = "subject-0001",
+            Series = [series],
+        };
+    }
 
     public static ModelIdentity Model() => new()
     {

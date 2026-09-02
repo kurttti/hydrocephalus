@@ -8,15 +8,20 @@
 - Бизнес-логика не должна зависеть от WPF, DICOM-библиотеки или конкретного ML-движка.
 - Логи и исключения не должны содержать ФИО, идентификаторы исследования, accession number или пиксельные данные.
 
-## Планируемые команды
+## Команды
 
-Команды станут обязательными после появления solution и Python-пакета:
+Требуется .NET 10 SDK — версия зафиксирована в `global.json`. Эти команды обязательны и выполняются в CI при каждом push и pull request:
 
 ```powershell
-dotnet restore
-dotnet build --configuration Release
-dotnet test --configuration Release
+dotnet restore Hydrocephalus.slnx
+dotnet format Hydrocephalus.slnx --verify-no-changes
+dotnet build Hydrocephalus.slnx --configuration Release
+dotnet test Hydrocephalus.slnx --configuration Release
 ```
+
+Сборка идёт с `TreatWarningsAsErrors`, поэтому предупреждение анализатора останавливает CI. Перед отправкой изменений прогоняйте `dotnet format` без `--verify-no-changes`, иначе форматирование уронит сборку.
+
+Python-контур ещё не создан. Команды станут обязательными после появления пакета в `ml/`:
 
 ```powershell
 python -m pytest
