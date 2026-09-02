@@ -21,13 +21,18 @@ dotnet test Hydrocephalus.slnx --configuration Release
 
 Сборка идёт с `TreatWarningsAsErrors`, поэтому предупреждение анализатора останавливает CI. Перед отправкой изменений прогоняйте `dotnet format` без `--verify-no-changes`, иначе форматирование уронит сборку.
 
-Python-контур ещё не создан. Команды станут обязательными после появления пакета в `ml/`:
+Python-контур живёт в `ml/` и требует Python 3.12. Команды выполняются из каталога `ml/` и тоже обязательны в CI:
 
 ```powershell
-python -m pytest
+python -m pip install --no-deps -e .
+python -m pip install pytest ruff mypy
 python -m ruff check .
-python -m mypy ml
+python -m ruff format --check .
+python -m mypy
+python -m pytest
 ```
+
+`mypy` работает в строгом режиме: функция без аннотаций останавливает проверку. Стек обучения (torch и прочее) ставится отдельно через `pip install -e ".[training]"` — он не нужен ни линтерам, ни тестам.
 
 ## Изменения ML
 
