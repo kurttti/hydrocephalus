@@ -1,0 +1,39 @@
+<Project>
+
+  <!-- Общие свойства сборки. Целевые платформы задаются здесь, а не в каждом проекте:
+       библиотеки остаются платформенно-нейтральными, WPF-клиент требует Windows (ADR 0001). -->
+
+  <PropertyGroup>
+    <LibraryTargetFramework>net10.0</LibraryTargetFramework>
+    <DesktopTargetFramework>net10.0-windows</DesktopTargetFramework>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Локализация RU с готовностью к EN (docs/windows/README.md): инвариантный режим
+         глобализации отключать нельзя, иначе сломается форматирование чисел и дат. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <NeutralLanguage>ru-RU</NeutralLanguage>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Воспроизводимость сборки: требование docs/ml/README.md к provenance артефактов. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Телеметрия сборочного инструментария выключена: docs/security/README.md. -->
+    <DOTNET_CLI_TELEMETRY_OPTOUT>1</DOTNET_CLI_TELEMETRY_OPTOUT>
+  </PropertyGroup>
+
+</Project>

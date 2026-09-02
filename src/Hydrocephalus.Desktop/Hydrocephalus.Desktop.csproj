@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hydrocephalus.Application\Hydrocephalus.Application.csproj" />
+    <ProjectReference Include="..\Hydrocephalus.Infrastructure\Hydrocephalus.Infrastructure.csproj" />
+    <ProjectReference Include="..\Hydrocephalus.Inference\Hydrocephalus.Inference.csproj" />
+    <ProjectReference Include="..\Hydrocephalus.Domain\Hydrocephalus.Domain.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+</Project>

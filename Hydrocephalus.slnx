@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Hydrocephalus.Application/Hydrocephalus.Application.csproj" />
+    <Project Path="src/Hydrocephalus.Desktop/Hydrocephalus.Desktop.csproj" />
+    <Project Path="src/Hydrocephalus.Domain/Hydrocephalus.Domain.csproj" />
+    <Project Path="src/Hydrocephalus.Inference/Hydrocephalus.Inference.csproj" />
+    <Project Path="src/Hydrocephalus.Infrastructure/Hydrocephalus.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Hydrocephalus.Application.Tests/Hydrocephalus.Application.Tests.csproj" />
+    <Project Path="tests/Hydrocephalus.Domain.Tests/Hydrocephalus.Domain.Tests.csproj" />
+    <Project Path="tests/Hydrocephalus.Integration.Tests/Hydrocephalus.Integration.Tests.csproj" />
+  </Folder>
+</Solution>
