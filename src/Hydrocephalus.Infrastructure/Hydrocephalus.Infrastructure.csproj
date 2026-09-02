@@ -4,6 +4,17 @@
     <ProjectReference Include="..\Hydrocephalus.Domain\Hydrocephalus.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="fo-dicom" Version="5.2.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Эвристики и разбор тегов остаются internal: это детали адаптера, а не
+         публичный контракт слоя. Тестам они видны, чтобы проверять их напрямую,
+         не расширяя поверхность API. -->
+    <InternalsVisibleTo Include="Hydrocephalus.Infrastructure.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
