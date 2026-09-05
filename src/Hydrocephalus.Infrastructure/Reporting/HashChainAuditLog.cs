@@ -49,6 +49,11 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly string path;
 
+    // Файл перечитывается один раз, при первой записи: дальше хвост цепочки известен.
+    // Перечитывать его на каждое событие значило бы делать журнал тем медленнее,
+    // чем он длиннее, а он не ротируется и растёт всю жизнь установки.
+    private bool chainLoaded;
+
     /// <summary>Создаёт журнал.</summary>
     /// <param name="path">Путь файла журнала.</param>
     public HashChainAuditLog(string path)
@@ -86,9 +91,17 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
                 Directory.CreateDirectory(directory);
             }
 
-            // Цепочка продолжается от того, что уже лежит в файле, а не от того,
-            // что помнит объект: журнал переживает перезапуск приложения.
-            var previous = await ReadLatestHashAsync(this.path, cancellationToken).ConfigureAwait(false);
+            if (!this.chainLoaded)
+            {
+                // Цепочка продолжается от того, что уже лежит в файле, а не от
+                // того, что помнит объект: журнал переживает перезапуск приложения.
+                this.LatestHash = await ReadLatestHashAsync(this.path, cancellationToken)
+                    .ConfigureAwait(false);
+
+                this.chainLoaded = true;
+            }
+
+            var previous = this.LatestHash;
 
             var payload = SerializeEvent(auditEvent);
             var hash = ComputeHash(previous, payload);

@@ -6,6 +6,7 @@ using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Inference;
 using Hydrocephalus.Inference.QualityControl;
 using Hydrocephalus.Infrastructure.Dicom;
+using Hydrocephalus.Infrastructure.Reporting;
 
 namespace Hydrocephalus.Integration.Tests;
 
@@ -123,6 +124,29 @@ public sealed class RealPipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task Re_analysing_the_same_study_back_to_back_stores_both_reports()
+    {
+        // Системные часы Windows идут шагами около 15мс, поэтому два разбора
+        // подряд получают одинаковую отметку времени. Если имя файла зависит
+        // только от неё, второй отчёт не сохранится вовсе, а сценарий закончится
+        // ошибкой вместо результата.
+        this.WriteSeries(slices: 4);
+
+        var store = new JsonReportStore(Path.Combine(this.workingCopy.FullName, "reports"));
+
+        var first = await this.ExecuteAsync(store);
+        var second = await this.ExecuteAsync(store);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+
+        Assert.NotEmpty(Directory.GetFiles(
+            Path.Combine(this.workingCopy.FullName, "reports"),
+            "*.json",
+            SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task Working_copy_of_the_analysed_study_is_deidentified_on_disk()
     {
         // Сценарий работает по рабочей копии, а не по источнику: проверяется,
@@ -157,14 +181,14 @@ public sealed class RealPipelineTests : IDisposable
         }
     }
 
-    private Task<AnalysisReport> ExecuteAsync()
+    private Task<AnalysisReport> ExecuteAsync(IReportStore? store = null)
     {
         var useCase = new AnalyzeStudyUseCase(
             new StudyImporter(
                 new DicomImportOptions { PseudonymSalt = Salt },
                 new WorkingCopyOptions { RootDirectory = this.workingCopy.FullName }),
             new QualityControlOnlyEngine(new InputQualityControl(), Synthetic.Pipeline()),
-            this.reports,
+            store ?? this.reports,
             this.audit,
             TimeProvider.System);
 

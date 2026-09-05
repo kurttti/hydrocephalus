@@ -143,16 +143,39 @@ public sealed class CanonicalReportJsonTests : IDisposable
     }
 
     [Fact]
-    public async Task Store_refuses_to_overwrite_a_saved_report()
+    public async Task Storing_the_same_report_twice_changes_nothing()
     {
         // Перезапись сохранённого отчёта — потеря того, что уже могло уйти врачу.
+        // Но повторная запись побайтово того же содержимого ничего не теряет,
+        // и объявлять её ошибкой значило бы ломать повторный запуск на ровном месте.
         var report = RefusedReport();
         var store = new JsonReportStore(this.root.FullName);
 
         await store.StoreAsync(report, CancellationToken.None);
+        await store.StoreAsync(report, CancellationToken.None);
 
-        await Assert.ThrowsAsync<IOException>(
-            () => store.StoreAsync(report, CancellationToken.None));
+        var file = Assert.Single(
+            Directory.GetFiles(this.root.FullName, "*.json", SearchOption.AllDirectories));
+
+        Assert.Equal(
+            CanonicalReportJson.Serialize(report),
+            await File.ReadAllBytesAsync(file, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Two_different_reports_of_one_study_at_one_instant_both_survive()
+    {
+        // Системные часы Windows идут шагами около 15мс, поэтому два разбора
+        // подряд получают одинаковую отметку времени. Имя, зависящее только
+        // от неё, потеряло бы второй отчёт.
+        var store = new JsonReportStore(this.root.FullName);
+
+        await store.StoreAsync(RefusedReport(), CancellationToken.None);
+        await store.StoreAsync(CompletedReport(), CancellationToken.None);
+
+        Assert.Equal(
+            2,
+            Directory.GetFiles(this.root.FullName, "*.json", SearchOption.AllDirectories).Length);
     }
 
     [Fact]
