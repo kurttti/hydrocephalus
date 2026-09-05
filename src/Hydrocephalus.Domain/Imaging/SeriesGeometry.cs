@@ -42,8 +42,24 @@ public sealed record SeriesGeometry
     /// <summary>Способ получения серии.</summary>
     public required MrAcquisitionType AcquisitionType { get; init; }
 
-    /// <summary>Толщина среза в миллиметрах.</summary>
+    /// <summary>
+    /// Допустимое превышение шага над толщиной, доля. Небольшое расхождение
+    /// объясняется округлением значений в тегах, а не реальным зазором.
+    /// </summary>
+    public const double SliceGapToleranceFraction = 0.05;
+
+    /// <summary>Толщина среза в миллиметрах: сколько ткани возбуждено под один срез.</summary>
     public required double SliceThicknessMillimetres { get; init; }
+
+    /// <summary>
+    /// Шаг между центрами соседних срезов в миллиметрах.
+    ///
+    /// Хранится отдельно от толщины, потому что это разные величины: рутинные
+    /// 2D-серии часто идут с зазором, и объём, посчитанный по толщине, окажется
+    /// заниженным ровно на долю пропущенной ткани. Для серии из одного среза
+    /// шаг равен толщине.
+    /// </summary>
+    public required double SliceSpacingMillimetres { get; init; }
 
     /// <summary>Размер пикселя в плоскости среза (мм) по строкам и столбцам.</summary>
     public required InPlaneSpacing PixelSpacing { get; init; }
@@ -74,12 +90,28 @@ public sealed record SeriesGeometry
                 return AcquisitionTier.Unusable;
             }
 
+            // Уровень определяется фактической плотностью выборки, а не одной лишь
+            // толщиной среза: 3D-серия с тонкими срезами, но большим шагом
+            // не даёт данных для объёмных признаков.
             return AcquisitionType == MrAcquisitionType.ThreeDimensional
-                && SliceThicknessMillimetres <= ExtendedTierMaxSliceThicknessMillimetres
+                && EffectiveSliceSamplingMillimetres <= ExtendedTierMaxSliceThicknessMillimetres
                     ? AcquisitionTier.Extended
                     : AcquisitionTier.Baseline;
         }
     }
+
+    /// <summary>
+    /// Фактический шаг выборки по оси срезов: наибольшая из толщины и шага.
+    /// </summary>
+    public double EffectiveSliceSamplingMillimetres =>
+        Math.Max(SliceThicknessMillimetres, SliceSpacingMillimetres);
+
+    /// <summary>
+    /// Признак зазора между срезами: шаг заметно больше толщины, то есть часть
+    /// ткани между срезами не получена.
+    /// </summary>
+    public bool HasSliceGap =>
+        SliceSpacingMillimetres > SliceThicknessMillimetres * (1 + SliceGapToleranceFraction);
 
     /// <summary>
     /// Признак того, что геометрия внутренне непротиворечива: положительные размеры,
@@ -87,6 +119,7 @@ public sealed record SeriesGeometry
     /// </summary>
     public bool IsWellFormed =>
         SliceThicknessMillimetres > 0
+        && SliceSpacingMillimetres > 0
         && PixelSpacing.RowMillimetres > 0
         && PixelSpacing.ColumnMillimetres > 0
         && Dimensions.Columns > 0
