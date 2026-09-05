@@ -2,6 +2,7 @@ using System.Globalization;
 using FellowOakDicom;
 using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Quality;
 
 namespace Hydrocephalus.Infrastructure.Dicom;
@@ -94,16 +95,22 @@ public sealed class StudyImporter : IStudyImporter
 
         try
         {
+            // Каталог создаётся и тогда, когда писать нечего: ссылка на рабочую
+            // копию должна разрешаться, а пустая рабочая копия — верное описание
+            // исследования без пригодных серий. Данных такой каталог не содержит
+            // и убирается общей очисткой по ADR 0006.
             this.CreateProtected(this.workingCopyOptions.RootDirectory);
             this.CreateProtected(studyDirectory);
 
-            await this.WriteWorkingCopyAsync(
+            var written = await this.WriteWorkingCopyAsync(
                     sourceReference,
                     studyDirectory,
                     study.PseudonymousSubjectId,
                     retainedIds,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            VerifyNothingWasLost(retainedSeries, written);
         }
         catch
         {
@@ -155,7 +162,7 @@ public sealed class StudyImporter : IStudyImporter
     private void CreateProtected(string directory) =>
         ProtectedDirectory.Create(directory, this.workingCopyOptions.RestrictAccessToCurrentUser);
 
-    private async Task WriteWorkingCopyAsync(
+    private async Task<Dictionary<string, int>> WriteWorkingCopyAsync(
         string sourceReference,
         string studyDirectory,
         string pseudonymousSubjectId,
@@ -164,10 +171,12 @@ public sealed class StudyImporter : IStudyImporter
     {
         var deidentifier = new DicomDeidentifier(this.importOptions);
         var walk = new QuarantineWalk(this.importOptions, sourceReference);
+        var written = new Dictionary<string, int>(StringComparer.Ordinal);
 
         // Отказы второго прохода отбрасываются: те же файлы уже отклонены разбором
-        // и попали в его результат. Общий обход гарантирует, что оба прохода
-        // принимают ровно один и тот же набор файлов.
+        // и попали в его результат. Общий обход задаёт обоим проходам одни и те же
+        // лимиты — но не одинаковый набор файлов, если каталог меняется между
+        // проходами. Расхождение ловит проверка числа записанных срезов.
         var ignoredRejections = new List<ImportRejection>();
 
         foreach (var file in walk.EnumerateFiles(ignoredRejections))
@@ -211,6 +220,39 @@ public sealed class StudyImporter : IStudyImporter
             this.CreateProtected(Path.Combine(studyDirectory, seriesId));
 
             await target.SaveAsync(Path.Combine(studyDirectory, relativePath)).ConfigureAwait(false);
+
+            written[seriesId] = written.GetValueOrDefault(seriesId) + 1;
+        }
+
+        return written;
+    }
+
+    /// <summary>
+    /// Сверяет число записанных срезов с числом, найденным разбором.
+    ///
+    /// Разбор и запись — два обхода одного каталога. Если между ними каталог
+    /// изменился, рабочая копия окажется неполной, а доменная модель по-прежнему
+    /// будет заявлять исходное число срезов: геометрия объёма разойдётся с тем,
+    /// что лежит на диске. Молчаливо неполный объём хуже отказа, поэтому
+    /// расхождение прекращает импорт.
+    /// </summary>
+    private static void VerifyNothingWasLost(
+        IReadOnlyList<ImagingSeries> retainedSeries,
+        IReadOnlyDictionary<string, int> written)
+    {
+        foreach (var series in retainedSeries)
+        {
+            var expected = series.Geometry.Dimensions.Slices;
+            var actual = written.GetValueOrDefault(series.PseudonymousSeriesId);
+
+            if (expected != actual)
+            {
+                throw new DomainRuleViolationException(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "The working copy is incomplete: {0} of {1} instances were written for one series.",
+                    actual,
+                    expected));
+            }
         }
     }
 

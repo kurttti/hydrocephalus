@@ -177,6 +177,11 @@ public sealed class StudyImporterTests : IDisposable
 
         Assert.Empty(result.Study.Series);
         Assert.Equal(AcquisitionTier.Unusable, result.Study.BestAvailableTier);
+
+        // Каталог существует и пуст: ссылка на рабочую копию должна разрешаться,
+        // а пустая рабочая копия — верное описание такого исследования.
+        Assert.True(Directory.Exists(result.VolumeReference));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(result.VolumeReference));
     }
 
     [Fact]
