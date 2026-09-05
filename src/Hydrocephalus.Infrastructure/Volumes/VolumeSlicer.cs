@@ -68,6 +68,9 @@ public sealed class PlaneImage
 ///
 /// Анатомическая принадлежность каждого вида выводится из направляющих косинусов,
 /// а не назначается по номеру оси: серия могла быть получена в любой плоскости.
+///
+/// Размеры и шаг берутся из сетки отсчётов, а направления — из геометрии получения:
+/// после ресэмплинга сетка другая, а стороны пациента те же.
 /// </summary>
 public static class VolumeSlicer
 {
@@ -77,11 +80,11 @@ public static class VolumeSlicer
     /// <param name="volume">Объём.</param>
     /// <param name="axis">Ось перелистывания.</param>
     /// <returns>Число плоскостей.</returns>
-    public static int CountAlong(VoxelVolume volume, VolumeAxis axis)
+    public static int CountAlong(IVoxelVolume volume, VolumeAxis axis)
     {
         ArgumentNullException.ThrowIfNull(volume);
 
-        var dimensions = volume.Geometry.Dimensions;
+        var dimensions = volume.Grid.Dimensions;
 
         return axis switch
         {
@@ -100,14 +103,15 @@ public static class VolumeSlicer
     /// <param name="index">Номер плоскости вдоль оси.</param>
     /// <param name="window">Окно и уровень.</param>
     /// <returns>Готовая к выводу плоскость.</returns>
-    public static PlaneImage Extract(VoxelVolume volume, VolumeAxis axis, int index, WindowLevel window)
+    public static PlaneImage Extract(IVoxelVolume volume, VolumeAxis axis, int index, WindowLevel window)
     {
         ArgumentNullException.ThrowIfNull(volume);
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, CountAlong(volume, axis));
 
         var geometry = volume.Geometry;
-        var dimensions = geometry.Dimensions;
+        var grid = volume.Grid;
+        var dimensions = grid.Dimensions;
 
         return axis switch
         {
@@ -117,8 +121,8 @@ public static class VolumeSlicer
                 dimensions.Columns,
                 dimensions.Rows,
                 (x, y) => (x, y, index),
-                geometry.PixelSpacing.ColumnMillimetres,
-                geometry.PixelSpacing.RowMillimetres,
+                grid.ColumnSpacingMillimetres,
+                grid.RowSpacingMillimetres,
                 geometry.RowDirection,
                 geometry.ColumnDirection),
 
@@ -128,8 +132,8 @@ public static class VolumeSlicer
                 dimensions.Columns,
                 dimensions.Slices,
                 (x, y) => (x, index, y),
-                geometry.PixelSpacing.ColumnMillimetres,
-                geometry.SliceSpacingMillimetres,
+                grid.ColumnSpacingMillimetres,
+                grid.SliceSpacingMillimetres,
                 geometry.RowDirection,
                 geometry.SliceNormal),
 
@@ -139,8 +143,8 @@ public static class VolumeSlicer
                 dimensions.Rows,
                 dimensions.Slices,
                 (x, y) => (index, x, y),
-                geometry.PixelSpacing.RowMillimetres,
-                geometry.SliceSpacingMillimetres,
+                grid.RowSpacingMillimetres,
+                grid.SliceSpacingMillimetres,
                 geometry.ColumnDirection,
                 geometry.SliceNormal),
 
@@ -149,7 +153,7 @@ public static class VolumeSlicer
     }
 
     private static PlaneImage Build(
-        VoxelVolume volume,
+        IVoxelVolume volume,
         WindowLevel window,
         int width,
         int height,

@@ -13,7 +13,7 @@ namespace Hydrocephalus.Infrastructure.Volumes;
 /// <c>IInferenceEngine</c>: контракт передаёт ссылку на рабочую копию, а не буфер
 /// (ADR 0002).
 /// </summary>
-public sealed class VoxelVolume
+public sealed class VoxelVolume : IVoxelVolume
 {
     private readonly float[] voxels;
 
@@ -38,6 +38,16 @@ public sealed class VoxelVolume
 
     /// <summary>Геометрия серии, из которой собран объём.</summary>
     public SeriesGeometry Geometry { get; }
+
+    /// <summary>
+    /// Сетка отсчётов. У загруженного объёма она повторяет геометрию получения:
+    /// отсчёты лежат там, где их получил томограф.
+    /// </summary>
+    public VolumeGrid Grid => new(
+        this.Geometry.Dimensions,
+        this.Geometry.PixelSpacing.ColumnMillimetres,
+        this.Geometry.PixelSpacing.RowMillimetres,
+        this.Geometry.SliceSpacingMillimetres);
 
     /// <summary>
     /// Окно и уровень, заданные в тегах серии, если они там были.
