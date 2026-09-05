@@ -23,14 +23,9 @@ internal static class SliceGeometryChecks
     /// Проверяет расположение срезов.
     /// </summary>
     /// <param name="positioning">Результат разбора положений.</param>
-    /// <param name="sliceThicknessMillimetres">Толщина среза из тегов.</param>
     /// <returns>Найденные замечания, возможно пустой список.</returns>
-    internal static IEnumerable<QualityIssue> Inspect(
-        SlicePositioning positioning,
-        double sliceThicknessMillimetres)
+    internal static IEnumerable<QualityIssue> Inspect(SlicePositioning positioning)
     {
-        _ = sliceThicknessMillimetres;
-
         if (positioning.HasDuplicatePositions)
         {
             // Совпадающие положения означают, что под одним SeriesInstanceUID

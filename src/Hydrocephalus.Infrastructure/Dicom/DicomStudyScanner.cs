@@ -202,7 +202,7 @@ public sealed class DicomStudyScanner
                 geometry.ColumnDirection,
                 geometry.SliceThicknessMillimetres);
 
-            foreach (var issue in SliceGeometryChecks.Inspect(positioning, geometry.SliceThicknessMillimetres))
+            foreach (var issue in SliceGeometryChecks.Inspect(positioning))
             {
                 findings.Add(new SeriesFinding(seriesId, issue));
             }
