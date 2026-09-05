@@ -25,6 +25,7 @@ internal static class SyntheticVolume
     /// <param name="signed">Признак знакового представления пикселей.</param>
     /// <param name="bitsAllocated">BitsAllocated.</param>
     /// <param name="seriesUid">SeriesInstanceUID.</param>
+    /// <param name="customize">Дополнительная правка набора тегов до записи.</param>
     internal static void WriteSlice(
         string path,
         int columns,
@@ -35,7 +36,8 @@ internal static class SyntheticVolume
         decimal rescaleIntercept = 0.0m,
         bool signed = false,
         ushort bitsAllocated = 16,
-        string seriesUid = "1.2.3.11")
+        string seriesUid = "1.2.3.11",
+        Action<DicomDataset>? customize = null)
     {
         var dataset = new DicomDataset
         {
@@ -60,6 +62,8 @@ internal static class SyntheticVolume
             { DicomTag.RescaleSlope, rescaleSlope },
             { DicomTag.RescaleIntercept, rescaleIntercept },
         };
+
+        customize?.Invoke(dataset);
 
         var pixelData = DicomPixelData.Create(dataset, newPixelData: true);
         pixelData.AddFrame(new MemoryByteBuffer(Encode(values, bitsAllocated)));

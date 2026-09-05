@@ -69,7 +69,7 @@ public static class DicomVolumeReader
 
         var geometry = BuildGeometry(reference, ordered);
 
-        return new VoxelVolume(geometry, Combine(ordered, reference));
+        return new VoxelVolume(geometry, Combine(ordered, reference), ReadWindow(reference.Dataset));
     }
 
     private static LoadedSlice ReadSlice(DicomFile file)
@@ -246,6 +246,33 @@ public static class DicomVolumeReader
             && double.TryParse(values[index], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : 0;
+
+    /// <summary>
+    /// Читает окно и уровень из тегов серии.
+    ///
+    /// Теги допускают несколько значений — набор предустановок; берётся первое.
+    /// Достоверность здесь не проверяется: она зависит от значений объёма
+    /// и решается при выборе окна.
+    /// </summary>
+    private static WindowLevel? ReadWindow(DicomDataset dataset)
+    {
+        var center = ReadFirstDouble(dataset, DicomTag.WindowCenter);
+        var width = ReadFirstDouble(dataset, DicomTag.WindowWidth);
+
+        return center is null || width is null ? null : new WindowLevel(center.Value, width.Value);
+    }
+
+    private static double? ReadFirstDouble(DicomDataset dataset, DicomTag tag)
+    {
+        if (!dataset.TryGetValues<string>(tag, out var raw) || raw is null || raw.Length == 0)
+        {
+            return null;
+        }
+
+        return double.TryParse(raw[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
 
     private static double ReadDouble(DicomDataset dataset, DicomTag tag, double fallback) =>
         dataset.TryGetSingleValue<decimal>(tag, out var value) ? (double)value : fallback;

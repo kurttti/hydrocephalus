@@ -17,10 +17,11 @@ public sealed class VoxelVolume
 {
     private readonly float[] voxels;
 
-    internal VoxelVolume(SeriesGeometry geometry, float[] voxels)
+    internal VoxelVolume(SeriesGeometry geometry, float[] voxels, WindowLevel? suggestedWindow = null)
     {
         this.Geometry = geometry;
         this.voxels = voxels;
+        this.SuggestedWindow = suggestedWindow;
 
         var minimum = float.PositiveInfinity;
         var maximum = float.NegativeInfinity;
@@ -37,6 +38,13 @@ public sealed class VoxelVolume
 
     /// <summary>Геометрия серии, из которой собран объём.</summary>
     public SeriesGeometry Geometry { get; }
+
+    /// <summary>
+    /// Окно и уровень, заданные в тегах серии, если они там были.
+    /// Значение из тегов выбрал тот, кто снимал, поэтому оно предпочтительнее
+    /// расчётного — но лишь пока оно что-то показывает на этом объёме (ADR 0007).
+    /// </summary>
+    public WindowLevel? SuggestedWindow { get; }
 
     /// <summary>Наименьшее значение в объёме, в единицах модальности.</summary>
     public float Minimum { get; }
