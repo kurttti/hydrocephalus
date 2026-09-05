@@ -11,11 +11,30 @@ namespace Hydrocephalus.Infrastructure.Dicom;
 /// </summary>
 internal static class DicomGeometryReader
 {
+    /// <summary>Читает положение среза.</summary>
+    /// <param name="dataset">Набор тегов среза.</param>
+    /// <returns>Положение первого воксела в системе координат пациента.</returns>
+    internal static SpatialVector ReadPosition(DicomDataset dataset)
+    {
+        var position = ReadDecimals(dataset, DicomTag.ImagePositionPatient);
+
+        return new SpatialVector(
+            position.ElementAtOrDefault(0),
+            position.ElementAtOrDefault(1),
+            position.ElementAtOrDefault(2));
+    }
+
     /// <summary>Читает геометрию из набора тегов.</summary>
     /// <param name="dataset">Набор тегов первого среза серии.</param>
     /// <param name="sliceCount">Число фактически найденных срезов серии.</param>
+    /// <param name="sliceSpacingMillimetres">
+    /// Шаг между срезами, вычисленный по их положениям.
+    /// </param>
     /// <returns>Геометрия серии.</returns>
-    internal static SeriesGeometry Read(DicomDataset dataset, int sliceCount)
+    internal static SeriesGeometry Read(
+        DicomDataset dataset,
+        int sliceCount,
+        double sliceSpacingMillimetres)
     {
         var pixelSpacing = ReadDecimals(dataset, DicomTag.PixelSpacing);
         var orientation = ReadDecimals(dataset, DicomTag.ImageOrientationPatient);
@@ -25,6 +44,7 @@ internal static class DicomGeometryReader
         {
             AcquisitionType = ReadAcquisitionType(dataset),
             SliceThicknessMillimetres = ReadDouble(dataset, DicomTag.SliceThickness),
+            SliceSpacingMillimetres = sliceSpacingMillimetres,
             PixelSpacing = new InPlaneSpacing(
                 pixelSpacing.ElementAtOrDefault(0),
                 pixelSpacing.ElementAtOrDefault(1)),

@@ -111,6 +111,27 @@ public sealed class InputQualityControlTests
     }
 
     [Fact]
+    public void Slice_gap_warns_but_does_not_block()
+    {
+        // Замечание повторяет проверку приёмки намеренно: замечания импорта
+        // не входят в запрос на анализ. Зазор не мешает линейным измерениям
+        // на одном срезе, но занижает любой объём.
+        var assessment = Evaluate(Geometry(
+            acquisitionType: MrAcquisitionType.TwoDimensional,
+            sliceThickness: 5.0,
+            sliceSpacing: 6.5,
+            slices: 24,
+            pixelSpacing: new InPlaneSpacing(0.9, 0.9)));
+
+        var issue = Assert.Single(assessment.Issues);
+
+        Assert.Equal(QualityIssueCode.UnsupportedVoxelGeometry, issue.Code);
+        Assert.Equal(QualityIssueSeverity.Warning, issue.Severity);
+        Assert.Equal("sliceGap", issue.Parameters["parameter"]);
+        Assert.True(assessment.IsAcceptable);
+    }
+
+    [Fact]
     public void Field_of_view_too_small_for_a_head_is_blocked()
     {
         // 64 × 0.5мм = 32мм: голова взрослого в такое поле не помещается физически.
@@ -254,11 +275,13 @@ public sealed class InputQualityControlTests
         int columns = 256,
         int rows = 256,
         int slices = 180,
-        SpatialVector? origin = null) =>
+        SpatialVector? origin = null,
+        double? sliceSpacing = null) =>
         new()
         {
             AcquisitionType = acquisitionType,
             SliceThicknessMillimetres = sliceThickness,
+            SliceSpacingMillimetres = sliceSpacing ?? sliceThickness,
             PixelSpacing = pixelSpacing ?? new InPlaneSpacing(0.9, 0.9),
             Dimensions = new VolumeDimensions(columns, rows, slices),
             RowDirection = new SpatialVector(1, 0, 0),

@@ -27,6 +27,7 @@ internal static class SyntheticDicom
     /// <param name="sliceThickness">Толщина среза, мм.</param>
     /// <param name="fieldStrength">Значение MagneticFieldStrength; null — тег не пишется.</param>
     /// <param name="studyDate">StudyDate в формате yyyyMMdd.</param>
+    /// <param name="slicePosition">Смещение среза вдоль нормали, мм.</param>
     /// <param name="sopInstanceUid">SOPInstanceUID; null — генерируется.</param>
     /// <param name="customize">Дополнительная правка набора тегов.</param>
     /// <returns>Набор тегов среза.</returns>
@@ -41,6 +42,7 @@ internal static class SyntheticDicom
         decimal sliceThickness = 1.0m,
         decimal? fieldStrength = 1.5m,
         string studyDate = "20240115",
+        decimal slicePosition = 0.0m,
         string? sopInstanceUid = null,
         Action<DicomDataset>? customize = null)
     {
@@ -60,7 +62,7 @@ internal static class SyntheticDicom
             { DicomTag.SliceThickness, sliceThickness },
             { DicomTag.PixelSpacing, 1.0m, 1.0m },
             { DicomTag.ImageOrientationPatient, 1.0m, 0.0m, 0.0m, 0.0m, 1.0m, 0.0m },
-            { DicomTag.ImagePositionPatient, 0.0m, 0.0m, 0.0m },
+            { DicomTag.ImagePositionPatient, 0.0m, 0.0m, slicePosition },
             { DicomTag.Rows, (ushort)256 },
             { DicomTag.Columns, (ushort)256 },
         };
@@ -87,6 +89,7 @@ internal static class SyntheticDicom
     /// <param name="sliceThickness">Толщина среза, мм.</param>
     /// <param name="fieldStrength">Значение MagneticFieldStrength; null — тег не пишется.</param>
     /// <param name="studyDate">StudyDate в формате yyyyMMdd.</param>
+    /// <param name="slicePosition">Смещение среза вдоль нормали, мм.</param>
     /// <param name="sopInstanceUid">SOPInstanceUID; null — генерируется.</param>
     /// <param name="customize">Дополнительная правка набора тегов до записи.</param>
     /// <returns>SOPInstanceUID записанного среза.</returns>
@@ -102,6 +105,7 @@ internal static class SyntheticDicom
         decimal sliceThickness = 1.0m,
         decimal? fieldStrength = 1.5m,
         string studyDate = "20240115",
+        decimal slicePosition = 0.0m,
         string? sopInstanceUid = null,
         Action<DicomDataset>? customize = null)
     {
@@ -116,6 +120,7 @@ internal static class SyntheticDicom
             sliceThickness,
             fieldStrength,
             studyDate,
+            slicePosition,
             sopInstanceUid,
             customize);
 

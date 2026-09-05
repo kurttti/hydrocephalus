@@ -65,6 +65,10 @@ public static class NiftiHeaderReader
                 ? MrAcquisitionType.ThreeDimensional
                 : MrAcquisitionType.TwoDimensional,
             SliceThicknessMillimetres = rank >= 3 ? pixelDimensions[3] : 0,
+
+            // В NIfTI хранится один шаг вокселя: сетка равномерна по построению,
+            // и зазор между срезами в этом формате выразить нечем.
+            SliceSpacingMillimetres = rank >= 3 ? pixelDimensions[3] : 0,
             PixelSpacing = new InPlaneSpacing(
                 rank >= 2 ? pixelDimensions[2] : 0,
                 rank >= 1 ? pixelDimensions[1] : 0),

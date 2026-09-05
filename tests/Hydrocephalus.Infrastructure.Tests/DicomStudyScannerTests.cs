@@ -43,13 +43,15 @@ public sealed class DicomStudyScannerTests : IDisposable
                 Path.Combine(flat.FullName, $"IM{index}.dcm"),
                 StudyUid,
                 SeriesUid,
-                patientId: "P-1");
+                patientId: "P-1",
+                slicePosition: index);
 
             SyntheticDicom.WriteSlice(
                 Path.Combine(nested.FullName, "PA0", "ST0", "SE0", $"IM{index}.dcm"),
                 StudyUid,
                 SeriesUid,
-                patientId: "P-1");
+                patientId: "P-1",
+                slicePosition: index);
         }
 
         var scanner = new DicomStudyScanner(Options());

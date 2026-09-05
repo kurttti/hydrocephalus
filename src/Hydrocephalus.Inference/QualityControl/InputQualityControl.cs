@@ -162,6 +162,19 @@ public sealed class InputQualityControl
             }
         }
 
+        if (geometry.HasSliceGap)
+        {
+            // Замечание повторяет проверку приёмки намеренно: замечания импорта
+            // не входят в запрос на анализ, а объём, посчитанный по толщине среза
+            // при наличии зазора, занижен ровно на долю неполученной ткани.
+            yield return Issue(
+                QualityIssueCode.UnsupportedVoxelGeometry,
+                QualityIssueSeverity.Warning,
+                ("parameter", "sliceGap"),
+                ("spacingMm", Format(geometry.SliceSpacingMillimetres)),
+                ("thicknessMm", Format(thickness)));
+        }
+
         var anisotropy = Math.Max(row, column) / Math.Min(row, column);
 
         if (anisotropy > this.limits.MaxInPlaneAnisotropy)

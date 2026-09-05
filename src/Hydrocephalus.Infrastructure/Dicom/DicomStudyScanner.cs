@@ -132,7 +132,10 @@ public sealed class DicomStudyScanner
     {
         private readonly DicomImportOptions options;
         private readonly DicomDataset first;
-        private int instanceCount;
+
+        // Положения нужны, чтобы вычислить шаг между срезами: SliceThickness
+        // отвечает на другой вопрос и при зазоре расходится с ним.
+        private readonly List<SpatialVector> positions = [];
 
         internal SeriesBuilder(DicomDataset first, DicomImportOptions options)
         {
@@ -156,11 +159,8 @@ public sealed class DicomStudyScanner
 
         internal string PseudonymousSubjectId { get; }
 
-        internal void AddInstance(DicomDataset dataset)
-        {
-            _ = dataset;
-            this.instanceCount++;
-        }
+        internal void AddInstance(DicomDataset dataset) =>
+            this.positions.Add(DicomGeometryReader.ReadPosition(dataset));
 
         internal ImagingSeries Build(List<SeriesFinding> findings)
         {
@@ -176,13 +176,38 @@ public sealed class DicomStudyScanner
                 findings.Add(new SeriesFinding(seriesId, issue));
             }
 
+            var geometry = this.BuildGeometry(seriesId, findings);
+
             return new ImagingSeries
             {
                 PseudonymousSeriesId = seriesId,
-                Geometry = DicomGeometryReader.Read(this.first, this.instanceCount),
+                Geometry = geometry,
                 Weighting = SeriesClassification.DetectWeighting(description),
                 IsContrastEnhanced = SeriesClassification.LooksContrastEnhanced(description),
             };
+        }
+
+        private SeriesGeometry BuildGeometry(string seriesId, List<SeriesFinding> findings)
+        {
+            // Первое чтение даёт толщину и направляющие косинусы; шаг между срезами
+            // из тегов одного среза не выводится и подставляется следом.
+            var geometry = DicomGeometryReader.Read(
+                this.first,
+                this.positions.Count,
+                sliceSpacingMillimetres: 0);
+
+            var positioning = SlicePositions.Analyse(
+                this.positions,
+                geometry.RowDirection,
+                geometry.ColumnDirection,
+                geometry.SliceThicknessMillimetres);
+
+            foreach (var issue in SliceGeometryChecks.Inspect(positioning, geometry.SliceThicknessMillimetres))
+            {
+                findings.Add(new SeriesFinding(seriesId, issue));
+            }
+
+            return geometry with { SliceSpacingMillimetres = positioning.SpacingMillimetres };
         }
     }
 }

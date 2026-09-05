@@ -109,7 +109,8 @@ public sealed class StudyImporterTests : IDisposable
                 Path.Combine(this.source.FullName, $"IM{index}.dcm"),
                 studyUid: "1.2.3.1",
                 seriesUid: "1.2.3.11",
-                patientId: "P-1");
+                patientId: "P-1",
+                slicePosition: index);
         }
 
         await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);

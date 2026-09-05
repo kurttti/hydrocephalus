@@ -31,6 +31,7 @@ internal static class Synthetic
             {
                 AcquisitionType = acquisitionType,
                 SliceThicknessMillimetres = sliceThickness,
+                SliceSpacingMillimetres = sliceThickness,
                 PixelSpacing = new InPlaneSpacing(1.0, 1.0),
                 Dimensions = new VolumeDimensions(256, 256, 180),
                 RowDirection = new SpatialVector(1, 0, 0),
