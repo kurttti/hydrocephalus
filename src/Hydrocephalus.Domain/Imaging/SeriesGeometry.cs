@@ -114,6 +114,31 @@ public sealed record SeriesGeometry
         SliceSpacingMillimetres > SliceThicknessMillimetres * (1 + SliceGapToleranceFraction);
 
     /// <summary>
+    /// Нормаль плоскости среза, полученная из направляющих косинусов.
+    /// </summary>
+    public SpatialVector SliceNormal => RowDirection.Cross(ColumnDirection).Normalized();
+
+    /// <summary>Плоскость получения серии.</summary>
+    public ImagingPlane Plane => PatientOrientation.PlaneOf(SliceNormal);
+
+    /// <summary>
+    /// Куда указывает строка изображения, то есть какая сторона пациента
+    /// оказывается справа на выведенном срезе.
+    /// </summary>
+    public AnatomicalDirection RowDirectionTowards => PatientOrientation.Of(RowDirection);
+
+    /// <summary>
+    /// Куда указывает столбец изображения, то есть какая сторона пациента
+    /// оказывается снизу на выведенном срезе.
+    /// </summary>
+    public AnatomicalDirection ColumnDirectionTowards => PatientOrientation.Of(ColumnDirection);
+
+    /// <summary>
+    /// Куда идёт переход к следующему срезу серии.
+    /// </summary>
+    public AnatomicalDirection SliceDirectionTowards => PatientOrientation.Of(SliceNormal);
+
+    /// <summary>
     /// Признак того, что геометрия внутренне непротиворечива: положительные размеры,
     /// ненулевые и неколлинеарные направляющие косинусы.
     /// </summary>
