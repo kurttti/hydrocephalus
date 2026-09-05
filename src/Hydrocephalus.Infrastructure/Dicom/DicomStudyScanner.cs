@@ -38,27 +38,11 @@ public sealed class DicomStudyScanner
         var findings = new List<SeriesFinding>();
         var seriesBuilders = new Dictionary<string, SeriesBuilder>(StringComparer.Ordinal);
 
-        var inspected = 0;
+        var walk = new QuarantineWalk(this.options, rootDirectory);
 
-        foreach (var file in this.EnumerateCandidateFiles(rootDirectory, rejections))
+        foreach (var file in walk.EnumerateFiles(rejections))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (++inspected > this.options.MaxFileCount)
-            {
-                rejections.Add(new ImportRejection(
-                    ImportRejectionCode.TooManyFiles,
-                    this.OpaqueReference(rootDirectory, file.FullName)));
-                break;
-            }
-
-            if (file.Length > this.options.MaxFileSizeBytes)
-            {
-                rejections.Add(new ImportRejection(
-                    ImportRejectionCode.FileTooLarge,
-                    this.OpaqueReference(rootDirectory, file.FullName)));
-                continue;
-            }
 
             DicomDataset dataset;
 
@@ -73,14 +57,14 @@ public sealed class DicomStudyScanner
                 // в одном из источников рядом лежали клинические документы.
                 rejections.Add(new ImportRejection(
                     ImportRejectionCode.NotADicomFile,
-                    this.OpaqueReference(rootDirectory, file.FullName)));
+                    walk.OpaqueReference(file.FullName)));
                 continue;
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException)
             {
                 rejections.Add(new ImportRejection(
                     ImportRejectionCode.UnreadableDataset,
-                    this.OpaqueReference(rootDirectory, file.FullName)));
+                    walk.OpaqueReference(file.FullName)));
                 continue;
             }
 
@@ -90,7 +74,7 @@ public sealed class DicomStudyScanner
             {
                 rejections.Add(new ImportRejection(
                     ImportRejectionCode.MissingSeriesIdentifier,
-                    this.OpaqueReference(rootDirectory, file.FullName)));
+                    walk.OpaqueReference(file.FullName)));
                 continue;
             }
 
@@ -141,68 +125,6 @@ public sealed class DicomStudyScanner
                 Series = entry.Value,
             })
             .ToList();
-    }
-
-    /// <summary>
-    /// Перечисляет файлы-кандидаты, соблюдая лимит глубины вложенности.
-    /// Обход написан вручную, а не через рекурсивный поиск по маске: слишком глубокая
-    /// структура должна давать отказ с кодом, а не необработанное исключение.
-    /// </summary>
-    private IEnumerable<FileInfo> EnumerateCandidateFiles(
-        string rootDirectory,
-        List<ImportRejection> rejections)
-    {
-        var queue = new Queue<(DirectoryInfo Directory, int Depth)>();
-        queue.Enqueue((new DirectoryInfo(rootDirectory), 0));
-
-        while (queue.Count > 0)
-        {
-            var (directory, depth) = queue.Dequeue();
-
-            if (depth > this.options.MaxDirectoryDepth)
-            {
-                rejections.Add(new ImportRejection(
-                    ImportRejectionCode.DirectoryTooDeep,
-                    this.OpaqueReference(rootDirectory, directory.FullName)));
-                continue;
-            }
-
-            FileInfo[] files;
-            DirectoryInfo[] subdirectories;
-
-            try
-            {
-                files = directory.GetFiles();
-                subdirectories = directory.GetDirectories();
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                rejections.Add(new ImportRejection(
-                    ImportRejectionCode.UnreadableDataset,
-                    this.OpaqueReference(rootDirectory, directory.FullName)));
-                continue;
-            }
-
-            foreach (var subdirectory in subdirectories)
-            {
-                queue.Enqueue((subdirectory, depth + 1));
-            }
-
-            foreach (var file in files)
-            {
-                yield return file;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Строит непрозрачную ссылку на путь. Сам путь не сохраняется: имена файлов и папок
-    /// в исходном сборе содержат фамилии пациентов и потому являются PHI.
-    /// </summary>
-    private string OpaqueReference(string rootDirectory, string path)
-    {
-        var relative = Path.GetRelativePath(rootDirectory, path);
-        return Pseudonyms.Derive(this.options.PseudonymSalt, "path", relative);
     }
 
     /// <summary>Накопитель срезов одной серии.</summary>

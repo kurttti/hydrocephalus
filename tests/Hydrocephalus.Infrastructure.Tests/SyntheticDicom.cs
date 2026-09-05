@@ -15,9 +15,8 @@ internal static class SyntheticDicom
         Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "hydro-" + Guid.NewGuid().ToString("N")));
 
     /// <summary>
-    /// Записывает синтетический срез МРТ.
+    /// Строит синтетический срез МРТ.
     /// </summary>
-    /// <param name="path">Полный путь файла.</param>
     /// <param name="studyUid">StudyInstanceUID.</param>
     /// <param name="seriesUid">SeriesInstanceUID.</param>
     /// <param name="patientId">PatientID, может быть пустым.</param>
@@ -27,8 +26,11 @@ internal static class SyntheticDicom
     /// <param name="acquisitionType">Значение MRAcquisitionType.</param>
     /// <param name="sliceThickness">Толщина среза, мм.</param>
     /// <param name="fieldStrength">Значение MagneticFieldStrength; null — тег не пишется.</param>
-    internal static void WriteSlice(
-        string path,
+    /// <param name="studyDate">StudyDate в формате yyyyMMdd.</param>
+    /// <param name="sopInstanceUid">SOPInstanceUID; null — генерируется.</param>
+    /// <param name="customize">Дополнительная правка набора тегов.</param>
+    /// <returns>Набор тегов среза.</returns>
+    internal static DicomDataset BuildSlice(
         string studyUid,
         string seriesUid,
         string patientId = "",
@@ -37,14 +39,18 @@ internal static class SyntheticDicom
         string seriesDescription = "T1 MPRAGE",
         string acquisitionType = "3D",
         decimal sliceThickness = 1.0m,
-        decimal? fieldStrength = 1.5m)
+        decimal? fieldStrength = 1.5m,
+        string studyDate = "20240115",
+        string? sopInstanceUid = null,
+        Action<DicomDataset>? customize = null)
     {
         var dataset = new DicomDataset
         {
             { DicomTag.SOPClassUID, MrSopClassUid },
-            { DicomTag.SOPInstanceUID, DicomUIDGenerator.GenerateDerivedFromUUID().UID },
+            { DicomTag.SOPInstanceUID, sopInstanceUid ?? DicomUIDGenerator.GenerateDerivedFromUUID().UID },
             { DicomTag.StudyInstanceUID, studyUid },
             { DicomTag.SeriesInstanceUID, seriesUid },
+            { DicomTag.StudyDate, studyDate },
             { DicomTag.Modality, "MR" },
             { DicomTag.PatientID, patientId },
             { DicomTag.PatientName, patientName },
@@ -64,11 +70,106 @@ internal static class SyntheticDicom
             dataset.Add(DicomTag.MagneticFieldStrength, fieldStrength.Value);
         }
 
+        customize?.Invoke(dataset);
+
+        return dataset;
+    }
+
+    /// <summary>Записывает синтетический срез МРТ.</summary>
+    /// <param name="path">Полный путь файла.</param>
+    /// <param name="studyUid">StudyInstanceUID.</param>
+    /// <param name="seriesUid">SeriesInstanceUID.</param>
+    /// <param name="patientId">PatientID, может быть пустым.</param>
+    /// <param name="patientName">PatientName, может быть пустым.</param>
+    /// <param name="birthDate">PatientBirthDate, может быть пустым.</param>
+    /// <param name="seriesDescription">Описание серии.</param>
+    /// <param name="acquisitionType">Значение MRAcquisitionType.</param>
+    /// <param name="sliceThickness">Толщина среза, мм.</param>
+    /// <param name="fieldStrength">Значение MagneticFieldStrength; null — тег не пишется.</param>
+    /// <param name="studyDate">StudyDate в формате yyyyMMdd.</param>
+    /// <param name="sopInstanceUid">SOPInstanceUID; null — генерируется.</param>
+    /// <param name="customize">Дополнительная правка набора тегов до записи.</param>
+    /// <returns>SOPInstanceUID записанного среза.</returns>
+    internal static string WriteSlice(
+        string path,
+        string studyUid,
+        string seriesUid,
+        string patientId = "",
+        string patientName = "",
+        string birthDate = "",
+        string seriesDescription = "T1 MPRAGE",
+        string acquisitionType = "3D",
+        decimal sliceThickness = 1.0m,
+        decimal? fieldStrength = 1.5m,
+        string studyDate = "20240115",
+        string? sopInstanceUid = null,
+        Action<DicomDataset>? customize = null)
+    {
+        var dataset = BuildSlice(
+            studyUid,
+            seriesUid,
+            patientId,
+            patientName,
+            birthDate,
+            seriesDescription,
+            acquisitionType,
+            sliceThickness,
+            fieldStrength,
+            studyDate,
+            sopInstanceUid,
+            customize);
+
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         new DicomFile(dataset).Save(path);
+
+        return dataset.GetSingleValue<string>(DicomTag.SOPInstanceUID);
+    }
+
+    /// <summary>
+    /// Собирает все строковые значения набора тегов, включая вложенные
+    /// последовательности. Нужен, чтобы проверка утечки шла по всему результату,
+    /// а не по заранее выбранным тегам.
+    /// </summary>
+    /// <param name="dataset">Набор тегов.</param>
+    /// <returns>Все строковые значения.</returns>
+    internal static IEnumerable<string> AllStringValues(DicomDataset dataset)
+    {
+        foreach (var item in dataset)
+        {
+            if (item is DicomSequence sequence)
+            {
+                foreach (var value in sequence.Items.SelectMany(AllStringValues))
+                {
+                    yield return value;
+                }
+
+                continue;
+            }
+
+            if (!item.ValueRepresentation.IsString)
+            {
+                continue;
+            }
+
+            if (dataset.TryGetValues<string>(item.Tag, out var values) && values is not null)
+            {
+                foreach (var value in values)
+                {
+                    yield return value;
+                }
+            }
+        }
     }
 
     /// <summary>Строит минимальный корректный заголовок NIfTI-1 с заданными размерами.</summary>
+    /// <param name="columns">Число столбцов.</param>
+    /// <param name="rows">Число строк.</param>
+    /// <param name="slices">Число срезов.</param>
+    /// <param name="voxelX">Размер вокселя по X, мм.</param>
+    /// <param name="voxelY">Размер вокселя по Y, мм.</param>
+    /// <param name="voxelZ">Размер вокселя по Z, мм.</param>
+    /// <param name="littleEndian">Порядок байтов заголовка.</param>
+    /// <returns>Заголовок NIfTI-1.</returns>
     internal static byte[] BuildNiftiHeader(
         short columns,
         short rows,
