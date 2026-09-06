@@ -1,5 +1,6 @@
 using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
 
 namespace Hydrocephalus.Application.Tests;
@@ -49,16 +50,66 @@ public sealed class ExportDatasetManifestTests
     }
 
     [Fact]
-    public async Task An_export_without_a_named_requester_is_refused()
+    public void An_actor_without_an_identifier_cannot_be_created()
     {
-        // Безымянный экспорт выборки наружу нельзя ни разобрать, ни оспорить.
+        // Безымянное действие нельзя ни разобрать, ни оспорить, поэтому
+        // такой инициатор не существует — проверять его в сценарии незачем.
+        Assert.Throws<DomainRuleViolationException>(
+            () => Actor.Create("   ", ClinicalRole.Researcher));
+    }
+
+    [Fact]
+    public async Task A_clinician_may_not_export_a_dataset_manifest()
+    {
+        // Сбор выборки — не лечебная работа: у врача такого права нет.
         var store = new RecordingManifestStore();
 
-        await Assert.ThrowsAsync<DomainRuleViolationException>(
-            () => UseCase(store, new RecordingAudit())
-                .ExecuteAsync(Request(requester: "   "), CancellationToken.None));
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => UseCase(store, new RecordingAudit()).ExecuteAsync(
+                Request(requestedBy: Actor.Create("doctor-1", ClinicalRole.Clinician)),
+                CancellationToken.None));
 
         Assert.Empty(store.Written);
+    }
+
+    [Fact]
+    public async Task A_denied_attempt_is_audited_under_its_own_code()
+    {
+        // Несанкционированный экспорт назван отдельной угрозой: попытка,
+        // не оставившая следа, ничем не отличается от её отсутствия.
+        // Спутать с состоявшимся экспортом запись нельзя — код другой.
+        var audit = new RecordingAudit();
+
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => UseCase(new RecordingManifestStore(), audit).ExecuteAsync(
+                Request(requestedBy: Actor.Create("doctor-1", ClinicalRole.Clinician)),
+                CancellationToken.None));
+
+        var recorded = Assert.Single(audit.Events);
+
+        Assert.Equal(AuditEventCode.AccessDenied, recorded.Code);
+        Assert.Equal("doctor-1", recorded.PseudonymousActorId);
+    }
+
+    [Fact]
+    public async Task An_unspecified_role_grants_nothing()
+    {
+        // Значение по умолчанию у перечисления получают неинициализированные
+        // данные; роль по умолчанию с доступом — дыра, которая открывается сама.
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => UseCase(new RecordingManifestStore(), new RecordingAudit()).ExecuteAsync(
+                Request(requestedBy: Actor.Create("nobody", ClinicalRole.Unspecified)),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task An_administrator_gets_no_access_to_patient_data()
+    {
+        // Обслуживание системы и доступ к её содержимому — разные задачи.
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => UseCase(new RecordingManifestStore(), new RecordingAudit()).ExecuteAsync(
+                Request(requestedBy: Actor.Create("admin-1", ClinicalRole.Administrator)),
+                CancellationToken.None));
     }
 
     [Fact]
@@ -142,12 +193,12 @@ public sealed class ExportDatasetManifestTests
 
     private static DatasetExportRequest Request(
         IReadOnlyList<ImagingStudy>? studies = null,
-        string requester = "researcher-1",
+        Actor? requestedBy = null,
         bool confirmed = true) =>
         new()
         {
             Studies = studies ?? [Study("study-1")],
-            RequestedByPseudonymousUserId = requester,
+            RequestedBy = requestedBy ?? Actor.Create("researcher-1", ClinicalRole.Researcher),
             Confirmed = confirmed,
         };
 

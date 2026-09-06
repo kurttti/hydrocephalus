@@ -1,5 +1,6 @@
 using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
 
 namespace Hydrocephalus.Application;
@@ -13,12 +14,13 @@ public sealed record DatasetExportRequest
     public required IReadOnlyList<ImagingStudy> Studies { get; init; }
 
     /// <summary>
-    /// Псевдонимный идентификатор того, кто запросил экспорт.
+    /// Тот, кто запросил экспорт.
     ///
     /// Обязателен: экспорт выборки наружу — действие, за которое кто-то
     /// отвечает, и безымянный экспорт нельзя ни разобрать, ни оспорить.
+    /// Идентификатор и права приходят вместе, а не по отдельности.
     /// </summary>
-    public required string RequestedByPseudonymousUserId { get; init; }
+    public required Actor RequestedBy { get; init; }
 
     /// <summary>
     /// Явное подтверждение экспорта.
@@ -78,7 +80,10 @@ public sealed class ExportDatasetManifestUseCase
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Ссылка на записанный манифест.</returns>
     /// <exception cref="DomainRuleViolationException">
-    /// Если экспорт не подтверждён, инициатор не назван либо экспортировать нечего.
+    /// Если экспорт не подтверждён либо экспортировать нечего.
+    /// </exception>
+    /// <exception cref="AccessDeniedException">
+    /// Если у инициатора нет права на экспорт манифеста.
     /// </exception>
     public async Task<string> ExecuteAsync(
         DatasetExportRequest request,
@@ -92,11 +97,10 @@ public sealed class ExportDatasetManifestUseCase
                 "Exporting a dataset manifest requires explicit confirmation.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.RequestedByPseudonymousUserId))
-        {
-            throw new DomainRuleViolationException(
-                "Exporting a dataset manifest requires a named requester.");
-        }
+        await this.RequireAsync(
+            request.RequestedBy,
+            Capability.ExportDatasetManifest,
+            cancellationToken).ConfigureAwait(false);
 
         if (request.Studies.Count == 0)
         {
@@ -122,10 +126,40 @@ public sealed class ExportDatasetManifestUseCase
             {
                 Code = AuditEventCode.DatasetManifestExported,
                 OccurredAt = this.timeProvider.GetUtcNow(),
-                PseudonymousActorId = request.RequestedByPseudonymousUserId,
+                PseudonymousActorId = request.RequestedBy.PseudonymousUserId,
             },
             cancellationToken).ConfigureAwait(false);
 
         return reference;
+    }
+
+    /// <summary>
+    /// Требует права и записывает отказ в журнал.
+    ///
+    /// Отказ по правам пишется, а отказ по составу запроса — нет. Разница
+    /// содержательная: неподтверждённый или пустой запрос ничего не нарушает,
+    /// а попытка выйти за пределы своих прав — событие безопасности, и след
+    /// от неё нужен именно потому, что попытка не удалась.
+    /// </summary>
+    private async Task RequireAsync(
+        Actor requestedBy,
+        Capability capability,
+        CancellationToken cancellationToken)
+    {
+        if (requestedBy.Can(capability))
+        {
+            return;
+        }
+
+        await this.auditLog.RecordAsync(
+            new AuditEvent
+            {
+                Code = AuditEventCode.AccessDenied,
+                OccurredAt = this.timeProvider.GetUtcNow(),
+                PseudonymousActorId = requestedBy.PseudonymousUserId,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        throw AccessDeniedException.For(requestedBy.Role, capability);
     }
 }
