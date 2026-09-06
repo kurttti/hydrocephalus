@@ -32,6 +32,15 @@ public enum AuditEventCode
 
     /// <summary>Отчёт сохранён.</summary>
     ReportStored = 8,
+
+    /// <summary>
+    /// Экспортирован манифест датасета в исследовательский контур.
+    ///
+    /// Отдельное событие, а не разновидность экспорта отчёта: манифест уходит
+    /// наружу и описывает состав выборки. Кто и когда его запросил, должно быть
+    /// видно в журнале так же ясно, как факт анализа.
+    /// </summary>
+    DatasetManifestExported = 9,
 }
 
 /// <summary>
@@ -51,6 +60,14 @@ public sealed record AuditEvent
 
     /// <summary>Версия model package, если событие связано с анализом.</summary>
     public string? ModelVersion { get; init; }
+
+    /// <summary>
+    /// Псевдонимный идентификатор инициатора, если событие вызвано человеком.
+    ///
+    /// Псевдоним, а не имя: журнал не должен нести персональных данных
+    /// ни о пациенте, ни о сотруднике (docs/security/README.md).
+    /// </summary>
+    public string? PseudonymousActorId { get; init; }
 }
 
 /// <summary>

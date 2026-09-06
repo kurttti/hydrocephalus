@@ -32,6 +32,14 @@ public sealed record ApplicationPaths
     public required string PseudonymSaltPath { get; init; }
 
     /// <summary>
+    /// Корень манифестов датасета.
+    ///
+    /// Отдельно от отчётов: отчёт остаётся у врача, а манифест уходит
+    /// в исследовательский контур. Разные направления — разные каталоги.
+    /// </summary>
+    public required string DatasetManifestRoot { get; init; }
+
+    /// <summary>
     /// Строит расположение в профиле текущего пользователя.
     /// </summary>
     /// <returns>Пути приложения.</returns>
@@ -59,6 +67,7 @@ public sealed record ApplicationPaths
             ReportRoot = IoPath.Combine(root, "reports"),
             AuditLogPath = IoPath.Combine(root, "audit", "audit.log"),
             PseudonymSaltPath = IoPath.Combine(root, "secrets", "pseudonym-salt.bin"),
+            DatasetManifestRoot = IoPath.Combine(root, "dataset-manifests"),
         };
     }
 }

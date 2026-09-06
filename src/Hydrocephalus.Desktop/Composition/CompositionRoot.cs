@@ -6,6 +6,7 @@ using Hydrocephalus.Inference;
 using Hydrocephalus.Inference.QualityControl;
 using Hydrocephalus.Inference.Segmentation;
 using Hydrocephalus.Infrastructure.Configuration;
+using Hydrocephalus.Infrastructure.Dataset;
 using Hydrocephalus.Infrastructure.Dicom;
 using Hydrocephalus.Infrastructure.Reporting;
 using Hydrocephalus.Infrastructure.Volumes;
@@ -30,11 +31,13 @@ public sealed class CompositionRoot : IDisposable
 
     private CompositionRoot(
         Hydrocephalus.Application.AnalyzeStudyUseCase analyzeStudy,
+        Hydrocephalus.Application.ExportDatasetManifestUseCase exportDatasetManifest,
         StudyImporter importer,
         HashChainAuditLog auditLog,
         PipelineIdentity pipeline)
     {
         this.AnalyzeStudy = analyzeStudy;
+        this.ExportDatasetManifest = exportDatasetManifest;
         this.importer = importer;
         this.auditLog = auditLog;
         this.Pipeline = pipeline;
@@ -42,6 +45,17 @@ public sealed class CompositionRoot : IDisposable
 
     /// <summary>Сценарий анализа исследования.</summary>
     public Hydrocephalus.Application.AnalyzeStudyUseCase AnalyzeStudy { get; }
+
+    /// <summary>
+    /// Экспорт манифеста датасета в исследовательский контур.
+    ///
+    /// Собран, но ни один экран его не вызывает, и это намеренно. Экспорт
+    /// выборки наружу — действие исследователя, а не врача, и открывать его
+    /// в клиническом интерфейсе можно только вместе с разграничением ролей,
+    /// которого пока нет (ADR 0005: разграничение выполняется на уровне
+    /// сценария и фиксируется в аудите).
+    /// </summary>
+    public Hydrocephalus.Application.ExportDatasetManifestUseCase ExportDatasetManifest { get; }
 
     /// <summary>Версии конвейера, попадающие в отчёт.</summary>
     public PipelineIdentity Pipeline { get; }
@@ -79,7 +93,12 @@ public sealed class CompositionRoot : IDisposable
             auditLog,
             TimeProvider.System);
 
-        return new CompositionRoot(useCase, importer, auditLog, pipeline);
+        var exportDatasetManifest = new Hydrocephalus.Application.ExportDatasetManifestUseCase(
+            new FileDatasetManifestStore(paths.DatasetManifestRoot, TimeProvider.System),
+            auditLog,
+            TimeProvider.System);
+
+        return new CompositionRoot(useCase, exportDatasetManifest, importer, auditLog, pipeline);
     }
 
     /// <summary>
