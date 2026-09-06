@@ -5,8 +5,70 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:Hydrocephalus.Desktop"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="Гидроцефалия — просмотр"
+        Height="760" Width="1180"
+        Background="#101014"
+        FontSize="13">
 
-    </Grid>
+    <!-- Ctrl+O через стандартную команду: своё сочетание пришлось бы объяснять,
+         а это врач уже знает. -->
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Open" Executed="OnOpenClick" />
+    </Window.CommandBindings>
+
+    <DockPanel>
+
+        <!-- Панель управления. Клавиатурная навигация обязательна: экран должен
+             работать без мыши (docs/windows/README.md). -->
+        <Border DockPanel.Dock="Top" Background="#1B1B22" Padding="10,8">
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="OpenButton"
+                        Content="_Открыть исследование…"
+                        Padding="12,4"
+                        Command="ApplicationCommands.Open"
+                        ToolTip="Выбрать каталог с DICOM-файлами (Ctrl+O)" />
+
+                <CheckBox x:Name="OverlayToggle"
+                          Content="_Маска"
+                          Margin="18,0,0,0"
+                          VerticalAlignment="Center"
+                          Foreground="#E6E6EA"
+                          IsChecked="True"
+                          Checked="OnOverlayChanged"
+                          Unchecked="OnOverlayChanged"
+                          ToolTip="Показывать наложение маски сегментации" />
+
+                <TextBlock Text="Центр" Foreground="#9A9AA6" Margin="24,0,6,0" VerticalAlignment="Center" />
+                <Slider x:Name="CenterSlider" Width="150" VerticalAlignment="Center"
+                        ValueChanged="OnWindowChanged" IsEnabled="False" />
+
+                <TextBlock Text="Ширина" Foreground="#9A9AA6" Margin="16,0,6,0" VerticalAlignment="Center" />
+                <Slider x:Name="WidthSlider" Width="150" VerticalAlignment="Center"
+                        ValueChanged="OnWindowChanged" IsEnabled="False" />
+
+                <TextBlock x:Name="WindowReadout" Foreground="#9A9AA6"
+                           Margin="16,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <!-- Строка состояния. Отдельно названо, что приложение не является
+             диагностической станцией (ADR 0007). -->
+        <Border DockPanel.Dock="Bottom" Background="#1B1B22" Padding="10,6">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Right"
+                           Foreground="#7A7A88"
+                           Text="Вспомогательный инструмент. Не является диагностической станцией." />
+                <TextBlock x:Name="StatusText" Foreground="#9A9AA6" Text="Исследование не открыто." />
+            </DockPanel>
+        </Border>
+
+        <Grid x:Name="PlaneGrid" Margin="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+        </Grid>
+
+    </DockPanel>
 </Window>

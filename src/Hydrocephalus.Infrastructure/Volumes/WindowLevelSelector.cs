@@ -1,3 +1,5 @@
+using Hydrocephalus.Domain.Imaging;
+
 namespace Hydrocephalus.Infrastructure.Volumes;
 
 /// <summary>
@@ -32,7 +34,22 @@ public static class WindowLevelSelector
     {
         ArgumentNullException.ThrowIfNull(volume);
 
-        var suggested = volume.SuggestedWindow;
+        return For(volume, volume.SuggestedWindow);
+    }
+
+    /// <summary>
+    /// Выбирает окно для объёма с заданной подсказкой.
+    ///
+    /// Перегрузка для объёмов, у которых тегов нет: приведённый к другой сетке
+    /// объём — это те же данные, и подсказка исходной серии для него остаётся
+    /// верной, но взять её ему неоткуда.
+    /// </summary>
+    /// <param name="volume">Объём.</param>
+    /// <param name="suggested">Окно из тегов серии либо <see langword="null"/>.</param>
+    /// <returns>Подсказка, если она пригодна, иначе рассчитанное по гистограмме.</returns>
+    public static WindowLevel For(IVoxelVolume volume, WindowLevel? suggested)
+    {
+        ArgumentNullException.ThrowIfNull(volume);
 
         return suggested is { } window && IsPlausible(window, volume)
             ? window
@@ -48,7 +65,7 @@ public static class WindowLevelSelector
     /// </summary>
     /// <param name="volume">Загруженный объём.</param>
     /// <returns>Рассчитанное окно.</returns>
-    public static WindowLevel FromHistogram(VoxelVolume volume)
+    public static WindowLevel FromHistogram(IVoxelVolume volume)
     {
         ArgumentNullException.ThrowIfNull(volume);
 
@@ -65,9 +82,17 @@ public static class WindowLevelSelector
         var histogram = new int[BinCount];
         var scale = (BinCount - 1) / (maximum - minimum);
 
-        foreach (var value in volume.Voxels)
+        var dimensions = volume.Grid.Dimensions;
+
+        for (var slice = 0; slice < dimensions.Slices; slice++)
         {
-            histogram[(int)((value - minimum) * scale)]++;
+            for (var row = 0; row < dimensions.Rows; row++)
+            {
+                for (var column = 0; column < dimensions.Columns; column++)
+                {
+                    histogram[(int)((volume[column, row, slice] - minimum) * scale)]++;
+                }
+            }
         }
 
         var total = 0L;
@@ -91,7 +116,7 @@ public static class WindowLevelSelector
     /// <param name="window">Проверяемое окно.</param>
     /// <param name="volume">Объём.</param>
     /// <returns><see langword="true"/>, если окно пересекается с диапазоном значений.</returns>
-    public static bool IsPlausible(WindowLevel window, VoxelVolume volume)
+    public static bool IsPlausible(WindowLevel window, IVoxelVolume volume)
     {
         ArgumentNullException.ThrowIfNull(volume);
 
