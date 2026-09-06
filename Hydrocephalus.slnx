@@ -6,6 +6,9 @@
     <Project Path="src/Hydrocephalus.Inference/Hydrocephalus.Inference.csproj" />
     <Project Path="src/Hydrocephalus.Infrastructure/Hydrocephalus.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Hydrocephalus.Inventory/Hydrocephalus.Inventory.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hydrocephalus.Application.Tests/Hydrocephalus.Application.Tests.csproj" />
     <Project Path="tests/Hydrocephalus.Desktop.Tests/Hydrocephalus.Desktop.Tests.csproj" />
