@@ -3,21 +3,6 @@ using Hydrocephalus.Domain.Imaging;
 namespace Hydrocephalus.Infrastructure.Volumes;
 
 /// <summary>
-/// Ось объёма, вдоль которой перелистываются плоскости.
-/// </summary>
-public enum VolumeAxis
-{
-    /// <summary>Поперёк срезов: та плоскость, в которой серия получена.</summary>
-    AcrossSlices = 0,
-
-    /// <summary>Поперёк строк.</summary>
-    AcrossRows = 1,
-
-    /// <summary>Поперёк столбцов.</summary>
-    AcrossColumns = 2,
-}
-
-/// <summary>
 /// Готовая к выводу плоскость.
 ///
 /// Размер пикселя хранится в миллиметрах по обеим осям и, как правило, различается:
@@ -71,6 +56,10 @@ public sealed class PlaneImage
 ///
 /// Размеры и шаг берутся из сетки отсчётов, а направления — из геометрии получения:
 /// после ресэмплинга сетка другая, а стороны пациента те же.
+///
+/// Адресация плоскости общая с наложением маски (<see cref="PlaneAddressing"/>):
+/// совпадение маски со срезом обязано быть верным по построению, а не держаться
+/// на том, что две реализации не разошлись.
 /// </summary>
 public static class VolumeSlicer
 {
@@ -84,15 +73,7 @@ public static class VolumeSlicer
     {
         ArgumentNullException.ThrowIfNull(volume);
 
-        var dimensions = volume.Grid.Dimensions;
-
-        return axis switch
-        {
-            VolumeAxis.AcrossSlices => dimensions.Slices,
-            VolumeAxis.AcrossRows => dimensions.Rows,
-            VolumeAxis.AcrossColumns => dimensions.Columns,
-            _ => 0,
-        };
+        return PlaneAddressing.CountAlong(volume.Grid, axis);
     }
 
     /// <summary>
@@ -109,78 +90,28 @@ public static class VolumeSlicer
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, CountAlong(volume, axis));
 
-        var geometry = volume.Geometry;
-        var grid = volume.Grid;
-        var dimensions = grid.Dimensions;
+        var extent = PlaneAddressing.ExtentOf(volume.Grid, axis);
+        var (horizontal, vertical) = PlaneAddressing.DirectionsOf(volume.Geometry, axis);
 
-        return axis switch
+        var pixels = new byte[extent.Width * extent.Height];
+
+        for (var y = 0; y < extent.Height; y++)
         {
-            VolumeAxis.AcrossSlices => Build(
-                volume,
-                window,
-                dimensions.Columns,
-                dimensions.Rows,
-                (x, y) => (x, y, index),
-                grid.ColumnSpacingMillimetres,
-                grid.RowSpacingMillimetres,
-                geometry.RowDirection,
-                geometry.ColumnDirection),
-
-            VolumeAxis.AcrossRows => Build(
-                volume,
-                window,
-                dimensions.Columns,
-                dimensions.Slices,
-                (x, y) => (x, index, y),
-                grid.ColumnSpacingMillimetres,
-                grid.SliceSpacingMillimetres,
-                geometry.RowDirection,
-                geometry.SliceNormal),
-
-            VolumeAxis.AcrossColumns => Build(
-                volume,
-                window,
-                dimensions.Rows,
-                dimensions.Slices,
-                (x, y) => (index, x, y),
-                grid.RowSpacingMillimetres,
-                grid.SliceSpacingMillimetres,
-                geometry.ColumnDirection,
-                geometry.SliceNormal),
-
-            _ => throw new ArgumentOutOfRangeException(nameof(axis)),
-        };
-    }
-
-    private static PlaneImage Build(
-        IVoxelVolume volume,
-        WindowLevel window,
-        int width,
-        int height,
-        Func<int, int, (int Column, int Row, int Slice)> locate,
-        double pixelWidthMillimetres,
-        double pixelHeightMillimetres,
-        SpatialVector horizontal,
-        SpatialVector vertical)
-    {
-        var pixels = new byte[width * height];
-
-        for (var y = 0; y < height; y++)
-        {
-            for (var x = 0; x < width; x++)
+            for (var x = 0; x < extent.Width; x++)
             {
-                var (column, row, slice) = locate(x, y);
-                pixels[(y * width) + x] = window.Map(volume[column, row, slice]);
+                var (column, row, slice) = PlaneAddressing.Locate(axis, index, x, y);
+
+                pixels[(y * extent.Width) + x] = window.Map(volume[column, row, slice]);
             }
         }
 
         return new PlaneImage
         {
-            Width = width,
-            Height = height,
+            Width = extent.Width,
+            Height = extent.Height,
             Pixels = pixels,
-            PixelWidthMillimetres = pixelWidthMillimetres,
-            PixelHeightMillimetres = pixelHeightMillimetres,
+            PixelWidthMillimetres = extent.PixelWidthMillimetres,
+            PixelHeightMillimetres = extent.PixelHeightMillimetres,
             Labels = PatientOrientation.ForImagePlane(horizontal, vertical),
 
             // Плоскость называется по своей нормали, а нормаль вида —
