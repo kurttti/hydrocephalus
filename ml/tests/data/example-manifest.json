@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0.0",
+  "series": [
+    {
+      "series_id": "9f2c41a7be03d5e6",
+      "study_id": "1b77e4c0a9d2f831",
+      "subject_id": "c40e8b31d7a5f9e2",
+      "tier": "Extended",
+      "weighting": "T1",
+      "contrast_enhanced": false,
+      "slice_count": 176,
+      "voxel_spacing_mm": [
+        0.9,
+        0.9,
+        1
+      ]
+    },
+    {
+      "series_id": "3d81f0a94c6b2e57",
+      "study_id": "1b77e4c0a9d2f831",
+      "subject_id": "c40e8b31d7a5f9e2",
+      "tier": "Baseline",
+      "weighting": "T2",
+      "contrast_enhanced": false,
+      "slice_count": 24,
+      "voxel_spacing_mm": [
+        0.45,
+        0.45,
+        6
+      ]
+    },
+    {
+      "series_id": "8ae5027cb1934d6f",
+      "study_id": "5c9048e2af71b6d3",
+      "subject_id": "70b1d4e8c25f9a36",
+      "tier": "Extended",
+      "weighting": "T1",
+      "contrast_enhanced": true,
+      "slice_count": 180,
+      "voxel_spacing_mm": [
+        1,
+        1,
+        1
+      ]
+    }
+  ]
+}
