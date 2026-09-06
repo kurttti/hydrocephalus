@@ -51,6 +51,13 @@ public enum AuditEventCode
     /// с состоявшимся экспортом такую запись нельзя — у неё другой код.
     /// </summary>
     AccessDenied = 10,
+
+    /// <summary>
+    /// Отчёт экспортирован. Вариант записывается отдельным полем: клинический
+    /// и обезличенный различаются составом, и «экспорт был» без указания
+    /// варианта не отвечает на главный вопрос — ушли ли наружу идентификаторы.
+    /// </summary>
+    ReportExported = 11,
 }
 
 /// <summary>
@@ -78,6 +85,11 @@ public sealed record AuditEvent
     /// ни о пациенте, ни о сотруднике (docs/security/README.md).
     /// </summary>
     public string? PseudonymousActorId { get; init; }
+
+    /// <summary>
+    /// Вариант экспорта отчёта, если событие относится к экспорту.
+    /// </summary>
+    public Reporting.ReportExportVariant? ReportExportVariant { get; init; }
 }
 
 /// <summary>
