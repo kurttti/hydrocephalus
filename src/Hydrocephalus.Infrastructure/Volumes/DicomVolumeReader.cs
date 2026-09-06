@@ -26,14 +26,61 @@ public static class DicomVolumeReader
     public const long MaxVoxelCount = 512L * 512 * 1024;
 
     /// <summary>
-    /// Загружает объём из каталога одной серии.
+    /// Загружает объём из серии зашифрованной рабочей копии.
+    ///
+    /// Публичный вход требует сеанса, а не пути. Читать рабочую копию можно
+    /// только через её ключ, и оставить рядом перегрузку, берущую каталог,
+    /// значило бы оставить путь, которым незашифрованную копию прочитают
+    /// по недосмотру.
     /// </summary>
-    /// <param name="seriesDirectory">Каталог серии в рабочей копии.</param>
+    /// <param name="session">Сеанс рабочей копии.</param>
+    /// <param name="relativeSeriesDirectory">Каталог серии внутри сеанса.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Загруженный объём.</returns>
     /// <exception cref="InvalidDataException">Если срезы несовместимы между собой.</exception>
     /// <exception cref="NotSupportedException">Если формат пикселей не поддерживается.</exception>
-    public static async Task<VoxelVolume> LoadAsync(string seriesDirectory, CancellationToken cancellationToken)
+    public static async Task<VoxelVolume> LoadAsync(
+        WorkingCopySession session,
+        string relativeSeriesDirectory,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        var paths = session.Enumerate(relativeSeriesDirectory);
+
+        if (paths.Count == 0)
+        {
+            throw new InvalidDataException("The series contains no DICOM files.");
+        }
+
+        var slices = new List<LoadedSlice>(paths.Count);
+
+        foreach (var path in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var content = await session.ReadAsync(path, cancellationToken).ConfigureAwait(false);
+
+            using var stream = new MemoryStream(content);
+
+            slices.Add(ReadSlice(await DicomFile.OpenAsync(stream).ConfigureAwait(false)));
+        }
+
+        return Assemble(slices, cancellationToken);
+    }
+
+    /// <summary>
+    /// Загружает объём из каталога с незашифрованными файлами.
+    ///
+    /// Только для тестов и фикстур: в рабочем режиме копия зашифрована,
+    /// и такого каталога не существует.
+    /// </summary>
+    /// <param name="seriesDirectory">Каталог серии.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Загруженный объём.</returns>
+    internal static async Task<VoxelVolume> LoadAsync(
+        string seriesDirectory,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(seriesDirectory);
 
@@ -54,6 +101,13 @@ public static class DicomVolumeReader
 
             slices.Add(ReadSlice(file));
         }
+
+        return Assemble(slices, cancellationToken);
+    }
+
+    private static VoxelVolume Assemble(List<LoadedSlice> slices, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
 
         var reference = slices[0];
 

@@ -160,5 +160,12 @@ public sealed class SyntheticPipelineTests
         IInferenceEngine engine,
         IReportStore store,
         IAuditLog audit) =>
-        new(new StubImporter(study), engine, store, audit, TimeProvider.System);
+        Build(new StubImporter(study), engine, store, audit);
+
+    private static AnalyzeStudyUseCase Build(
+        StubImporter importer,
+        IInferenceEngine engine,
+        IReportStore store,
+        IAuditLog audit) =>
+        new(importer, importer, engine, store, audit, TimeProvider.System);
 }

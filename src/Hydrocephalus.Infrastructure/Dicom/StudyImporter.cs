@@ -4,6 +4,7 @@ using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Quality;
+using Hydrocephalus.Infrastructure.Volumes;
 
 namespace Hydrocephalus.Infrastructure.Dicom;
 
@@ -21,21 +22,30 @@ namespace Hydrocephalus.Infrastructure.Dicom;
 /// в исходном сборе содержат фамилии пациентов, то есть PHI вне DICOM-тегов
 /// (docs/data/README.md), и переименование входит в профиль наравне с тегами.
 /// </summary>
-public sealed class StudyImporter : IStudyImporter
+public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
 {
     private readonly DicomImportOptions importOptions;
     private readonly WorkingCopyOptions workingCopyOptions;
+    private readonly TimeProvider timeProvider;
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, WorkingCopySession> sessions =
+        new(StringComparer.Ordinal);
 
     /// <summary>Создаёт импортёр.</summary>
     /// <param name="importOptions">Ограничения приёма и соль псевдонимизации.</param>
     /// <param name="workingCopyOptions">Расположение рабочей копии.</param>
-    public StudyImporter(DicomImportOptions importOptions, WorkingCopyOptions workingCopyOptions)
+    /// <param name="timeProvider">Источник времени для отметки сеанса.</param>
+    public StudyImporter(
+        DicomImportOptions importOptions,
+        WorkingCopyOptions workingCopyOptions,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(importOptions);
         ArgumentNullException.ThrowIfNull(workingCopyOptions);
 
         this.importOptions = importOptions;
         this.workingCopyOptions = workingCopyOptions;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -88,23 +98,24 @@ public sealed class StudyImporter : IStudyImporter
             .Select(series => series.PseudonymousSeriesId)
             .ToHashSet(StringComparer.Ordinal);
 
-        var studyDirectory = Path.Combine(
-            this.workingCopyOptions.RootDirectory,
-            study.PseudonymousSubjectId,
-            study.PseudonymousStudyId);
+        // Идентификатор сеанса случаен, а не выведен из исследования. Причин две.
+        // Общий на исследование сеанс делили бы просмотр и анализ, и освобождение
+        // в одном уничтожило бы данные другого. И имя каталога, выведенное
+        // из псевдонима, само связывает копию с исследованием — на диске это
+        // лишняя связь. Повторные копии убирает уборка по сроку.
+        var session = await WorkingCopySession.CreateAsync(
+                this.workingCopyOptions.RootDirectory,
+                Guid.NewGuid().ToString("N"),
+                this.timeProvider.GetUtcNow(),
+                this.workingCopyOptions.RestrictAccessToCurrentUser,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         try
         {
-            // Каталог создаётся и тогда, когда писать нечего: ссылка на рабочую
-            // копию должна разрешаться, а пустая рабочая копия — верное описание
-            // исследования без пригодных серий. Данных такой каталог не содержит
-            // и убирается общей очисткой по ADR 0006.
-            this.CreateProtected(this.workingCopyOptions.RootDirectory);
-            this.CreateProtected(studyDirectory);
-
             var written = await this.WriteWorkingCopyAsync(
                     sourceReference,
-                    studyDirectory,
+                    session,
                     study.PseudonymousSubjectId,
                     retainedIds,
                     cancellationToken)
@@ -116,32 +127,58 @@ public sealed class StudyImporter : IStudyImporter
         {
             // Незавершённая рабочая копия не остаётся на диске: её содержимое
             // уже деидентифицировано, но частичное исследование выглядело бы
-            // пригодным для анализа.
-            Discard(studyDirectory);
+            // пригодным для анализа. Уничтожение начинается с ключа.
+            session.Destroy();
             throw;
         }
+
+        // Сеанс переживает импорт: по рабочей копии ещё будут читать объём.
+        // Уничтожает его сценарий анализа в finally — на успехе, ошибке
+        // и отмене (ADR 0006).
+        this.sessions[session.Directory] = session;
 
         return new WorkingCopy
         {
             Study = study with { Series = retainedSeries },
-            VolumeReference = studyDirectory,
+            VolumeReference = session.Directory,
         };
     }
 
-    /// <summary>Удаляет каталог, не заслоняя исходную ошибку ошибкой очистки.</summary>
-    private static void Discard(string directory)
+    /// <summary>
+    /// Возвращает сеанс рабочей копии по ссылке на неё.
+    /// </summary>
+    /// <param name="volumeReference">Ссылка на рабочую копию.</param>
+    /// <returns>Сеанс.</returns>
+    /// <exception cref="InvalidOperationException">Если сеанс уже уничтожен.</exception>
+    public WorkingCopySession SessionFor(string volumeReference)
     {
-        try
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeReference);
+
+        return this.sessions.TryGetValue(volumeReference, out var session)
+            ? session
+
+            // Обращение к уничтоженному сеансу — это чтение данных, которых
+            // уже нет. Отдать здесь пустоту значило бы показать пустой объём
+            // вместо ошибки.
+            : throw new InvalidOperationException(
+                "The working copy session has already been destroyed.");
+    }
+
+    /// <summary>
+    /// Уничтожает рабочую копию: сначала ключ, затем данные.
+    /// </summary>
+    /// <param name="volumeReference">Ссылка на рабочую копию.</param>
+    /// <returns>Задача уничтожения.</returns>
+    public Task ReleaseAsync(string volumeReference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeReference);
+
+        if (this.sessions.TryRemove(volumeReference, out var session))
         {
-            if (Directory.Exists(directory))
-            {
-                Directory.Delete(directory, recursive: true);
-            }
+            session.Destroy();
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Очистка выполняется повторно при старте приложения (ADR 0006).
-        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -164,7 +201,7 @@ public sealed class StudyImporter : IStudyImporter
 
     private async Task<Dictionary<string, int>> WriteWorkingCopyAsync(
         string sourceReference,
-        string studyDirectory,
+        WorkingCopySession session,
         string pseudonymousSubjectId,
         HashSet<string> retainedSeriesIds,
         CancellationToken cancellationToken)
@@ -217,9 +254,15 @@ public sealed class StudyImporter : IStudyImporter
 
             Verify(instance, target.FileMetaInfo, relativePath);
 
-            this.CreateProtected(Path.Combine(studyDirectory, seriesId));
+            // Файл шифруется в памяти и только потом ложится на диск:
+            // записать открытым и зашифровать следом означало бы оставить окно,
+            // в котором деидентифицированные снимки лежат в открытом виде.
+            using var buffer = new MemoryStream();
 
-            await target.SaveAsync(Path.Combine(studyDirectory, relativePath)).ConfigureAwait(false);
+            await target.SaveAsync(buffer).ConfigureAwait(false);
+
+            await session.WriteAsync(relativePath, buffer.ToArray(), cancellationToken)
+                .ConfigureAwait(false);
 
             written[seriesId] = written.GetValueOrDefault(seriesId) + 1;
         }

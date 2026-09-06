@@ -66,15 +66,30 @@ internal static class Synthetic
     };
 }
 
-/// <summary>Импортёр, возвращающий заранее заданную рабочую копию.</summary>
-internal sealed class StubImporter(ImagingStudy study) : IStudyImporter
+/// <summary>
+/// Импортёр, возвращающий заранее заданную рабочую копию, и он же — её владелец.
+/// Освобождение запоминается: сценарий обязан убрать копию на успехе, ошибке
+/// и отмене, и проверять это надо здесь.
+/// </summary>
+internal sealed class StubImporter(ImagingStudy study) : IStudyImporter, IWorkingCopyLifetime
 {
+    private readonly List<string> released = [];
+
+    public IReadOnlyList<string> Released => this.released;
+
     public Task<WorkingCopy> ImportAsync(string sourceReference, CancellationToken cancellationToken) =>
         Task.FromResult(new WorkingCopy
         {
             Study = study,
             VolumeReference = "working-copy/volume-0001",
         });
+
+    public Task ReleaseAsync(string volumeReference)
+    {
+        this.released.Add(volumeReference);
+
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>Журнал аудита, запоминающий порядок событий.</summary>

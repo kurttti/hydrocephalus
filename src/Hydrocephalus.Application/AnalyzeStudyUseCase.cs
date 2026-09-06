@@ -15,6 +15,7 @@ namespace Hydrocephalus.Application;
 public sealed class AnalyzeStudyUseCase
 {
     private readonly IStudyImporter importer;
+    private readonly IWorkingCopyLifetime workingCopyLifetime;
     private readonly IInferenceEngine engine;
     private readonly IReportStore reportStore;
     private readonly IAuditLog auditLog;
@@ -24,24 +25,28 @@ public sealed class AnalyzeStudyUseCase
     /// Создаёт сценарий.
     /// </summary>
     /// <param name="importer">Импорт и создание рабочей копии.</param>
+    /// <param name="workingCopyLifetime">Освобождение рабочей копии.</param>
     /// <param name="engine">Конвейер анализа.</param>
     /// <param name="reportStore">Хранилище отчётов.</param>
     /// <param name="auditLog">Журнал аудита.</param>
     /// <param name="timeProvider">Источник времени.</param>
     public AnalyzeStudyUseCase(
         IStudyImporter importer,
+        IWorkingCopyLifetime workingCopyLifetime,
         IInferenceEngine engine,
         IReportStore reportStore,
         IAuditLog auditLog,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(importer);
+        ArgumentNullException.ThrowIfNull(workingCopyLifetime);
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(reportStore);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         this.importer = importer;
+        this.workingCopyLifetime = workingCopyLifetime;
         this.engine = engine;
         this.reportStore = reportStore;
         this.auditLog = auditLog;
@@ -64,6 +69,27 @@ public sealed class AnalyzeStudyUseCase
         var workingCopy = await this.importer.ImportAsync(sourceReference, cancellationToken)
             .ConfigureAwait(false);
 
+        try
+        {
+            return await this.AnalyseAsync(workingCopy, progress, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            // Освобождение в finally, а не после успеха: на ошибке и отмене
+            // рабочая копия остаётся на диске ровно так же, и «уберём потом»
+            // означает не уберём. Уничтожение начинается с ключа, поэтому
+            // прерывание здесь всё равно делает данные нечитаемыми.
+            await this.workingCopyLifetime.ReleaseAsync(workingCopy.VolumeReference)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task<AnalysisReport> AnalyseAsync(
+        WorkingCopy workingCopy,
+        IProgress<AnalysisProgress>? progress,
+        CancellationToken cancellationToken)
+    {
         var study = workingCopy.Study;
 
         await this.RecordAsync(AuditEventCode.StudyImported, study.PseudonymousStudyId, cancellationToken)

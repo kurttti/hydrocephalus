@@ -1,7 +1,9 @@
 using FellowOakDicom;
 using Hydrocephalus.Domain;
+using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Infrastructure.Dicom;
+using Hydrocephalus.Infrastructure.Volumes;
 
 namespace Hydrocephalus.Infrastructure.Tests;
 
@@ -60,14 +62,10 @@ public sealed class StudyImporterTests : IDisposable
             patientId: "MRN-778899",
             patientName: "Ivanov^Ivan");
 
-        await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
+        var importer = this.Importer();
+        var result = await importer.ImportAsync(this.source.FullName, CancellationToken.None);
 
-        var written = Assert.Single(Directory.EnumerateFiles(
-            this.workingCopy.FullName,
-            "*.dcm",
-            SearchOption.AllDirectories));
-
-        var file = await DicomFile.OpenAsync(written);
+        var file = Assert.Single(await ReadAllAsync(importer, result));
 
         Assert.False(file.Dataset.Contains(DicomTag.PatientName));
         Assert.False(file.Dataset.Contains(DicomTag.PatientID));
@@ -78,8 +76,10 @@ public sealed class StudyImporterTests : IDisposable
     }
 
     [Fact]
-    public async Task Working_copy_path_is_built_from_the_pseudonyms_of_the_domain_model()
+    public async Task The_working_copy_directory_name_says_nothing_about_the_study()
     {
+        // Имя каталога, выведенное из псевдонима, само связывало бы копию
+        // с исследованием — на диске это лишняя связь.
         SyntheticDicom.WriteSlice(
             Path.Combine(this.source.FullName, "a.dcm"),
             studyUid: "1.2.3.1",
@@ -88,16 +88,58 @@ public sealed class StudyImporterTests : IDisposable
 
         var result = await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
 
-        var expected = Path.Combine(
+        var name = Path.GetFileName(result.VolumeReference);
+
+        Assert.DoesNotContain(result.Study.PseudonymousStudyId, name, StringComparison.Ordinal);
+        Assert.DoesNotContain(result.Study.PseudonymousSubjectId, name, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(result.VolumeReference));
+    }
+
+    [Fact]
+    public async Task Nothing_readable_as_dicom_reaches_the_disk()
+    {
+        // Пункт плана проверки ADR 0006: сканирование рабочего каталога
+        // не находит читаемых DICOM-сигнатур.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.source.FullName, "a.dcm"),
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "P-1");
+
+        await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
+
+        foreach (var path in Directory.EnumerateFiles(
             this.workingCopy.FullName,
-            result.Study.PseudonymousSubjectId,
-            result.Study.PseudonymousStudyId);
+            "*",
+            SearchOption.AllDirectories))
+        {
+            var bytes = await File.ReadAllBytesAsync(path, CancellationToken.None);
 
-        Assert.Equal(expected, result.VolumeReference);
+            Assert.DoesNotContain(
+                "DICM",
+                System.Text.Encoding.ASCII.GetString(bytes),
+                StringComparison.Ordinal);
+        }
+    }
 
-        var seriesId = Assert.Single(result.Study.Series).PseudonymousSeriesId;
+    [Fact]
+    public async Task Releasing_the_working_copy_removes_it()
+    {
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.source.FullName, "a.dcm"),
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "P-1");
 
-        Assert.True(Directory.Exists(Path.Combine(expected, seriesId)));
+        var importer = this.Importer();
+        var result = await importer.ImportAsync(this.source.FullName, CancellationToken.None);
+
+        await importer.ReleaseAsync(result.VolumeReference);
+
+        Assert.False(Directory.Exists(result.VolumeReference));
+
+        // Обращение к уничтоженному сеансу — чтение данных, которых уже нет.
+        Assert.Throws<InvalidOperationException>(() => importer.SessionFor(result.VolumeReference));
     }
 
     [Fact]
@@ -113,27 +155,23 @@ public sealed class StudyImporterTests : IDisposable
                 slicePosition: index);
         }
 
-        await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
+        var importer = this.Importer();
+        var result = await importer.ImportAsync(this.source.FullName, CancellationToken.None);
 
-        var files = Directory
-            .EnumerateFiles(this.workingCopy.FullName, "*.dcm", SearchOption.AllDirectories)
-            .ToArray();
+        var files = await ReadAllAsync(importer, result);
 
-        Assert.Equal(3, files.Length);
+        Assert.Equal(3, files.Count);
 
-        var seriesUids = new List<string>();
-        var instanceUids = new List<string>();
+        Assert.Single(files
+            .Select(file => file.Dataset.GetSingleValue<string>(DicomTag.SeriesInstanceUID))
+            .Distinct(StringComparer.Ordinal));
 
-        foreach (var path in files)
-        {
-            var file = await DicomFile.OpenAsync(path);
-
-            seriesUids.Add(file.Dataset.GetSingleValue<string>(DicomTag.SeriesInstanceUID));
-            instanceUids.Add(file.Dataset.GetSingleValue<string>(DicomTag.SOPInstanceUID));
-        }
-
-        Assert.Single(seriesUids.Distinct(StringComparer.Ordinal));
-        Assert.Equal(3, instanceUids.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(
+            3,
+            files
+                .Select(file => file.Dataset.GetSingleValue<string>(DicomTag.SOPInstanceUID))
+                .Distinct(StringComparer.Ordinal)
+                .Count());
     }
 
     [Fact]
@@ -153,13 +191,11 @@ public sealed class StudyImporterTests : IDisposable
             patientId: "P-1",
             customize: dataset => dataset.AddOrUpdate(DicomTag.BurnedInAnnotation, "YES"));
 
-        var result = await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
+        var importer = this.Importer();
+        var result = await importer.ImportAsync(this.source.FullName, CancellationToken.None);
 
         Assert.Single(result.Study.Series);
-        Assert.Single(Directory.EnumerateFiles(
-            this.workingCopy.FullName,
-            "*.dcm",
-            SearchOption.AllDirectories));
+        Assert.Single(await ReadAllAsync(importer, result));
     }
 
     [Fact]
@@ -174,15 +210,17 @@ public sealed class StudyImporterTests : IDisposable
             patientId: "P-1",
             customize: dataset => dataset.AddOrUpdate(DicomTag.BurnedInAnnotation, "YES"));
 
-        var result = await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
+        var importer = this.Importer();
+        var result = await importer.ImportAsync(this.source.FullName, CancellationToken.None);
 
         Assert.Empty(result.Study.Series);
         Assert.Equal(AcquisitionTier.Unusable, result.Study.BestAvailableTier);
 
-        // Каталог существует и пуст: ссылка на рабочую копию должна разрешаться,
-        // а пустая рабочая копия — верное описание такого исследования.
+        // Каталог существует, но данных в нём нет: ссылка на рабочую копию
+        // должна разрешаться, а пустая рабочая копия — верное описание такого
+        // исследования. Ключ и отметка времени в нём есть — по ним работает уборка.
         Assert.True(Directory.Exists(result.VolumeReference));
-        Assert.Empty(Directory.EnumerateFileSystemEntries(result.VolumeReference));
+        Assert.Empty(await ReadAllAsync(importer, result));
     }
 
     [Fact]
@@ -255,10 +293,18 @@ public sealed class StudyImporterTests : IDisposable
         var first = await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
         var again = await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
 
-        Assert.Equal(first.VolumeReference, again.VolumeReference);
+        // Псевдонимы детерминированы при одной соли, а каталог рабочей копии —
+        // нет: сеанс у каждого импорта свой, иначе два потребителя делили бы
+        // один срок жизни.
+        Assert.Equal(
+            first.Study.PseudonymousStudyId,
+            again.Study.PseudonymousStudyId);
+
         Assert.Equal(
             first.Study.Series[0].PseudonymousSeriesId,
             again.Study.Series[0].PseudonymousSeriesId);
+
+        Assert.NotEqual(first.VolumeReference, again.VolumeReference);
     }
 
     private static void Delete(DirectoryInfo directory)
@@ -272,5 +318,35 @@ public sealed class StudyImporterTests : IDisposable
     private StudyImporter Importer() =>
         new(
             new DicomImportOptions { PseudonymSalt = Salt },
-            new WorkingCopyOptions { RootDirectory = this.workingCopy.FullName });
+            new WorkingCopyOptions
+            {
+                RootDirectory = this.workingCopy.FullName,
+
+                // ACL выключен: временный каталог теста живёт в общем
+                // расположении, ограничивать его учётной записью незачем.
+                RestrictAccessToCurrentUser = false,
+            });
+
+    /// <summary>Читает все файлы рабочей копии через её сеанс.</summary>
+    private static async Task<IReadOnlyList<DicomFile>> ReadAllAsync(
+        StudyImporter importer,
+        WorkingCopy workingCopy)
+    {
+        var session = importer.SessionFor(workingCopy.VolumeReference);
+        var files = new List<DicomFile>();
+
+        foreach (var series in workingCopy.Study.Series)
+        {
+            foreach (var path in session.Enumerate(series.PseudonymousSeriesId))
+            {
+                var content = await session.ReadAsync(path, CancellationToken.None);
+
+                using var stream = new MemoryStream(content);
+
+                files.Add(await DicomFile.OpenAsync(stream));
+            }
+        }
+
+        return files;
+    }
 }

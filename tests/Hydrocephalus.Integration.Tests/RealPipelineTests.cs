@@ -147,26 +147,41 @@ public sealed class RealPipelineTests : IDisposable
     }
 
     [Fact]
-    public async Task Working_copy_of_the_analysed_study_is_deidentified_on_disk()
+    public async Task The_working_copy_is_gone_when_the_scenario_ends()
     {
-        // Сценарий работает по рабочей копии, а не по источнику: проверяется,
-        // что то, на что ссылается отчёт, действительно очищено.
+        // ADR 0006: очистка выполняется в finally — на успехе, ошибке и отмене.
+        // Отсутствие очистки считается дефектом, а не шумом.
         this.WriteUsableSeries();
+
+        var report = await this.ExecuteAsync();
+
+        Assert.NotNull(report);
+
+        var remaining = Directory
+            .EnumerateFiles(this.workingCopy.FullName, "*", SearchOption.AllDirectories)
+            .ToArray();
+
+        Assert.Empty(remaining);
+    }
+
+    [Fact]
+    public async Task Nothing_readable_as_dicom_is_left_behind()
+    {
+        this.WriteSeries(sliceThickness: 12.0m, acquisitionType: "2D", slices: 12);
 
         await this.ExecuteAsync();
 
-        var written = Directory
-            .EnumerateFiles(this.workingCopy.FullName, "*.dcm", SearchOption.AllDirectories)
-            .ToArray();
-
-        Assert.NotEmpty(written);
-
-        foreach (var path in written)
+        foreach (var path in Directory.EnumerateFiles(
+            this.workingCopy.FullName,
+            "*",
+            SearchOption.AllDirectories))
         {
-            var file = await DicomFile.OpenAsync(path);
+            var bytes = await File.ReadAllBytesAsync(path, CancellationToken.None);
 
-            Assert.False(file.Dataset.Contains(DicomTag.PatientName));
-            Assert.False(file.Dataset.Contains(DicomTag.PatientID));
+            Assert.DoesNotContain(
+                "DICM",
+                System.Text.Encoding.ASCII.GetString(bytes),
+                StringComparison.Ordinal);
         }
     }
 
@@ -183,10 +198,20 @@ public sealed class RealPipelineTests : IDisposable
 
     private Task<AnalysisReport> ExecuteAsync(IReportStore? store = null)
     {
+        var importer = new StudyImporter(
+            new DicomImportOptions { PseudonymSalt = Salt },
+            new WorkingCopyOptions
+            {
+                RootDirectory = this.workingCopy.FullName,
+
+                // ACL выключен: временный каталог теста живёт в общем
+                // расположении, ограничивать его учётной записью незачем.
+                RestrictAccessToCurrentUser = false,
+            });
+
         var useCase = new AnalyzeStudyUseCase(
-            new StudyImporter(
-                new DicomImportOptions { PseudonymSalt = Salt },
-                new WorkingCopyOptions { RootDirectory = this.workingCopy.FullName }),
+            importer,
+            importer,
             new QualityControlOnlyEngine(new InputQualityControl(), Synthetic.Pipeline()),
             store ?? this.reports,
             this.audit,

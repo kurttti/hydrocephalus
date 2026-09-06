@@ -86,7 +86,13 @@ public sealed class CompositionRoot : IDisposable
             new DicomImportOptions { PseudonymSalt = salt },
             new WorkingCopyOptions { RootDirectory = paths.WorkingCopyRoot });
 
+        // Уборка до начала любой новой работы: осиротевшие рабочие копии
+        // от прерванных сеансов сами не исчезнут — сеанс, который должен был
+        // их удалить, уже не выполняется (ADR 0006).
+        WorkingCopyRetention.Sweep(paths.WorkingCopyRoot, TimeProvider.System.GetUtcNow());
+
         var useCase = new Hydrocephalus.Application.AnalyzeStudyUseCase(
+            importer,
             importer,
             new QualityControlOnlyEngine(new InputQualityControl(), pipeline),
             new JsonReportStore(paths.ReportRoot),
@@ -131,7 +137,8 @@ public sealed class CompositionRoot : IDisposable
 
         var volume = await DicomVolumeReader
             .LoadAsync(
-                System.IO.Path.Combine(workingCopy.VolumeReference, series.PseudonymousSeriesId),
+                this.importer.SessionFor(workingCopy.VolumeReference),
+                series.PseudonymousSeriesId,
                 cancellationToken)
             .ConfigureAwait(false);
 
