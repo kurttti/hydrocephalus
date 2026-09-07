@@ -52,12 +52,13 @@ var scanner = new DicomStudyScanner(options);
 
 var studiesBySource = new Dictionary<string, IReadOnlyList<ImagingStudy>>(StringComparer.Ordinal);
 var rejections = new Dictionary<ImportRejectionCode, int>();
-var findings = new Dictionary<string, int>(StringComparer.Ordinal);
-
-// Замечаний может быть несколько на одну серию, поэтому доля затронутых серий
-// считается по различным идентификаторам, а не по числу замечаний. Прежний
-// снимок выборки складывал замечания и называл сумму числом серий.
+// Замечания считаются по различным сериям, а не по вхождениям: серия, лежащая
+// в двух папках, даёт два одинаковых замечания, и сумма их называла бы одну
+// серию двумя. Прежний снимок выборки складывал замечания и называл сумму
+// числом серий — здесь и числитель, и знаменатель по идентификаторам серий.
+var findings = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 var seriesWithGeometryFinding = new HashSet<string>(StringComparer.Ordinal);
+
 
 // Ключ различает не только вид замечания, но и найденное объяснение: без этого
 // «совпадающие положения» остались бы одним числом без разбора причин.
@@ -97,7 +98,13 @@ foreach (var path in args)
     {
         var key = Describe(finding.Issue);
 
-        findings[key] = findings.GetValueOrDefault(key) + 1;
+        if (!findings.TryGetValue(key, out var affected))
+        {
+            affected = new HashSet<string>(StringComparer.Ordinal);
+            findings[key] = affected;
+        }
+
+        affected.Add(finding.PseudonymousSeriesId);
 
         if (finding.Issue.Code == QualityIssueCode.InconsistentGeometry)
         {
@@ -107,7 +114,39 @@ foreach (var path in args)
 }
 
 var allStudies = studiesBySource.Values.SelectMany(studies => studies).ToArray();
-var allSeries = allStudies.SelectMany(study => study.Series).ToArray();
+
+// Пациенты дедуплицировались, а исследования и серии — нет: сумма по источникам
+// считала одну и ту же серию столько раз, во скольких папках она лежит. Числитель
+// «серий с замечанием» при этом брался по различным идентификаторам, то есть
+// доля считалась по разным основаниям. Здесь дедуплицируется всё.
+var seriesById = new Dictionary<string, ImagingSeries>(StringComparer.Ordinal);
+var sourcesBySeries = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+var studyIds = new HashSet<string>(StringComparer.Ordinal);
+var seriesOccurrences = 0;
+
+foreach (var (label, studies) in studiesBySource)
+{
+    foreach (var study in studies)
+    {
+        studyIds.Add(study.PseudonymousStudyId);
+
+        foreach (var series in study.Series)
+        {
+            seriesOccurrences++;
+            seriesById.TryAdd(series.PseudonymousSeriesId, series);
+
+            if (!sourcesBySeries.TryGetValue(series.PseudonymousSeriesId, out var sources))
+            {
+                sources = new HashSet<string>(StringComparer.Ordinal);
+                sourcesBySeries[series.PseudonymousSeriesId] = sources;
+            }
+
+            sources.Add(label);
+        }
+    }
+}
+
+var allSeries = seriesById.Values.ToArray();
 
 Console.WriteLine();
 Console.WriteLine("=== По источникам ===");
@@ -149,9 +188,10 @@ Console.WriteLine($"пациентов более чем в одном исто�
 Console.WriteLine();
 Console.WriteLine("=== Итого ===");
 
-Console.WriteLine($"уникальных пациентов: {sourcesBySubject.Count}");
-Console.WriteLine($"исследований: {allStudies.Length}");
-Console.WriteLine($"серий: {allSeries.Length}");
+Console.WriteLine($"уникальных пациентов: {sourcesBySubject.Count} (сумма по источникам {studiesBySource.Values.Sum(studies => studies.Select(study => study.PseudonymousSubjectId).Distinct(StringComparer.Ordinal).Count())})");
+Console.WriteLine($"уникальных исследований: {studyIds.Count} (сумма по источникам {allStudies.Length})");
+Console.WriteLine($"уникальных серий: {allSeries.Length} (сумма по источникам {seriesOccurrences})");
+Console.WriteLine($"серий более чем в одном источнике: {sourcesBySeries.Count(entry => entry.Value.Count > 1)}");
 
 Console.WriteLine();
 Console.WriteLine("=== Уровень входа (по сериям) ===");
@@ -202,14 +242,16 @@ foreach (var (code, count) in rejections.OrderByDescending(entry => entry.Value)
 Console.WriteLine();
 Console.WriteLine("=== Замечания к сериям ===");
 
-foreach (var (code, count) in findings.OrderByDescending(entry => entry.Value))
+foreach (var (code, affected) in findings.OrderByDescending(entry => entry.Value.Count))
 {
-    Console.WriteLine($"{code,-56} {count}");
+    Console.WriteLine($"{code,-56} {affected.Count}");
 }
 
 Console.WriteLine();
+// Числитель и знаменатель здесь оба по различным идентификаторам серий.
 Console.WriteLine(
     $"серий с блокирующим замечанием геометрии: {seriesWithGeometryFinding.Count} из {allSeries.Length}");
+
 
 Console.WriteLine();
 Console.WriteLine(string.Create(
