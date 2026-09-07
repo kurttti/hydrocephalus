@@ -27,6 +27,13 @@ public enum ImportRejectionCode
 
     /// <summary>В файле отсутствует SeriesInstanceUID, группировка невозможна.</summary>
     MissingSeriesIdentifier = 6,
+
+    /// <summary>
+    /// Файл повторяет уже принятый экземпляр: тот же SOPInstanceUID.
+    /// В реальных выгрузках одна и та же серия нередко лежит в двух местах,
+    /// и без этой проверки повтор читался бы как второй набор срезов.
+    /// </summary>
+    DuplicateInstance = 7,
 }
 
 /// <summary>

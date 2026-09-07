@@ -218,7 +218,7 @@ public static class DicomVolumeReader
         var geometry = DicomGeometryReader.Read(reference.Dataset, ordered.Length, sliceSpacingMillimetres: 0);
 
         var positioning = SlicePositions.Analyse(
-            [.. ordered.Select(slice => slice.Position)],
+            [.. ordered.Select(slice => DicomGeometryReader.ReadSample(slice.Dataset))],
             geometry.RowDirection,
             geometry.ColumnDirection,
             geometry.SliceThicknessMillimetres);

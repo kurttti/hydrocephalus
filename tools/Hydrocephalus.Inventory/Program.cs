@@ -1,5 +1,6 @@
 using System.Globalization;
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Infrastructure.Configuration;
 using Hydrocephalus.Infrastructure.Dicom;
 
@@ -53,6 +54,30 @@ var studiesBySource = new Dictionary<string, IReadOnlyList<ImagingStudy>>(String
 var rejections = new Dictionary<ImportRejectionCode, int>();
 var findings = new Dictionary<string, int>(StringComparer.Ordinal);
 
+// Замечаний может быть несколько на одну серию, поэтому доля затронутых серий
+// считается по различным идентификаторам, а не по числу замечаний. Прежний
+// снимок выборки складывал замечания и называл сумму числом серий.
+var seriesWithGeometryFinding = new HashSet<string>(StringComparer.Ordinal);
+
+// Ключ различает не только вид замечания, но и найденное объяснение: без этого
+// «совпадающие положения» остались бы одним числом без разбора причин.
+static string Describe(QualityIssue issue)
+{
+    var key = issue.Code.ToString();
+
+    if (issue.Parameters.TryGetValue("reason", out var reason))
+    {
+        key += "/" + reason;
+    }
+
+    if (issue.Parameters.TryGetValue("stackSplit", out var split))
+    {
+        key += "/" + split;
+    }
+
+    return key;
+}
+
 foreach (var path in args)
 {
     var label = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar));
@@ -70,10 +95,14 @@ foreach (var path in args)
 
     foreach (var finding in result.Findings)
     {
-        var key = finding.Issue.Code.ToString()
-            + (finding.Issue.Parameters.TryGetValue("reason", out var reason) ? "/" + reason : string.Empty);
+        var key = Describe(finding.Issue);
 
         findings[key] = findings.GetValueOrDefault(key) + 1;
+
+        if (finding.Issue.Code == QualityIssueCode.InconsistentGeometry)
+        {
+            seriesWithGeometryFinding.Add(finding.PseudonymousSeriesId);
+        }
     }
 }
 
@@ -175,8 +204,12 @@ Console.WriteLine("=== Замечания к сериям ===");
 
 foreach (var (code, count) in findings.OrderByDescending(entry => entry.Value))
 {
-    Console.WriteLine($"{code,-44} {count}");
+    Console.WriteLine($"{code,-56} {count}");
 }
+
+Console.WriteLine();
+Console.WriteLine(
+    $"серий с блокирующим замечанием геометрии: {seriesWithGeometryFinding.Count} из {allSeries.Length}");
 
 Console.WriteLine();
 Console.WriteLine(string.Create(

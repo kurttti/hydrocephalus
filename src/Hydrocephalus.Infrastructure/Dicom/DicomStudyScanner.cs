@@ -38,6 +38,11 @@ public sealed class DicomStudyScanner
         var findings = new List<SeriesFinding>();
         var seriesBuilders = new Dictionary<string, SeriesBuilder>(StringComparer.Ordinal);
 
+        // SOPInstanceUID уникален глобально, поэтому множество одно на весь обход.
+        // Одна и та же серия, лежащая в выгрузке дважды, иначе дала бы каждому
+        // срезу пару с нулевым расстоянием и прочиталась бы как два набора срезов.
+        var acceptedInstances = new HashSet<string>(StringComparer.Ordinal);
+
         var walk = new QuarantineWalk(this.options, rootDirectory);
 
         foreach (var file in walk.EnumerateFiles(rejections))
@@ -74,6 +79,16 @@ public sealed class DicomStudyScanner
             {
                 rejections.Add(new ImportRejection(
                     ImportRejectionCode.MissingSeriesIdentifier,
+                    walk.OpaqueReference(file.FullName)));
+                continue;
+            }
+
+            var sopInstanceUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
+
+            if (!string.IsNullOrWhiteSpace(sopInstanceUid) && !acceptedInstances.Add(sopInstanceUid))
+            {
+                rejections.Add(new ImportRejection(
+                    ImportRejectionCode.DuplicateInstance,
                     walk.OpaqueReference(file.FullName)));
                 continue;
             }
@@ -134,8 +149,10 @@ public sealed class DicomStudyScanner
         private readonly DicomDataset first;
 
         // Положения нужны, чтобы вычислить шаг между срезами: SliceThickness
-        // отвечает на другой вопрос и при зазоре расходится с ним.
-        private readonly List<SpatialVector> positions = [];
+        // отвечает на другой вопрос и при зазоре расходится с ним. Вместе с ними
+        // собираются оси, по которым серия может распадаться на несколько наборов
+        // срезов, — без них «совпадающие положения» нечем объяснить.
+        private readonly List<SliceSample> samples = [];
 
         internal SeriesBuilder(DicomDataset first, DicomImportOptions options)
         {
@@ -160,7 +177,7 @@ public sealed class DicomStudyScanner
         internal string PseudonymousSubjectId { get; }
 
         internal void AddInstance(DicomDataset dataset) =>
-            this.positions.Add(DicomGeometryReader.ReadPosition(dataset));
+            this.samples.Add(DicomGeometryReader.ReadSample(dataset));
 
         internal ImagingSeries Build(List<SeriesFinding> findings)
         {
@@ -193,11 +210,11 @@ public sealed class DicomStudyScanner
             // из тегов одного среза не выводится и подставляется следом.
             var geometry = DicomGeometryReader.Read(
                 this.first,
-                this.positions.Count,
+                this.samples.Count,
                 sliceSpacingMillimetres: 0);
 
             var positioning = SlicePositions.Analyse(
-                this.positions,
+                this.samples,
                 geometry.RowDirection,
                 geometry.ColumnDirection,
                 geometry.SliceThicknessMillimetres);

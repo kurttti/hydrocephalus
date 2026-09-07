@@ -24,6 +24,50 @@ internal static class DicomGeometryReader
             position.ElementAtOrDefault(2));
     }
 
+    /// <summary>
+    /// Читает экземпляр серии в том виде, в каком он важен для разбора
+    /// взаимного расположения срезов.
+    ///
+    /// Ключи осей строятся как строки и никуда не выводятся: по ним считается
+    /// только число различных значений. Само значение эха или направляющих
+    /// косинусов в журнал не попадает.
+    /// </summary>
+    /// <param name="dataset">Набор тегов экземпляра.</param>
+    /// <returns>Экземпляр серии.</returns>
+    internal static SliceSample ReadSample(DicomDataset dataset)
+    {
+        var position = ReadDecimals(dataset, DicomTag.ImagePositionPatient);
+        var orientation = ReadDecimals(dataset, DicomTag.ImageOrientationPatient);
+
+        return new SliceSample(
+            Position: new SpatialVector(
+                position.ElementAtOrDefault(0),
+                position.ElementAtOrDefault(1),
+                position.ElementAtOrDefault(2)),
+
+            // Отсутствующий тег читается как нулевое положение, и без этого
+            // признака серия из таких экземпляров выглядела бы как набор
+            // совпадающих срезов в точке начала координат.
+            HasPosition: position.Length >= 3,
+
+            OrientationKey: Key(orientation),
+
+            // Номер эха предпочтительнее времени эха: он целый и не страдает
+            // от записи одного и того же значения разными строками.
+            EchoKey: First(
+                dataset.GetSingleValueOrDefault(DicomTag.EchoNumbers, string.Empty),
+                dataset.GetSingleValueOrDefault(DicomTag.EchoTime, string.Empty)),
+
+            AcquisitionKey:
+                dataset.GetSingleValueOrDefault(DicomTag.AcquisitionNumber, string.Empty)
+                + "/"
+                + dataset.GetSingleValueOrDefault(DicomTag.TemporalPositionIdentifier, string.Empty),
+
+            IsMultiFrame: dataset.GetSingleValueOrDefault(DicomTag.NumberOfFrames, string.Empty) is { } frames
+                && int.TryParse(frames, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count)
+                && count > 1);
+    }
+
     /// <summary>Читает геометрию из набора тегов.</summary>
     /// <param name="dataset">Набор тегов первого среза серии.</param>
     /// <param name="sliceCount">Число фактически найденных срезов серии.</param>
@@ -78,6 +122,17 @@ internal static class DicomGeometryReader
             _ => MrAcquisitionType.Unknown,
         };
     }
+
+    private static string First(string preferred, string fallback) =>
+        string.IsNullOrWhiteSpace(preferred) ? fallback?.Trim() ?? string.Empty : preferred.Trim();
+
+    // Округление до четвёртого знака: направляющие косинусы одной серии
+    // записываются одинаково, а различие в последнем знаке округления
+    // не должно читаться как другая плоскость.
+    private static string Key(double[] values) =>
+        string.Join(
+            '/',
+            values.Select(value => Math.Round(value, 4).ToString("0.####", CultureInfo.InvariantCulture)));
 
     private static double ReadDouble(DicomDataset dataset, DicomTag tag) =>
         dataset.TryGetSingleValue<decimal>(tag, out var value)

@@ -18,6 +18,7 @@ public sealed class SliceGeometryTests : IDisposable
     private const string Salt = "test-salt-not-a-secret";
     private const string StudyUid = "1.2.3.1";
     private const string SeriesUid = "1.2.3.11";
+    private const string RepeatedInstanceUid = "1.2.3.111";
 
     private readonly DirectoryInfo root = SyntheticDicom.CreateTempDirectory();
 
@@ -204,6 +205,204 @@ public sealed class SliceGeometryTests : IDisposable
 
         Assert.Equal(AcquisitionTier.Extended, series.Tier);
     }
+
+    [Fact]
+    public async Task A_file_repeated_in_the_export_is_not_a_second_slice()
+    {
+        // Одна и та же серия, лежащая в выгрузке дважды, — обычное дело.
+        // Без сверки SOPInstanceUID повтор дал бы срезу пару с нулевым
+        // расстоянием, и серия прочиталась бы как два набора срезов.
+        this.WriteStack(positions: [0m, 1m, 2m, 3m], sliceThickness: 1.0m);
+
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "copy", "IM0.dcm"),
+            StudyUid,
+            SeriesUid,
+            patientId: "P-1",
+            sliceThickness: 1.0m,
+            slicePosition: 4m,
+            sopInstanceUid: RepeatedInstanceUid);
+
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "IM4.dcm"),
+            StudyUid,
+            SeriesUid,
+            patientId: "P-1",
+            sliceThickness: 1.0m,
+            slicePosition: 4m,
+            sopInstanceUid: RepeatedInstanceUid);
+
+        var result = await this.ScanAsync();
+
+        Assert.Equal(
+            1,
+            result.Rejections.Count(rejection => rejection.Code == ImportRejectionCode.DuplicateInstance));
+
+        // Срезов пять, а не шесть: повтор не стал шестым срезом и не превратил
+        // ровную серию в две наложенные.
+        Assert.Equal(5, Assert.Single(Assert.Single(result.Studies).Series).Geometry.Dimensions.Slices);
+
+        Assert.DoesNotContain(
+            result.Findings,
+            finding => finding.Issue.Code == QualityIssueCode.InconsistentGeometry);
+    }
+
+    [Fact]
+    public async Task Instances_without_a_position_are_named_as_such()
+    {
+        // Отсутствующий ImagePositionPatient читается как нулевое положение,
+        // и без отдельной проверки такая серия выглядела бы как набор
+        // совпадающих срезов — то есть диагноз был бы неверным.
+        for (var index = 0; index < 4; index++)
+        {
+            this.Write(index, dataset => dataset.Remove(DicomTag.ImagePositionPatient), sliceThickness: 1.0m);
+        }
+
+        Assert.Equal("missingSlicePositions", await this.GeometryReasonAsync());
+    }
+
+    [Fact]
+    public async Task A_series_of_several_planes_is_named_as_such_and_not_as_duplicate_positions()
+    {
+        // Обзорная серия из нескольких проекций под одним SeriesInstanceUID.
+        // Проекция на одну нормаль сводит срезы разных плоскостей в одну точку,
+        // поэтому «совпадающие положения» здесь были бы артефактом разбора.
+        var planes = new[]
+        {
+            new[] { 1.0m, 0.0m, 0.0m, 0.0m, 1.0m, 0.0m },
+            new[] { 0.0m, 1.0m, 0.0m, 0.0m, 0.0m, -1.0m },
+        };
+
+        for (var index = 0; index < 4; index++)
+        {
+            var plane = planes[index % planes.Length];
+            var offset = 10.0m * index;
+
+            this.Write(
+                index,
+                dataset =>
+                {
+                    dataset.AddOrUpdate(DicomTag.ImageOrientationPatient, plane);
+                    dataset.AddOrUpdate(DicomTag.ImagePositionPatient, offset, offset, offset);
+                },
+                sliceThickness: 1.0m);
+        }
+
+        Assert.Equal("mixedOrientations", await this.GeometryReasonAsync());
+    }
+
+    [Fact]
+    public async Task A_two_echo_stack_is_reported_as_splittable_by_echo()
+    {
+        // Два эха под одним SeriesInstanceUID: положения совпадают попарно,
+        // и серия распадается на два полных набора. Это разделимо однозначно.
+        WriteEchoStack(this, positions: [0m, 1m], echoes: [1, 2]);
+
+        var issue = await this.GeometryIssueAsync();
+
+        Assert.Equal("duplicateSlicePositions", issue.Parameters["reason"]);
+        Assert.Equal("byEcho", issue.Parameters["stackSplit"]);
+        Assert.Equal("2", issue.Parameters["distinctOffsets"]);
+        Assert.Equal("2", issue.Parameters["distinctEchoes"]);
+    }
+
+    [Fact]
+    public async Task Overlapping_slices_without_a_known_axis_stay_unexplained()
+    {
+        // Обратная проверка: без неё «byEcho» могло бы означать лишь то,
+        // что разбор всегда находит объяснение.
+        this.WriteStack(positions: [0m, 1m, 1m, 2m], sliceThickness: 1.0m);
+
+        var issue = await this.GeometryIssueAsync();
+
+        Assert.Equal("duplicateSlicePositions", issue.Parameters["reason"]);
+        Assert.Equal("unexplained", issue.Parameters["stackSplit"]);
+    }
+
+    [Fact]
+    public async Task An_incomplete_echo_stack_is_not_called_splittable()
+    {
+        // Три экземпляра на два положения и два эха: один набор неполон,
+        // и разделение по эху было бы догадкой.
+        WriteEchoStack(this, positions: [0m, 1m], echoes: [1, 2], skipLast: true);
+
+        Assert.Equal("unexplained", (await this.GeometryIssueAsync()).Parameters["stackSplit"]);
+    }
+
+    [Fact]
+    public async Task A_series_with_duplicate_positions_is_not_also_called_irregular()
+    {
+        // Нули в промежутках тянут медианный шаг вниз, поэтому серия
+        // с совпадающими положениями почти всегда выглядит и неравномерной.
+        // Два замечания на одну поломку удваивали бы счёт в инвентаризации.
+        this.WriteStack(positions: [0m, 1m, 1m, 2m], sliceThickness: 1.0m);
+
+        var result = await this.ScanAsync();
+
+        Assert.Single(
+            result.Findings,
+            finding => finding.Issue.Code == QualityIssueCode.InconsistentGeometry);
+    }
+
+    [Fact]
+    public async Task A_multi_frame_instance_is_named_as_such()
+    {
+        // Многокадровый экземпляр — целый набор срезов в одном файле:
+        // модель «файл — срез» на нём неверна целиком.
+        this.Write(
+            0,
+            dataset => dataset.AddOrUpdate(DicomTag.NumberOfFrames, "24"),
+            sliceThickness: 1.0m);
+
+        Assert.Equal("multiFrameInstances", await this.GeometryReasonAsync());
+    }
+
+    private static void WriteEchoStack(
+        SliceGeometryTests test,
+        decimal[] positions,
+        int[] echoes,
+        bool skipLast = false)
+    {
+        var index = 0;
+
+        foreach (var echo in echoes)
+        {
+            foreach (var position in positions)
+            {
+                var isLast = echo == echoes[^1] && position == positions[^1];
+
+                if (skipLast && isLast)
+                {
+                    continue;
+                }
+
+                var current = echo;
+
+                test.Write(
+                    index++,
+                    dataset =>
+                    {
+                        dataset.AddOrUpdate(
+                            DicomTag.EchoNumbers,
+                            current.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        dataset.AddOrUpdate(DicomTag.ImagePositionPatient, 0.0m, 0.0m, position);
+                    },
+                    sliceThickness: 1.0m);
+            }
+        }
+    }
+
+    private async Task<QualityIssue> GeometryIssueAsync()
+    {
+        var result = await this.ScanAsync();
+
+        return Assert.Single(
+            result.Findings,
+            finding => finding.Issue.Code == QualityIssueCode.InconsistentGeometry).Issue;
+    }
+
+    private async Task<string> GeometryReasonAsync() =>
+        (await this.GeometryIssueAsync()).Parameters["reason"];
 
     private void WriteStack(decimal[] positions, decimal sliceThickness)
     {
