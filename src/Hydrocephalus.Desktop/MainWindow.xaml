@@ -21,6 +21,32 @@
         <!-- Панель управления. Клавиатурная навигация обязательна: экран должен
              работать без мыши (docs/windows/README.md). -->
         <Border DockPanel.Dock="Top" Background="#1B1B22" Padding="10,8">
+            <DockPanel>
+
+            <!-- Экспорт справа и отдельной группой: это не продолжение
+                 настройки просмотра, а действие с последствиями вовне. -->
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="ExportDeidentifiedButton"
+                        Content="Экспорт: о_безличенный"
+                        Padding="10,4"
+                        IsEnabled="False"
+                        Click="OnExportDeidentifiedClick" />
+
+                <Button x:Name="ExportClinicalButton"
+                        Content="Экспорт: _клинический"
+                        Margin="8,0,0,0"
+                        Padding="10,4"
+                        IsEnabled="False"
+                        Click="OnExportClinicalClick" />
+
+                <Button x:Name="ExportManifestButton"
+                        Content="Экспорт _манифеста"
+                        Margin="8,0,0,0"
+                        Padding="10,4"
+                        IsEnabled="False"
+                        Click="OnExportManifestClick" />
+            </StackPanel>
+
             <StackPanel Orientation="Horizontal">
                 <Button x:Name="OpenButton"
                         Content="_Открыть исследование…"
@@ -49,6 +75,8 @@
                 <TextBlock x:Name="WindowReadout" Foreground="#9A9AA6"
                            Margin="16,0,0,0" VerticalAlignment="Center" />
             </StackPanel>
+
+            </DockPanel>
         </Border>
 
         <!-- Строка состояния. Отдельно названо, что приложение не является

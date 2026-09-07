@@ -7,6 +7,7 @@ using System.Windows.Media.Imaging;
 using Hydrocephalus.Desktop.Composition;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Access;
+using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Infrastructure.Volumes;
 using Microsoft.Win32;
 
@@ -24,6 +25,10 @@ public partial class MainWindow : Window
 
     private StudyView? study;
 
+    private Actor? actor;
+
+    private bool hasOpenStudy;
+
     /// <summary>Создаёт главное окно.</summary>
     public MainWindow()
     {
@@ -38,9 +43,13 @@ public partial class MainWindow : Window
     /// Вызывается сборкой, а не читается окном: окно не решает, откуда берётся
     /// роль, иначе рядом с настройкой установки завёлся бы второй источник.
     /// </summary>
-    /// <param name="actor">Инициатор операций приложения.</param>
-    internal void ShowActor(Actor actor) =>
-        this.RoleText.Text = RoleReadout.Describe(actor);
+    /// <param name="value">Инициатор операций приложения.</param>
+    internal void ShowActor(Actor value)
+    {
+        this.actor = value;
+        this.RoleText.Text = RoleReadout.Describe(value);
+        this.UpdateExportAvailability();
+    }
 
     private async void OnOpenClick(object sender, ExecutedRoutedEventArgs e)
     {
@@ -78,17 +87,122 @@ public partial class MainWindow : Window
                 () => composition.OpenForViewingAsync(directory, CancellationToken.None))
                 .ConfigureAwait(true);
 
-            this.Show(opened);
+            this.Show(opened.View);
+            this.hasOpenStudy = true;
+            this.UpdateExportAvailability();
         }
         catch (Exception exception)
         {
             // В сообщение попадает только техническая причина: ни имён файлов,
             // ни идентификаторов исследования в тексте ошибки быть не должно.
             this.StatusText.Text = "Открыть не удалось: " + exception.Message;
+
+            // Предыдущее исследование к этому моменту уже освобождено сборкой,
+            // и оставить кнопки экспорта включёнными значило бы предложить
+            // выгрузить отчёт, которого больше нет.
+            this.hasOpenStudy = false;
+            this.UpdateExportAvailability();
         }
         finally
         {
             this.OpenButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnExportDeidentifiedClick(object sender, RoutedEventArgs e) =>
+        await this.ExportAsync(
+            "обезличенный отчёт",
+            composition => composition.ExportReportAsync(
+                ReportExportVariant.Deidentified,
+                CancellationToken.None))
+            .ConfigureAwait(true);
+
+    private async void OnExportClinicalClick(object sender, RoutedEventArgs e) =>
+        await this.ExportAsync(
+            "клинический отчёт",
+            composition => composition.ExportReportAsync(
+                ReportExportVariant.Clinical,
+                CancellationToken.None))
+            .ConfigureAwait(true);
+
+    private async void OnExportManifestClick(object sender, RoutedEventArgs e) =>
+        await this.ExportAsync(
+            "манифест датасета",
+            composition => composition.ExportDatasetManifestAsync(CancellationToken.None))
+            .ConfigureAwait(true);
+
+    private async Task ExportAsync(string what, Func<CompositionRoot, Task<string>> export)
+    {
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            this.StatusText.Text = "Приложение не собрано; экспорт недоступен.";
+            return;
+        }
+
+        try
+        {
+            var directory = await export(composition).ConfigureAwait(true);
+
+            // Показывается каталог, а не файл: имя файла содержит псевдоним
+            // исследования, а строка состояния видна на экране в кабинете.
+            this.StatusText.Text = $"Экспортирован {what}. Каталог: {directory}";
+        }
+        catch (AccessDeniedException)
+        {
+            // Отдельно от прочих ошибок: «вам нельзя» и «с данными что-то
+            // не так» — разные сообщения. Отказ уже записан в аудит сценарием.
+            this.StatusText.Text = $"Роль не даёт права на {what}.";
+        }
+        catch (Exception exception)
+        {
+            this.StatusText.Text = $"Экспорт не удался ({what}): " + exception.Message;
+        }
+    }
+
+    /// <summary>
+    /// Включает те действия экспорта, которые возможны прямо сейчас.
+    ///
+    /// Это удобство, а не защита: права проверяет сценарий и пишет отказ
+    /// в аудит. Экран лишь не предлагает того, что заведомо не состоится, —
+    /// кнопка, которая всегда падает, хуже выключенной кнопки с причиной.
+    /// </summary>
+    private void UpdateExportAvailability()
+    {
+        var current = this.actor;
+
+        Configure(
+            this.ExportDeidentifiedButton,
+            current?.Can(Capability.ExportDeidentifiedReport) == true,
+            registryNeeded: false,
+            this.hasOpenStudy);
+
+        Configure(
+            this.ExportClinicalButton,
+            current?.Can(Capability.ExportClinicalReport) == true,
+            registryNeeded: true,
+            this.hasOpenStudy);
+
+        Configure(
+            this.ExportManifestButton,
+            current?.Can(Capability.ExportDatasetManifest) == true,
+            registryNeeded: false,
+            this.hasOpenStudy);
+
+        static void Configure(Button button, bool granted, bool registryNeeded, bool hasStudy)
+        {
+            var blockedByRegistry = registryNeeded && !CompositionRoot.PatientRegistryConfigured;
+
+            button.IsEnabled = granted && hasStudy && !blockedByRegistry;
+
+            button.ToolTip = !granted
+                ? "Роль, заданная при установке, не даёт этого права."
+                : blockedByRegistry
+                    ? "Внешний реестр идентификаторов пациента не подключён в этой установке."
+                    : hasStudy
+                        ? null
+                        : "Исследование не открыто.";
         }
     }
 

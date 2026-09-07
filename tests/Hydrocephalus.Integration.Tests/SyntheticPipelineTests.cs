@@ -155,6 +155,57 @@ public sealed class SyntheticPipelineTests
         Assert.Contains(AuditEventCode.AnalysisFailed, audit.Codes);
     }
 
+    [Fact]
+    public async Task A_full_run_releases_the_working_copy_it_created()
+    {
+        var importer = new StubImporter(Synthetic.Study());
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            new RecordingReportStore(),
+            new RecordingAuditLog());
+
+        await useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None);
+
+        Assert.Single(importer.Released);
+    }
+
+    [Fact]
+    public async Task Analysing_an_already_imported_copy_leaves_its_lifetime_to_the_caller()
+    {
+        // Экран просмотра держит рабочую копию открытой, пока по ней смотрят
+        // изображение. Если бы анализ освобождал её, картинка осталась бы без
+        // данных ровно в тот момент, когда получен отчёт по ней же.
+        var importer = new StubImporter(Synthetic.Study());
+        var store = new RecordingReportStore();
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            store,
+            new RecordingAuditLog());
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        var report = await useCase.AnalyseWorkingCopyAsync(
+            workingCopy,
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Same(report, Assert.Single(store.Reports));
+        Assert.Empty(importer.Released);
+    }
+
+    private static AnalysisOutcome.Completed Completed() => new()
+    {
+        Prediction = Prediction.Create(
+            QualityAssessment.Clean(),
+            Synthetic.Model(),
+            [new ClassProbability(Synthetic.Inph, 0.72), new ClassProbability(Synthetic.Alzheimer, 0.18)],
+            new Uncertainty { LowerBound = 0.6, UpperBound = 0.83, ConfidenceLevel = 0.95 }),
+    };
+
     private static AnalyzeStudyUseCase UseCase(
         ImagingStudy study,
         IInferenceEngine engine,

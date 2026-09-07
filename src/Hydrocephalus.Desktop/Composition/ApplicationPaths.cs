@@ -32,6 +32,15 @@ public sealed record ApplicationPaths
     public required string PseudonymSaltPath { get; init; }
 
     /// <summary>
+    /// Корень экспортированных отчётов.
+    ///
+    /// Отдельно от канонических отчётов: те остаются внутри приложения,
+    /// а экспорт делается ради передачи наружу. Один каталог на оба
+    /// позволил бы передать не то, что собирались.
+    /// </summary>
+    public required string ReportExportRoot { get; init; }
+
+    /// <summary>
     /// Корень манифестов датасета.
     ///
     /// Отдельно от отчётов: отчёт остаётся у врача, а манифест уходит
@@ -65,6 +74,7 @@ public sealed record ApplicationPaths
         {
             WorkingCopyRoot = IoPath.Combine(root, "working-copies"),
             ReportRoot = IoPath.Combine(root, "reports"),
+            ReportExportRoot = IoPath.Combine(root, "report-exports"),
             AuditLogPath = IoPath.Combine(root, "audit", "audit.log"),
             PseudonymSaltPath = IoPath.Combine(root, "secrets", "pseudonym-salt.bin"),
             DatasetManifestRoot = IoPath.Combine(root, "dataset-manifests"),

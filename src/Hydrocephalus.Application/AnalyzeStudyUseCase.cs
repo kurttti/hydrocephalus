@@ -85,6 +85,34 @@ public sealed class AnalyzeStudyUseCase
         }
     }
 
+    /// <summary>
+    /// Анализирует уже импортированную рабочую копию.
+    ///
+    /// Отличие от <see cref="ExecuteAsync"/> одно, и оно принципиальное:
+    /// рабочую копию сюда передают, а не создают здесь, и освобождает её
+    /// вызывающий. Нужно это тому, кто уже держит рабочую копию открытой —
+    /// экрану просмотра. Иначе анализ импортировал бы то же исследование
+    /// второй раз, и на диске оказалось бы две копии одних и тех же данных
+    /// пациента, а измеряли бы не то, что показано на экране.
+    ///
+    /// Ответственность за освобождение переходит к вызывающему целиком:
+    /// освободить здесь значило бы уничтожить копию, с которой тот работает.
+    /// </summary>
+    /// <param name="workingCopy">Рабочая копия, созданная вызывающим.</param>
+    /// <param name="progress">Приёмник сообщений о прогрессе; может отсутствовать.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Сохранённый отчёт с прогнозом либо отказом.</returns>
+    /// <exception cref="OperationCanceledException">Если операция отменена.</exception>
+    public Task<AnalysisReport> AnalyseWorkingCopyAsync(
+        WorkingCopy workingCopy,
+        IProgress<AnalysisProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(workingCopy);
+
+        return this.AnalyseAsync(workingCopy, progress, cancellationToken);
+    }
+
     private async Task<AnalysisReport> AnalyseAsync(
         WorkingCopy workingCopy,
         IProgress<AnalysisProgress>? progress,
