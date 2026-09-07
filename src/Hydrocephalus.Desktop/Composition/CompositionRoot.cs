@@ -1,5 +1,6 @@
 using System.Reflection;
 using Hydrocephalus.Desktop.Viewing;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Inference;
@@ -34,13 +35,15 @@ public sealed class CompositionRoot : IDisposable
         Hydrocephalus.Application.ExportDatasetManifestUseCase exportDatasetManifest,
         StudyImporter importer,
         HashChainAuditLog auditLog,
-        PipelineIdentity pipeline)
+        PipelineIdentity pipeline,
+        Actor actor)
     {
         this.AnalyzeStudy = analyzeStudy;
         this.ExportDatasetManifest = exportDatasetManifest;
         this.importer = importer;
         this.auditLog = auditLog;
         this.Pipeline = pipeline;
+        this.Actor = actor;
     }
 
     /// <summary>Сценарий анализа исследования.</summary>
@@ -59,6 +62,14 @@ public sealed class CompositionRoot : IDisposable
 
     /// <summary>Версии конвейера, попадающие в отчёт.</summary>
     public PipelineIdentity Pipeline { get; }
+
+    /// <summary>
+    /// Тот, от чьего имени выполняются операции.
+    ///
+    /// Собирается один раз при запуске и дальше не меняется: роль задаётся
+    /// установкой, а не выбирается в интерфейсе (см. <see cref="ActorSettings"/>).
+    /// </summary>
+    public Actor Actor { get; }
 
     /// <summary>
     /// Собирает приложение.
@@ -104,7 +115,12 @@ public sealed class CompositionRoot : IDisposable
             auditLog,
             TimeProvider.System);
 
-        return new CompositionRoot(useCase, exportDatasetManifest, importer, auditLog, pipeline);
+        // Файл настроек лежит рядом с исполняемым файлом, а не в профиле
+        // пользователя: роль задаёт тот, кто разворачивает приложение, и она
+        // не должна меняться от того, под кем оно запущено.
+        var actor = ActorSettings.Read(AppContext.BaseDirectory);
+
+        return new CompositionRoot(useCase, exportDatasetManifest, importer, auditLog, pipeline, actor);
     }
 
     /// <summary>

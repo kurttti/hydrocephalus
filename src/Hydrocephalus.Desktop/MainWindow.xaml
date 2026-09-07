@@ -58,6 +58,11 @@
                 <TextBlock DockPanel.Dock="Right"
                            Foreground="#7A7A88"
                            Text="Вспомогательный инструмент. Не является диагностической станцией." />
+                <TextBlock x:Name="RoleText"
+                           DockPanel.Dock="Right"
+                           Foreground="#9A9AA6"
+                           Margin="0,0,24,0"
+                           Text="Роль: определяется…" />
                 <TextBlock x:Name="StatusText" Foreground="#9A9AA6" Text="Исследование не открыто." />
             </DockPanel>
         </Border>

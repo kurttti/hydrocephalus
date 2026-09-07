@@ -4,7 +4,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Hydrocephalus.Desktop.Composition;
 using Hydrocephalus.Desktop.Viewing;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Infrastructure.Volumes;
 using Microsoft.Win32;
 
@@ -29,6 +31,16 @@ public partial class MainWindow : Window
     }
 
     private static App Current => (App)System.Windows.Application.Current;
+
+    /// <summary>
+    /// Показывает роль, с которой запущено приложение.
+    ///
+    /// Вызывается сборкой, а не читается окном: окно не решает, откуда берётся
+    /// роль, иначе рядом с настройкой установки завёлся бы второй источник.
+    /// </summary>
+    /// <param name="actor">Инициатор операций приложения.</param>
+    internal void ShowActor(Actor actor) =>
+        this.RoleText.Text = RoleReadout.Describe(actor);
 
     private async void OnOpenClick(object sender, ExecutedRoutedEventArgs e)
     {

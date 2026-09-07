@@ -26,6 +26,10 @@ public partial class App : System.Windows.Application
             this.Composition = await CompositionRoot
                 .CreateAsync(ApplicationPaths.UnderLocalApplicationData(), CancellationToken.None)
                 .ConfigureAwait(true);
+
+            // Окно создаётся по StartupUri до того, как сборка завершится,
+            // поэтому роль в него передаётся, а не читается им при загрузке.
+            (this.MainWindow as MainWindow)?.ShowActor(this.Composition.Actor);
         }
         catch (Exception exception)
         {

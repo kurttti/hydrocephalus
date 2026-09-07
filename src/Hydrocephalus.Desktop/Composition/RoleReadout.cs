@@ -1,0 +1,50 @@
+using Hydrocephalus.Domain.Access;
+
+namespace Hydrocephalus.Desktop.Composition;
+
+/// <summary>
+/// Текст о роли для строки состояния.
+///
+/// Роль показывается всегда, а не только когда она есть. Приложение, которое
+/// молчит о правах, выглядит одинаково у врача и у ненастроенной установки,
+/// и разница обнаружится только отказом посреди работы.
+///
+/// Наличие прав не перечисляется здесь по ролям, а спрашивается у
+/// <see cref="Actor.Capabilities"/>, то есть у <see cref="RolePolicy"/>. Вторая
+/// копия политики в тексте интерфейса разошлась бы с первой, и разошлась бы
+/// незаметно: экран говорил бы одно, а сценарий делал другое.
+/// </summary>
+public static class RoleReadout
+{
+    /// <summary>
+    /// Описывает роль и наличие прав.
+    /// </summary>
+    /// <param name="actor">Инициатор операций приложения.</param>
+    /// <returns>Строка для показа пользователю.</returns>
+    public static string Describe(Actor actor)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+
+        var name = NameOf(actor.Role);
+
+        // Настроенный администратор и ненастроенная установка одинаково не имеют
+        // прав, но это разные положения дел: первое — решение, второе — недосмотр.
+        // Название роли различает их, а хвост про отсутствие прав общий, потому
+        // что следствие для пользователя одно.
+        return actor.Capabilities.Count == 0
+            ? name + " — доступных операций нет."
+            : name + ".";
+    }
+
+    private static string NameOf(ClinicalRole role) => role switch
+    {
+        ClinicalRole.Clinician => "Роль: врач",
+        ClinicalRole.Researcher => "Роль: исследователь",
+        ClinicalRole.Administrator => "Роль: администратор",
+        ClinicalRole.Unspecified => "Роль не задана при установке",
+
+        // Роль, добавленная в перечисление и забытая здесь, не должна
+        // притвориться одной из известных.
+        _ => "Роль не распознана",
+    };
+}
