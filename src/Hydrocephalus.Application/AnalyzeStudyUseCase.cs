@@ -1,4 +1,5 @@
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Domain.Reporting;
@@ -57,21 +58,32 @@ public sealed class AnalyzeStudyUseCase
     /// Выполняет сценарий целиком.
     /// </summary>
     /// <param name="sourceReference">Ссылка на источник исследования.</param>
+    /// <param name="requestedBy">Тот, от чьего имени выполняется анализ.</param>
     /// <param name="progress">Приёмник сообщений о прогрессе; может отсутствовать.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Сохранённый отчёт с прогнозом либо отказом.</returns>
     /// <exception cref="OperationCanceledException">Если операция отменена.</exception>
+    /// <exception cref="AccessDeniedException">
+    /// Если у инициатора нет права на анализ.
+    /// </exception>
     public async Task<AnalysisReport> ExecuteAsync(
         string sourceReference,
+        Actor requestedBy,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
+        // Право проверяется до импорта, а не после. Импорт создаёт рабочую
+        // копию — расшифрованные данные пациента на диске, — и создавать её
+        // ради того, чтобы затем отказать, значит выполнить именно ту часть
+        // работы, от которой разграничение и защищает.
+        await this.RequireAsync(requestedBy, cancellationToken).ConfigureAwait(false);
+
         var workingCopy = await this.importer.ImportAsync(sourceReference, cancellationToken)
             .ConfigureAwait(false);
 
         try
         {
-            return await this.AnalyseAsync(workingCopy, progress, cancellationToken)
+            return await this.AnalyseAsync(workingCopy, requestedBy, progress, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -99,28 +111,41 @@ public sealed class AnalyzeStudyUseCase
     /// освободить здесь значило бы уничтожить копию, с которой тот работает.
     /// </summary>
     /// <param name="workingCopy">Рабочая копия, созданная вызывающим.</param>
+    /// <param name="requestedBy">Тот, от чьего имени выполняется анализ.</param>
     /// <param name="progress">Приёмник сообщений о прогрессе; может отсутствовать.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Сохранённый отчёт с прогнозом либо отказом.</returns>
     /// <exception cref="OperationCanceledException">Если операция отменена.</exception>
-    public Task<AnalysisReport> AnalyseWorkingCopyAsync(
+    /// <exception cref="AccessDeniedException">
+    /// Если у инициатора нет права на анализ.
+    /// </exception>
+    public async Task<AnalysisReport> AnalyseWorkingCopyAsync(
         WorkingCopy workingCopy,
+        Actor requestedBy,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(workingCopy);
 
-        return this.AnalyseAsync(workingCopy, progress, cancellationToken);
+        await this.RequireAsync(requestedBy, cancellationToken).ConfigureAwait(false);
+
+        return await this.AnalyseAsync(workingCopy, requestedBy, progress, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<AnalysisReport> AnalyseAsync(
         WorkingCopy workingCopy,
+        Actor requestedBy,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
         var study = workingCopy.Study;
 
-        await this.RecordAsync(AuditEventCode.StudyImported, study.PseudonymousStudyId, cancellationToken)
+        await this.RecordAsync(
+                AuditEventCode.StudyImported,
+                study.PseudonymousStudyId,
+                requestedBy,
+                cancellationToken)
             .ConfigureAwait(false);
 
         var pipeline = await this.engine.DescribePipelineAsync(cancellationToken).ConfigureAwait(false);
@@ -136,6 +161,7 @@ public sealed class AnalyzeStudyUseCase
                     pipeline,
                     QualityAssessment.Clean(),
                     new RefusalReason { Code = RefusalCode.InsufficientAcquisitionTier },
+                    requestedBy,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -150,7 +176,11 @@ public sealed class AnalyzeStudyUseCase
         var quality = await this.engine.RunQualityControlAsync(request, cancellationToken)
             .ConfigureAwait(false);
 
-        await this.RecordAsync(AuditEventCode.QualityControlCompleted, study.PseudonymousStudyId, cancellationToken)
+        await this.RecordAsync(
+                AuditEventCode.QualityControlCompleted,
+                study.PseudonymousStudyId,
+                requestedBy,
+                cancellationToken)
             .ConfigureAwait(false);
 
         if (!quality.IsAcceptable)
@@ -160,11 +190,16 @@ public sealed class AnalyzeStudyUseCase
                     pipeline,
                     quality,
                     RefusalReason.FromFailedQualityControl(quality),
+                    requestedBy,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        await this.RecordAsync(AuditEventCode.AnalysisStarted, study.PseudonymousStudyId, cancellationToken)
+        await this.RecordAsync(
+                AuditEventCode.AnalysisStarted,
+                study.PseudonymousStudyId,
+                requestedBy,
+                cancellationToken)
             .ConfigureAwait(false);
 
         AnalysisOutcome outcome;
@@ -176,13 +211,21 @@ public sealed class AnalyzeStudyUseCase
         catch (OperationCanceledException)
         {
             // Отмена — ожидаемый путь: отчёт не сохраняется, но след в аудите остаётся.
-            await this.RecordAsync(AuditEventCode.AnalysisCancelled, study.PseudonymousStudyId, CancellationToken.None)
+            await this.RecordAsync(
+                    AuditEventCode.AnalysisCancelled,
+                    study.PseudonymousStudyId,
+                    requestedBy,
+                    CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
         }
         catch (Exception)
         {
-            await this.RecordAsync(AuditEventCode.AnalysisFailed, study.PseudonymousStudyId, CancellationToken.None)
+            await this.RecordAsync(
+                    AuditEventCode.AnalysisFailed,
+                    study.PseudonymousStudyId,
+                    requestedBy,
+                    CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
         }
@@ -194,6 +237,7 @@ public sealed class AnalyzeStudyUseCase
         await this.RecordAsync(
                 outcome is AnalysisOutcome.Completed ? AuditEventCode.AnalysisCompleted : AuditEventCode.AnalysisRefused,
                 study.PseudonymousStudyId,
+                requestedBy,
                 cancellationToken,
                 modelVersion)
             .ConfigureAwait(false);
@@ -207,7 +251,8 @@ public sealed class AnalyzeStudyUseCase
             Pipeline = pipeline,
         };
 
-        return await this.StoreAsync(report, modelVersion, cancellationToken).ConfigureAwait(false);
+        return await this.StoreAsync(report, requestedBy, modelVersion, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -224,9 +269,14 @@ public sealed class AnalyzeStudyUseCase
         Domain.Provenance.PipelineIdentity pipeline,
         QualityAssessment quality,
         RefusalReason reason,
+        Actor requestedBy,
         CancellationToken cancellationToken)
     {
-        await this.RecordAsync(AuditEventCode.AnalysisRefused, study.PseudonymousStudyId, cancellationToken)
+        await this.RecordAsync(
+                AuditEventCode.AnalysisRefused,
+                study.PseudonymousStudyId,
+                requestedBy,
+                cancellationToken)
             .ConfigureAwait(false);
 
         var report = new AnalysisReport
@@ -238,11 +288,13 @@ public sealed class AnalyzeStudyUseCase
             Pipeline = pipeline,
         };
 
-        return await this.StoreAsync(report, modelVersion: null, cancellationToken).ConfigureAwait(false);
+        return await this.StoreAsync(report, requestedBy, modelVersion: null, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<AnalysisReport> StoreAsync(
         AnalysisReport report,
+        Actor requestedBy,
         string? modelVersion,
         CancellationToken cancellationToken)
     {
@@ -251,6 +303,7 @@ public sealed class AnalyzeStudyUseCase
         await this.RecordAsync(
                 AuditEventCode.ReportStored,
                 report.PseudonymousStudyId,
+                requestedBy,
                 cancellationToken,
                 modelVersion)
             .ConfigureAwait(false);
@@ -258,9 +311,37 @@ public sealed class AnalyzeStudyUseCase
         return report;
     }
 
+    /// <summary>
+    /// Требует право на анализ и записывает отказ в журнал.
+    ///
+    /// След от неудавшейся попытки нужен именно потому, что она не удалась:
+    /// иначе выход за пределы своих прав не оставляет в системе ничего.
+    /// </summary>
+    private async Task RequireAsync(Actor requestedBy, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestedBy);
+
+        if (requestedBy.Can(Capability.AnalyseStudy))
+        {
+            return;
+        }
+
+        await this.auditLog.RecordAsync(
+            new AuditEvent
+            {
+                Code = AuditEventCode.AccessDenied,
+                OccurredAt = this.timeProvider.GetUtcNow(),
+                PseudonymousActorId = requestedBy.PseudonymousUserId,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        throw AccessDeniedException.For(requestedBy.Role, Capability.AnalyseStudy);
+    }
+
     private Task RecordAsync(
         AuditEventCode code,
         string pseudonymousStudyId,
+        Actor requestedBy,
         CancellationToken cancellationToken,
         string? modelVersion = null) =>
         this.auditLog.RecordAsync(
@@ -269,6 +350,11 @@ public sealed class AnalyzeStudyUseCase
                 Code = code,
                 OccurredAt = this.timeProvider.GetUtcNow(),
                 PseudonymousStudyId = pseudonymousStudyId,
+
+                // Инициатор попадает в каждое событие разбора, а не только
+                // в события экспорта: журнал, по которому нельзя сказать, кто
+                // запускал анализ, не отвечает на первый же вопрос разбора.
+                PseudonymousActorId = requestedBy.PseudonymousUserId,
                 ModelVersion = modelVersion,
             },
             cancellationToken);

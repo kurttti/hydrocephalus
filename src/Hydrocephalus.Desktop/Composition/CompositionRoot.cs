@@ -216,7 +216,7 @@ public sealed class CompositionRoot : IDisposable
         // оказалось бы две копии одних и тех же данных, и экспортируемый отчёт
         // описывал бы не то, что показано на экране.
         this.report = await this.AnalyzeStudy
-            .AnalyseWorkingCopyAsync(workingCopy, progress: null, cancellationToken)
+            .AnalyseWorkingCopyAsync(workingCopy, this.Actor, progress: null, cancellationToken)
             .ConfigureAwait(false);
 
         return new OpenedStudy

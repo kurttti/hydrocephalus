@@ -1,4 +1,5 @@
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Predictions;
 using Hydrocephalus.Domain.Provenance;
@@ -16,6 +17,12 @@ internal static class Synthetic
 {
     public static readonly DiagnosticClass Inph = new("inph");
     public static readonly DiagnosticClass Alzheimer = new("alzheimer");
+
+    /// <summary>Инициатор с правом на анализ.</summary>
+    public static Actor Clinician() => Actor.Create("actor-0001", ClinicalRole.Clinician);
+
+    /// <summary>Инициатор без единого права: ненастроенная установка.</summary>
+    public static Actor Unconfigured() => Actor.Create("actor-0002", ClinicalRole.Unspecified);
 
     public static ImagingStudy Study(
         MrAcquisitionType acquisitionType = MrAcquisitionType.ThreeDimensional,

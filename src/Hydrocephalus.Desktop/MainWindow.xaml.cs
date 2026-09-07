@@ -91,6 +91,17 @@ public partial class MainWindow : Window
             this.hasOpenStudy = true;
             this.UpdateExportAvailability();
         }
+        catch (AccessDeniedException)
+        {
+            // Отдельно от прочих отказов: у сообщения сценария технический
+            // текст на английском, а врачу нужно понять, что дело не в данных
+            // и не в файлах, а в том, как настроена установка.
+            this.StatusText.Text =
+                "Роль, заданная при установке, не даёт права на анализ исследования.";
+
+            this.hasOpenStudy = false;
+            this.UpdateExportAvailability();
+        }
         catch (Exception exception)
         {
             // В сообщение попадает только техническая причина: ни имён файлов,

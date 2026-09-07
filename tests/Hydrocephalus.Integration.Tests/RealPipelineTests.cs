@@ -217,7 +217,7 @@ public sealed class RealPipelineTests : IDisposable
             this.audit,
             TimeProvider.System);
 
-        return useCase.ExecuteAsync(this.source.FullName, progress: null, CancellationToken.None);
+        return useCase.ExecuteAsync(this.source.FullName, Synthetic.Clinician(), progress: null, CancellationToken.None);
     }
 
     private void WriteUsableSeries() => this.WriteSeries();

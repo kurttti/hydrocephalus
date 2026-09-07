@@ -1,5 +1,6 @@
 using Hydrocephalus.Application;
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Predictions;
 using Hydrocephalus.Domain.Quality;
@@ -36,7 +37,7 @@ public sealed class SyntheticPipelineTests
         var stages = new List<AnalysisStage>();
         var progress = new Progress<AnalysisProgress>(update => stages.Add(update.Stage));
 
-        var report = await useCase.ExecuteAsync("source/study-0001", progress, CancellationToken.None);
+        var report = await useCase.ExecuteAsync("source/study-0001", Synthetic.Clinician(), progress, CancellationToken.None);
 
         var completed = Assert.IsType<AnalysisOutcome.Completed>(report.Outcome);
         Assert.Equal(Synthetic.Inph, completed.Prediction.MostLikely.Class);
@@ -83,7 +84,7 @@ public sealed class SyntheticPipelineTests
         // Исход анализа не задан: если сценарий дойдёт до классификатора, тест упадёт.
         var useCase = UseCase(Synthetic.Study(), new StubInferenceEngine(blocked), store, audit);
 
-        var report = await useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None);
+        var report = await useCase.ExecuteAsync("source/study-0001", Synthetic.Clinician(), progress: null, CancellationToken.None);
 
         var refused = Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
         Assert.Equal(RefusalCode.QualityControlFailed, refused.Reason.Code);
@@ -106,7 +107,7 @@ public sealed class SyntheticPipelineTests
 
         var useCase = UseCase(study, new StubInferenceEngine(QualityAssessment.Clean()), store, audit);
 
-        var report = await useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None);
+        var report = await useCase.ExecuteAsync("source/study-0001", Synthetic.Clinician(), progress: null, CancellationToken.None);
 
         var refused = Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
         Assert.Equal(RefusalCode.InsufficientAcquisitionTier, refused.Reason.Code);
@@ -128,7 +129,7 @@ public sealed class SyntheticPipelineTests
             audit);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => useCase.ExecuteAsync("source/study-0001", progress: null, cancellation.Token));
+            () => useCase.ExecuteAsync("source/study-0001", Synthetic.Clinician(), progress: null, cancellation.Token));
 
         // Наблюдаемое состояние важнее самого исключения.
         Assert.Empty(store.Reports);
@@ -149,7 +150,7 @@ public sealed class SyntheticPipelineTests
             audit);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None));
+            () => useCase.ExecuteAsync("source/study-0001", Synthetic.Clinician(), progress: null, CancellationToken.None));
 
         Assert.Empty(store.Reports);
         Assert.Contains(AuditEventCode.AnalysisFailed, audit.Codes);
@@ -166,7 +167,7 @@ public sealed class SyntheticPipelineTests
             new RecordingReportStore(),
             new RecordingAuditLog());
 
-        await useCase.ExecuteAsync("source/study-0001", progress: null, CancellationToken.None);
+        await useCase.ExecuteAsync("source/study-0001", Synthetic.Clinician(), progress: null, CancellationToken.None);
 
         Assert.Single(importer.Released);
     }
@@ -190,11 +191,87 @@ public sealed class SyntheticPipelineTests
 
         var report = await useCase.AnalyseWorkingCopyAsync(
             workingCopy,
+            Synthetic.Clinician(),
             progress: null,
             CancellationToken.None);
 
         Assert.Same(report, Assert.Single(store.Reports));
         Assert.Empty(importer.Released);
+    }
+
+    [Fact]
+    public async Task An_unconfigured_installation_cannot_analyse_and_nothing_is_imported()
+    {
+        // Право проверяется до импорта: импорт создаёт рабочую копию —
+        // расшифрованные данные пациента на диске. Событие StudyImported
+        // в журнале означало бы, что копия всё-таки была создана ради того,
+        // чтобы затем отказать.
+        var audit = new RecordingAuditLog();
+        var store = new RecordingReportStore();
+
+        var useCase = Build(
+            new StubImporter(Synthetic.Study()),
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            store,
+            audit);
+
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => useCase.ExecuteAsync(
+                "source/study-0001",
+                Synthetic.Unconfigured(),
+                progress: null,
+                CancellationToken.None));
+
+        Assert.Equal([AuditEventCode.AccessDenied], audit.Codes);
+        Assert.Empty(store.Reports);
+    }
+
+    [Fact]
+    public async Task An_unconfigured_installation_cannot_analyse_an_already_imported_copy_either()
+    {
+        // Второй вход в сценарий обязан проверять то же самое: право,
+        // выполняемое только на одном из путей, не является правом.
+        var importer = new StubImporter(Synthetic.Study());
+        var audit = new RecordingAuditLog();
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            new RecordingReportStore(),
+            audit);
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => useCase.AnalyseWorkingCopyAsync(
+                workingCopy,
+                Synthetic.Unconfigured(),
+                progress: null,
+                CancellationToken.None));
+
+        Assert.Equal([AuditEventCode.AccessDenied], audit.Codes);
+    }
+
+    [Fact]
+    public async Task Every_event_of_a_run_names_who_started_it()
+    {
+        // Журнал, по которому нельзя сказать, кто запускал анализ,
+        // не отвечает на первый же вопрос разбора.
+        var audit = new RecordingAuditLog();
+
+        var useCase = Build(
+            new StubImporter(Synthetic.Study()),
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            new RecordingReportStore(),
+            audit);
+
+        var actor = Synthetic.Clinician();
+
+        await useCase.ExecuteAsync("source/study-0001", actor, progress: null, CancellationToken.None);
+
+        Assert.All(
+            audit.Events,
+            recorded => Assert.Equal(actor.PseudonymousUserId, recorded.PseudonymousActorId));
     }
 
     private static AnalysisOutcome.Completed Completed() => new()
