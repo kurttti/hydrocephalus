@@ -202,11 +202,11 @@ public sealed class AnalyzeStudyUseCase
                 cancellationToken)
             .ConfigureAwait(false);
 
-        AnalysisOutcome outcome;
+        AnalysisResult result;
 
         try
         {
-            outcome = await this.engine.AnalyzeAsync(request, progress, cancellationToken).ConfigureAwait(false);
+            result = await this.engine.AnalyzeAsync(request, progress, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -230,6 +230,8 @@ public sealed class AnalyzeStudyUseCase
             throw;
         }
 
+        var outcome = result.Outcome;
+
         var modelVersion = outcome is AnalysisOutcome.Completed completed
             ? completed.Prediction.Model.Version
             : null;
@@ -249,6 +251,11 @@ public sealed class AnalyzeStudyUseCase
             Quality = quality,
             Outcome = outcome,
             Pipeline = pipeline,
+
+            // Измерения попадают в отчёт и при отказе классификации: отказ
+            // относится к прогнозу диагноза, а объём желудочков измерен
+            // независимо от него (ADR 0005).
+            Biomarkers = result.Biomarkers,
         };
 
         return await this.StoreAsync(report, requestedBy, modelVersion, cancellationToken)

@@ -7,6 +7,7 @@ using Hydrocephalus.Inference;
 using Hydrocephalus.Inference.QualityControl;
 using Hydrocephalus.Infrastructure.Dicom;
 using Hydrocephalus.Infrastructure.Reporting;
+using Hydrocephalus.Infrastructure.Volumes;
 
 namespace Hydrocephalus.Integration.Tests;
 
@@ -212,7 +213,10 @@ public sealed class RealPipelineTests : IDisposable
         var useCase = new AnalyzeStudyUseCase(
             importer,
             importer,
-            new QualityControlOnlyEngine(new InputQualityControl(), Synthetic.Pipeline()),
+            new BaselineMeasurementEngine(
+                new InputQualityControl(),
+                new WorkingCopyVolumeSource(importer),
+                Synthetic.Pipeline()),
             store ?? this.reports,
             this.audit,
             TimeProvider.System);

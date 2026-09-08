@@ -2,9 +2,11 @@ using Hydrocephalus.Application;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Predictions;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Domain.Reporting;
+using Hydrocephalus.Domain.Segmentation;
 
 namespace Hydrocephalus.Integration.Tests;
 
@@ -272,6 +274,51 @@ public sealed class SyntheticPipelineTests
         Assert.All(
             audit.Events,
             recorded => Assert.Equal(actor.PseudonymousUserId, recorded.PseudonymousActorId));
+    }
+
+    [Fact]
+    public async Task Measurements_reach_the_report_even_when_classification_refuses()
+    {
+        // Отказ относится к прогнозу диагноза, а не к измерениям. Если бы отчёт
+        // терял признаки при отказе, объём желудочков, посчитанный без модели,
+        // никуда бы не попал — а он и есть то, что приложение умеет сегодня.
+        var store = new RecordingReportStore();
+
+        var biomarker = Biomarker.Create(
+            new MeasurementMethod
+            {
+                Code = "ventricular-volume",
+                DefinitionVersion = "1.0.0",
+                RequiredTier = AcquisitionTier.Extended,
+                Reference = "тест",
+            },
+            AcquisitionTier.Extended,
+            42.0,
+            MeasurementUnit.Millilitre,
+            MeasurementQuality.Questionable,
+            new MeasurementRange(0.0, 2500.0),
+            [new AnatomicalLabel("ventricular_system")]);
+
+        var useCase = Build(
+            new StubImporter(Synthetic.Study()),
+            new StubInferenceEngine(
+                QualityAssessment.Clean(),
+                new AnalysisOutcome.Refused
+                {
+                    Reason = new RefusalReason { Code = RefusalCode.ModelPackageUnusable },
+                },
+                biomarkers: [biomarker]),
+            store,
+            new RecordingAuditLog());
+
+        var report = await useCase.ExecuteAsync(
+            "source/study-0001",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
+        Assert.Equal(42.0, Assert.Single(report.Biomarkers).Value);
     }
 
     private static AnalysisOutcome.Completed Completed() => new()

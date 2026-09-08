@@ -126,7 +126,10 @@ public sealed class CompositionRoot : IDisposable
         var useCase = new Hydrocephalus.Application.AnalyzeStudyUseCase(
             importer,
             importer,
-            new QualityControlOnlyEngine(new InputQualityControl(), pipeline),
+            new BaselineMeasurementEngine(
+                new InputQualityControl(),
+                new WorkingCopyVolumeSource(importer),
+                pipeline),
             new JsonReportStore(paths.ReportRoot),
             auditLog,
             TimeProvider.System);

@@ -1,6 +1,7 @@
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Predictions;
 using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Domain.Quality;
@@ -137,7 +138,8 @@ internal sealed class StubInferenceEngine(
     QualityAssessment quality,
     AnalysisOutcome? outcome = null,
     CancellationTokenSource? cancelDuringAnalysis = null,
-    Exception? failWith = null) : IInferenceEngine
+    Exception? failWith = null,
+    IReadOnlyList<Biomarker>? biomarkers = null) : IInferenceEngine
 {
     public Task<PipelineIdentity> DescribePipelineAsync(CancellationToken cancellationToken) =>
         Task.FromResult(Synthetic.Pipeline());
@@ -146,7 +148,7 @@ internal sealed class StubInferenceEngine(
         AnalysisRequest request,
         CancellationToken cancellationToken) => Task.FromResult(quality);
 
-    public Task<AnalysisOutcome> AnalyzeAsync(
+    public Task<AnalysisResult> AnalyzeAsync(
         AnalysisRequest request,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
@@ -167,6 +169,10 @@ internal sealed class StubInferenceEngine(
 
         progress?.Report(new AnalysisProgress(AnalysisStage.Classification, 0.9));
 
-        return Task.FromResult(outcome!);
+        return Task.FromResult(new AnalysisResult
+        {
+            Outcome = outcome!,
+            Biomarkers = biomarkers ?? [],
+        });
     }
 }

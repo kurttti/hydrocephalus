@@ -60,6 +60,30 @@ public sealed record AnalysisRequest
 }
 
 /// <summary>
+/// Итог обращения к конвейеру: что удалось измерить и чем закончилась
+/// классификация.
+///
+/// Разделено намеренно. Измерение и классификация — разные утверждения, и одно
+/// возможно без другого: объём желудочков считается детерминированным методом
+/// прямо сейчас, а вероятность диагноза требует проверенного model package,
+/// которого ещё нет. Если бы отказ классификации отменял и измерения, отчёт
+/// оставался бы пустым при том, что часть работы выполнена и её результат
+/// клинически осмыслен (ADR 0005).
+/// </summary>
+public sealed record AnalysisResult
+{
+    /// <summary>Итог классификации: прогноз либо отказ.</summary>
+    public required AnalysisOutcome Outcome { get; init; }
+
+    /// <summary>
+    /// Измеренные признаки. Пустой список означает, что измерить не удалось,
+    /// а не что измерения дали ноль: нулевой объём — это тоже число, и оно
+    /// пришло бы признаком со значением.
+    /// </summary>
+    public IReadOnlyList<Measurements.Biomarker> Biomarkers { get; init; } = [];
+}
+
+/// <summary>
 /// Локальный конвейер анализа изображения. Реализация живёт в слое Inference и скрывает
 /// ONNX Runtime; ни один другой слой не знает о движке инференса.
 /// </summary>
@@ -90,8 +114,8 @@ public interface IInferenceEngine
     /// <param name="request">Запрос на анализ.</param>
     /// <param name="progress">Приёмник сообщений о прогрессе; может отсутствовать.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
-    /// <returns>Итог анализа.</returns>
-    Task<AnalysisOutcome> AnalyzeAsync(
+    /// <returns>Итог анализа: измерения и результат классификации.</returns>
+    Task<AnalysisResult> AnalyzeAsync(
         AnalysisRequest request,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken);
