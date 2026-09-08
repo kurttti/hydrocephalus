@@ -137,7 +137,9 @@ public sealed class CompositionRoot : IDisposable
             TimeProvider.System);
 
         var exportReport = new Hydrocephalus.Application.ExportReportUseCase(
-            new JsonReportExportStore(paths.ReportExportRoot),
+            // Оба слоя отчёта: JSON остаётся источником истины, PDF порождается
+            // из записанного файла (ADR 0005).
+            new PdfReportExportStore(new JsonReportExportStore(paths.ReportExportRoot)),
             new UnconfiguredPatientIdentityRegistry(),
             auditLog,
             TimeProvider.System);

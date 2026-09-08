@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/Hydrocephalus.Inventory/Hydrocephalus.Inventory.csproj" />
+    <Project Path="tools/Hydrocephalus.ReviewPlan/Hydrocephalus.ReviewPlan.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hydrocephalus.Application.Tests/Hydrocephalus.Application.Tests.csproj" />
