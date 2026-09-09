@@ -93,24 +93,38 @@ public sealed class ResultReadoutTests
     [Fact]
     public void A_quality_issue_shows_the_numbers_that_make_it_actionable()
     {
-        // «InconsistentGeometry» врачу не говорит ничего. Шаг и отклонение —
-        // говорят, и ровно для этого в замечании есть параметры.
-        var row = Assert.Single(Section("Контроль качества", Report(issue: IrregularSpacing())).Rows);
+        // «UnsupportedVoxelGeometry» врачу не говорит ничего. Толщина среза
+        // и допустимая граница — говорят, и ровно для этого у замечания
+        // есть параметры.
+        var row = Assert.Single(Section("Контроль качества", Report(issue: ThickSlice())).Rows);
 
         // Числа из параметров записаны в инвариантной культуре, а на экране
         // обязаны выглядеть так же, как остальные числа интерфейса.
         Assert.Contains(Number(5), row.Text, StringComparison.Ordinal);
-        Assert.Contains(Number(3.2), row.Text, StringComparison.Ordinal);
+        Assert.Contains(Number(1.5), row.Text, StringComparison.Ordinal);
         Assert.Equal(ResultSeverity.Blocking, row.Severity);
     }
 
     [Fact]
     public void A_quality_issue_with_parameters_does_not_leak_the_raw_code()
     {
+        var row = Assert.Single(Section("Контроль качества", Report(issue: ThickSlice())).Rows);
+
+        Assert.DoesNotContain("UnsupportedVoxelGeometry", row.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("sliceThickness", row.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_issue_that_does_not_yet_reach_the_report_is_still_rendered()
+    {
+        // Замечания разбора срезов при импорте и замечания сегментации
+        // в отчёт сегодня не попадают: первые оставляют серию за пределами
+        // рабочей копии, вторые движок не переносит в результат. Текст для них
+        // проверяется здесь, чтобы заготовка не разошлась с параметрами молча.
         var row = Assert.Single(Section("Контроль качества", Report(issue: IrregularSpacing())).Rows);
 
-        Assert.DoesNotContain("InconsistentGeometry", row.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("irregularSliceSpacing", row.Text, StringComparison.Ordinal);
+        Assert.Contains(Number(5), row.Text, StringComparison.Ordinal);
+        Assert.Contains(Number(3.2), row.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -144,7 +158,7 @@ public sealed class ResultReadoutTests
     {
         // ContributingIssues — подмножество замечаний контроля качества.
         // Вторым списком те же находки выглядели бы как новые.
-        var issue = IrregularSpacing();
+        var issue = ThickSlice();
 
         var report = Report(issue: issue, refusal: RefusalCode.QualityControlFailed);
 
@@ -162,6 +176,20 @@ public sealed class ResultReadoutTests
         ResultReadout.Describe(report, series ?? Series(AcquisitionTier.Extended))
             .Single(section => string.Equals(section.Title, title, StringComparison.Ordinal));
 
+    /// <summary>Замечание входного контроля качества: такие доходят до отчёта.</summary>
+    private static QualityIssue ThickSlice() => new()
+    {
+        Code = QualityIssueCode.UnsupportedVoxelGeometry,
+        Severity = QualityIssueSeverity.Blocking,
+        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["parameter"] = "sliceThickness",
+            ["valueMm"] = "5",
+            ["maxMm"] = "1.5",
+        },
+    };
+
+    /// <summary>Замечание разбора срезов при импорте: до отчёта пока не доходит.</summary>
     private static QualityIssue IrregularSpacing() => new()
     {
         Code = QualityIssueCode.InconsistentGeometry,
@@ -209,7 +237,11 @@ public sealed class ResultReadoutTests
         value,
         MeasurementUnit.Millilitre,
         quality,
-        new MeasurementRange(0.0, 500.0));
+        // Диапазон тот же, что у RegionVolumes: он ловит ошибку сегментации,
+        // а не отклонение от нормы, и верхняя граница выше внутричерепного
+        // объёма взрослого. Иначе каждый пациент с гидроцефалией получал бы
+        // верное число с пометкой об ошибке измерения.
+        new MeasurementRange(0.0, 2500.0));
 
     private static ImagingSeries Series(AcquisitionTier tier) => new()
     {

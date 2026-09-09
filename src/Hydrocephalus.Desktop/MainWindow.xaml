@@ -99,8 +99,13 @@
              и достоверность измерения — часть самого результата, а не
              дополнительные сведения, за которыми надо куда-то идти. -->
         <Border DockPanel.Dock="Right" Width="330" Background="#16161C" Padding="12,10">
+            <!-- Панель доступна с клавиатуры: результат, до которого нельзя
+                 долистать без мыши, для части рабочих мест не существует
+                 (docs/windows/README.md). -->
             <ScrollViewer VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled">
+                          HorizontalScrollBarVisibility="Disabled"
+                          Focusable="True"
+                          IsTabStop="True">
                 <StackPanel x:Name="ResultPanel">
                     <TextBlock Text="Исследование не открыто."
                                Foreground="#7A7A88"
