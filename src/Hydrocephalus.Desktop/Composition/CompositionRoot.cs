@@ -188,12 +188,12 @@ public sealed class CompositionRoot : IDisposable
 
         this.opened = workingCopy;
 
-        // Показывается та же серия, которую взял бы анализ: смотреть одно,
-        // а измерять другое нельзя.
-        var series = workingCopy.Study.Series
-            .Where(item => !item.IsContrastEnhanced && item.Tier != AcquisitionTier.Unusable)
-            .OrderByDescending(item => item.Tier)
-            .FirstOrDefault()
+        // Показывается та же серия, которую берёт анализ, — и берётся она тем же
+        // кодом, а не таким же. Повторённое здесь правило отбора рано или поздно
+        // разошлось бы со сценарием, и экран подписал бы одну серию отчётом
+        // по другой.
+        var series = Hydrocephalus.Application.AnalyzeStudyUseCase
+            .SelectAnalysableSeries(workingCopy.Study)
             ?? throw new InvalidOperationException(
                 "The study has no series suitable for viewing.");
 
@@ -228,6 +228,7 @@ public sealed class CompositionRoot : IDisposable
         {
             View = new StudyView(volume, mask),
             Report = this.report,
+            Series = series,
         };
     }
 

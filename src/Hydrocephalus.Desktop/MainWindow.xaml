@@ -95,6 +95,20 @@
             </DockPanel>
         </Border>
 
+        <!-- Результат справа и всегда на виду: замечания контроля качества
+             и достоверность измерения — часть самого результата, а не
+             дополнительные сведения, за которыми надо куда-то идти. -->
+        <Border DockPanel.Dock="Right" Width="330" Background="#16161C" Padding="12,10">
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="ResultPanel">
+                    <TextBlock Text="Исследование не открыто."
+                               Foreground="#7A7A88"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
         <Grid x:Name="PlaneGrid" Margin="6">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />

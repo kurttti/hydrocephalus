@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Hydrocephalus.Desktop.Composition;
+using Hydrocephalus.Desktop.Results;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Reporting;
@@ -21,6 +22,18 @@ namespace Hydrocephalus.Desktop;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private static readonly SolidColorBrush HeadingBrush = new(Color.FromRgb(0x9A, 0x9A, 0xA6));
+
+    private static readonly SolidColorBrush NoteBrush = new(Color.FromRgb(0x86, 0x86, 0x94));
+
+    private static readonly SolidColorBrush NeutralBrush = new(Color.FromRgb(0xC8, 0xC8, 0xD2));
+
+    private static readonly SolidColorBrush WarningBrush = new(Color.FromRgb(0xE0, 0xB0, 0x50));
+
+    // Препятствие красным: врач должен отличать «результат с оговоркой»
+    // от «на этих данных так делать нельзя» не читая, а с одного взгляда.
+    private static readonly SolidColorBrush BlockingBrush = new(Color.FromRgb(0xE0, 0x6A, 0x5A));
+
     private readonly List<PlaneSurface> surfaces = [];
 
     private StudyView? study;
@@ -36,6 +49,13 @@ public partial class MainWindow : Window
     }
 
     private static App Current => (App)System.Windows.Application.Current;
+
+    private static SolidColorBrush BrushFor(ResultSeverity severity) => severity switch
+    {
+        ResultSeverity.Blocking => BlockingBrush,
+        ResultSeverity.Warning => WarningBrush,
+        _ => NeutralBrush,
+    };
 
     /// <summary>
     /// Показывает роль, с которой запущено приложение.
@@ -87,7 +107,7 @@ public partial class MainWindow : Window
                 () => composition.OpenForViewingAsync(directory, CancellationToken.None))
                 .ConfigureAwait(true);
 
-            this.Show(opened.View);
+            this.Show(opened);
             this.hasOpenStudy = true;
             this.UpdateExportAvailability();
         }
@@ -100,6 +120,7 @@ public partial class MainWindow : Window
                 "Роль, заданная при установке, не даёт права на анализ исследования.";
 
             this.hasOpenStudy = false;
+            this.ClearResult("Исследование не открыто.");
             this.UpdateExportAvailability();
         }
         catch (Exception exception)
@@ -112,6 +133,11 @@ public partial class MainWindow : Window
             // и оставить кнопки экспорта включёнными значило бы предложить
             // выгрузить отчёт, которого больше нет.
             this.hasOpenStudy = false;
+
+            // Панель результата очищается по той же причине: числа от прошлого
+            // исследования рядом с сообщением об ошибке читаются как относящиеся
+            // к тому, которое открыть не удалось.
+            this.ClearResult("Результата нет: исследование открыть не удалось.");
             this.UpdateExportAvailability();
         }
         finally
@@ -217,30 +243,94 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Show(StudyView opened)
+    private void Show(OpenedStudy opened)
     {
-        this.study = opened;
+        var view = opened.View;
+
+        this.study = view;
         this.surfaces.Clear();
         this.PlaneGrid.Children.Clear();
 
-        for (var index = 0; index < opened.Planes.Count; index++)
+        for (var index = 0; index < view.Planes.Count; index++)
         {
-            var surface = new PlaneSurface(opened.Planes[index]);
+            var surface = new PlaneSurface(view.Planes[index]);
 
             Grid.SetColumn(surface.Root, index);
             this.PlaneGrid.Children.Add(surface.Root);
             this.surfaces.Add(surface);
         }
 
-        this.ConfigureWindowSliders(opened);
+        this.ConfigureWindowSliders(view);
+        this.ShowResult(ResultReadout.Describe(opened.Report, opened.Series));
 
-        this.StatusText.Text = opened.HasMask
+        this.StatusText.Text = view.HasMask
             ? "Открыто. Маска получена baseline-методом и не является проверенной сегментацией."
             : "Открыто. Маска не построена: взвешенность серии не распознана.";
 
         foreach (var surface in this.surfaces)
         {
             surface.Redraw();
+        }
+    }
+
+    /// <summary>
+    /// Выкладывает разделы результата в боковую панель.
+    ///
+    /// Собирается кодом, а не разметкой с шаблоном данных: цвет строки задаётся
+    /// её значимостью, и связывание потребовало бы конвертера ради трёх кистей.
+    /// Текст при этом целиком приходит из <see cref="ResultReadout"/> — окно
+    /// ничего не формулирует само.
+    /// </summary>
+    private void ClearResult(string message)
+    {
+        this.ResultPanel.Children.Clear();
+
+        this.ResultPanel.Children.Add(new TextBlock
+        {
+            Text = message,
+            Foreground = NoteBrush,
+            TextWrapping = TextWrapping.Wrap,
+        });
+    }
+
+    private void ShowResult(IReadOnlyList<ResultSection> sections)
+    {
+        this.ResultPanel.Children.Clear();
+
+        foreach (var section in sections)
+        {
+            this.ResultPanel.Children.Add(new TextBlock
+            {
+                Text = section.Title,
+                Foreground = HeadingBrush,
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 14, 0, 6),
+            });
+
+            foreach (var row in section.Rows)
+            {
+                this.ResultPanel.Children.Add(new TextBlock
+                {
+                    Text = row.Text,
+                    Foreground = BrushFor(row.Severity),
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 2),
+                });
+
+                if (row.Note is null)
+                {
+                    continue;
+                }
+
+                this.ResultPanel.Children.Add(new TextBlock
+                {
+                    Text = row.Note,
+                    Foreground = NoteBrush,
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 11,
+                    Margin = new Thickness(0, 0, 0, 8),
+                });
+            }
         }
     }
 

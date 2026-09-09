@@ -1,4 +1,5 @@
 using Hydrocephalus.Desktop.Viewing;
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Reporting;
 
 namespace Hydrocephalus.Desktop.Composition;
@@ -17,4 +18,12 @@ public sealed record OpenedStudy
 
     /// <summary>Отчёт по тому же исследованию.</summary>
     public required AnalysisReport Report { get; init; }
+
+    /// <summary>
+    /// Серия, которую показывает экран и по которой выполнен анализ.
+    ///
+    /// Нужна экрану результата: отчёт не содержит свойств серии, а без них
+    /// отсутствие измерений не объяснить ничем, кроме молчания.
+    /// </summary>
+    public required ImagingSeries Series { get; init; }
 }

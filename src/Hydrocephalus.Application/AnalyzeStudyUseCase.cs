@@ -264,12 +264,22 @@ public sealed class AnalyzeStudyUseCase
 
     /// <summary>
     /// Выбирает серию для анализа: наилучший доступный уровень входа среди неконтрастных серий.
+    ///
+    /// Открыт наружу, потому что этот же выбор нужен экрану: показывать одну
+    /// серию, а измерять другую нельзя, а вторая копия правила разошлась бы
+    /// с первой незаметно — на экране была бы подпись не к тому изображению.
     /// </summary>
-    private static ImagingSeries? SelectAnalysableSeries(ImagingStudy study) =>
-        study.Series
+    /// <param name="study">Исследование из рабочей копии.</param>
+    /// <returns>Выбранная серия либо <see langword="null"/>, если подходящей нет.</returns>
+    public static ImagingSeries? SelectAnalysableSeries(ImagingStudy study)
+    {
+        ArgumentNullException.ThrowIfNull(study);
+
+        return study.Series
             .Where(series => !series.IsContrastEnhanced && series.Tier != AcquisitionTier.Unusable)
             .OrderByDescending(series => series.Tier)
             .FirstOrDefault();
+    }
 
     private async Task<AnalysisReport> RefuseAsync(
         ImagingStudy study,
