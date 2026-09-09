@@ -34,6 +34,13 @@ public sealed record ResultRow
     public required ResultSeverity Severity { get; init; }
 }
 
+/// <summary>
+/// Строка списка серий: чем серия адресуется и чем она видна врачу.
+/// </summary>
+/// <param name="Id">Псевдонимный идентификатор серии.</param>
+/// <param name="Text">Описание серии для показа.</param>
+public sealed record SeriesChoice(string Id, string Text);
+
 /// <summary>Раздел экрана результата.</summary>
 public sealed record ResultSection
 {
@@ -120,12 +127,31 @@ public static class ResultReadout
             new ResultSection
             {
                 Title = "Серии исследования",
-                Rows = DescribeSeries(study),
+                Rows = DescribeComposition(study),
             },
         ];
     }
 
-    private static List<ResultRow> DescribeSeries(AnalysedStudy study)
+    /// <summary>
+    /// Перечисляет серии, которые можно открыть.
+    /// </summary>
+    /// <param name="study">Состав исследования.</param>
+    /// <returns>Строки списка выбора серии.</returns>
+    /// <remarks>
+    /// Только серии рабочей копии. Отброшенные на импорте открыть нельзя —
+    /// их данных на диске нет; они названы в разделе серий вместе с причиной,
+    /// и предложить их к выбору значило бы обещать то, чего не будет.
+    /// </remarks>
+    public static IReadOnlyList<SeriesChoice> ChoicesFor(AnalysedStudy study)
+    {
+        ArgumentNullException.ThrowIfNull(study);
+
+        return [.. study.Study.Series.Select(series => new SeriesChoice(
+            series.PseudonymousSeriesId,
+            DescribeSeries(series)))];
+    }
+
+    private static List<ResultRow> DescribeComposition(AnalysedStudy study)
     {
         var rows = new List<ResultRow>();
 
@@ -139,7 +165,7 @@ public static class ResultReadout
 
             rows.Add(new ResultRow
             {
-                Text = Describe(series) + (analysed ? " — выбрана для анализа" : string.Empty),
+                Text = DescribeSeries(series) + (analysed ? " — выбрана для анализа" : string.Empty),
                 Severity = ResultSeverity.Neutral,
             });
         }
@@ -152,7 +178,7 @@ public static class ResultReadout
         {
             rows.Add(new ResultRow
             {
-                Text = Describe(excluded.Series) + " — не загружена",
+                Text = DescribeSeries(excluded.Series) + " — не загружена",
                 Note = excluded.Issues.Count == 0
                     ? "Причина в рабочей копии не сохранена."
                     : string.Join(" ", excluded.Issues.Select(Describe)),
@@ -163,8 +189,20 @@ public static class ResultReadout
         return rows;
     }
 
-    private static string Describe(ImagingSeries series)
+    /// <summary>
+    /// Описывает серию тем, что о ней известно домену.
+    /// </summary>
+    /// <param name="series">Серия исследования.</param>
+    /// <returns>Строка для показа пользователю.</returns>
+    /// <remarks>
+    /// Имени у серии нет: домен хранит только псевдонимный идентификатор,
+    /// а он читается как случайная строка. Различать серии врачу приходится
+    /// по их свойствам, и здесь названы те, по которым это возможно.
+    /// </remarks>
+    public static string DescribeSeries(ImagingSeries series)
     {
+        ArgumentNullException.ThrowIfNull(series);
+
         var geometry = series.Geometry;
         var dimensions = geometry.Dimensions;
 

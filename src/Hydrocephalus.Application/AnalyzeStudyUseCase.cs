@@ -1,3 +1,4 @@
+using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
@@ -83,7 +84,13 @@ public sealed class AnalyzeStudyUseCase
 
         try
         {
-            return await this.AnalyseAsync(workingCopy, requestedBy, progress, cancellationToken)
+            return await this.AnalyseAsync(
+                    workingCopy,
+                    requestedBy,
+                    pseudonymousSeriesId: null,
+                    announceImport: true,
+                    progress,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -129,30 +136,96 @@ public sealed class AnalyzeStudyUseCase
 
         await this.RequireAsync(requestedBy, cancellationToken).ConfigureAwait(false);
 
-        return await this.AnalyseAsync(workingCopy, requestedBy, progress, cancellationToken)
+        return await this.AnalyseAsync(
+                workingCopy,
+                requestedBy,
+                pseudonymousSeriesId: null,
+                announceImport: true,
+                progress,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Анализирует названную серию уже импортированной рабочей копии.
+    ///
+    /// Нужно, когда серию выбирает врач, а не приложение. Событие импорта
+    /// здесь не пишется: импорта не было, и вторая запись о нём сделала бы
+    /// журнал неправдой — по нему нельзя было бы сосчитать, сколько раз
+    /// исследование попадало на эту машину.
+    ///
+    /// Пригодность выбранной серии не проверяется до анализа: постконтрастную
+    /// или слишком грубую серию отклонит входной контроль качества, и врач
+    /// увидит причину. Не показать её в списке значило бы ответить молчанием
+    /// на осмысленный вопрос «а что в этой серии».
+    /// </summary>
+    /// <param name="workingCopy">Рабочая копия, созданная вызывающим.</param>
+    /// <param name="pseudonymousSeriesId">Псевдонимный идентификатор выбранной серии.</param>
+    /// <param name="requestedBy">Тот, от чьего имени выполняется анализ.</param>
+    /// <param name="progress">Приёмник сообщений о прогрессе; может отсутствовать.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Сохранённый отчёт с прогнозом либо отказом.</returns>
+    /// <exception cref="OperationCanceledException">Если операция отменена.</exception>
+    /// <exception cref="AccessDeniedException">Если у инициатора нет права на анализ.</exception>
+    /// <exception cref="DomainRuleViolationException">
+    /// Если названной серии нет в исследовании.
+    /// </exception>
+    public async Task<AnalysisReport> AnalyseSeriesAsync(
+        WorkingCopy workingCopy,
+        string pseudonymousSeriesId,
+        Actor requestedBy,
+        IProgress<AnalysisProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(workingCopy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pseudonymousSeriesId);
+
+        await this.RequireAsync(requestedBy, cancellationToken).ConfigureAwait(false);
+
+        return await this.AnalyseAsync(
+                workingCopy,
+                requestedBy,
+                pseudonymousSeriesId,
+                announceImport: false,
+                progress,
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
     private async Task<AnalysisReport> AnalyseAsync(
         WorkingCopy workingCopy,
         Actor requestedBy,
+        string? pseudonymousSeriesId,
+        bool announceImport,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
         var study = workingCopy.Study;
 
-        await this.RecordAsync(
-                AuditEventCode.StudyImported,
-                study.PseudonymousStudyId,
-                requestedBy,
-                cancellationToken)
-            .ConfigureAwait(false);
+        if (announceImport)
+        {
+            await this.RecordAsync(
+                    AuditEventCode.StudyImported,
+                    study.PseudonymousStudyId,
+                    requestedBy,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var pipeline = await this.engine.DescribePipelineAsync(cancellationToken).ConfigureAwait(false);
 
-        // Выбор серии: анализируется лучшая доступная неконтрастная серия.
-        // Постконтрастные серии не подаются в MRI-only конвейер ни на одном уровне входа.
-        var series = SelectAnalysableSeries(study);
+        // Выбор серии: названная врачом, иначе лучшая доступная неконтрастная.
+        // Постконтрастные серии не подаются в MRI-only конвейер ни на одном
+        // уровне входа, поэтому сами они не выбираются — но выбранную явно
+        // отклоняет контроль качества, а не этот отбор.
+        var series = pseudonymousSeriesId is null
+            ? SelectAnalysableSeries(study)
+            : study.Series.FirstOrDefault(item => string.Equals(
+                item.PseudonymousSeriesId,
+                pseudonymousSeriesId,
+                StringComparison.Ordinal))
+                ?? throw new DomainRuleViolationException(
+                    "The requested series is not part of the working copy.");
 
         if (series is null)
         {

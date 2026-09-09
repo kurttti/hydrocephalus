@@ -141,6 +141,12 @@ internal sealed class StubInferenceEngine(
     Exception? failWith = null,
     IReadOnlyList<Biomarker>? biomarkers = null) : IInferenceEngine
 {
+    /// <summary>
+    /// Серии, поданные на анализ, в порядке вызовов. Нужны там, где проверяется
+    /// не результат, а то, что анализировали именно ту серию, о которой просили.
+    /// </summary>
+    public List<string> AnalysedSeries { get; } = [];
+
     public Task<PipelineIdentity> DescribePipelineAsync(CancellationToken cancellationToken) =>
         Task.FromResult(Synthetic.Pipeline());
 
@@ -153,6 +159,8 @@ internal sealed class StubInferenceEngine(
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
+        this.AnalysedSeries.Add(request.PseudonymousSeriesId);
+
         progress?.Report(new AnalysisProgress(AnalysisStage.Preprocessing, 0.25));
 
         if (failWith is not null)

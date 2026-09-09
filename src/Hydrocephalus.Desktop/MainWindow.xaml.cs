@@ -261,6 +261,7 @@ public partial class MainWindow : Window
         }
 
         this.ConfigureWindowSliders(view);
+        this.ConfigureSeriesSelector(opened.Analysed);
         this.ShowResult(ResultReadout.Describe(opened.Report, opened.Analysed));
 
         this.StatusText.Text = view.HasMask
@@ -331,6 +332,84 @@ public partial class MainWindow : Window
                     Margin = new Thickness(0, 0, 0, 8),
                 });
             }
+        }
+    }
+
+    /// <summary>
+    /// Заполняет список серий и отмечает в нём показанную.
+    ///
+    /// Обработчик снимается на время заполнения: подстановка выбранного
+    /// элемента ничем не отличается от выбора мышью, и без этого показ
+    /// исследования запускал бы переключение на ту же серию — то есть
+    /// повторный анализ и лишнюю запись в журнале.
+    /// </summary>
+    private void ConfigureSeriesSelector(AnalysedStudy study)
+    {
+        this.SeriesSelector.SelectionChanged -= this.OnSeriesChanged;
+
+        var items = ResultReadout.ChoicesFor(study);
+
+        this.SeriesSelector.ItemsSource = items;
+
+        this.SeriesSelector.SelectedItem = items.FirstOrDefault(item => string.Equals(
+            item.Id,
+            study.Analysed.PseudonymousSeriesId,
+            StringComparison.Ordinal));
+
+        this.SeriesSelector.IsEnabled = items.Count > 1;
+
+        this.SeriesSelector.ToolTip = items.Count > 1
+            ? "Серия, по которой идут просмотр и анализ"
+            : "В рабочей копии одна серия.";
+
+        this.SeriesSelector.SelectionChanged += this.OnSeriesChanged;
+    }
+
+    private async void OnSeriesChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (this.SeriesSelector.SelectedItem is not SeriesChoice choice)
+        {
+            return;
+        }
+
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            return;
+        }
+
+        this.SeriesSelector.IsEnabled = false;
+        this.OpenButton.IsEnabled = false;
+        this.StatusText.Text = "Загрузка серии и анализ…";
+
+        try
+        {
+            // Загрузка объёма и анализ уходят с потока интерфейса по той же
+            // причине, что и открытие: на реальной серии это сотни файлов.
+            var opened = await Task.Run(
+                () => composition.ShowSeriesAsync(choice.Id, CancellationToken.None))
+                .ConfigureAwait(true);
+
+            this.Show(opened);
+        }
+        catch (AccessDeniedException)
+        {
+            this.StatusText.Text =
+                "Роль, заданная при установке, не даёт права на анализ исследования.";
+        }
+        catch (Exception exception)
+        {
+            // Исследование остаётся открытым: не удалось показать серию,
+            // а не потерять рабочую копию. Но панель результата обязана
+            // перестать описывать то, чего на экране нет.
+            this.StatusText.Text = "Показать серию не удалось: " + exception.Message;
+            this.ClearResult("Результата нет: серию показать не удалось.");
+        }
+        finally
+        {
+            this.OpenButton.IsEnabled = true;
+            this.SeriesSelector.IsEnabled = true;
         }
     }
 

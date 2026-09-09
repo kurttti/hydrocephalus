@@ -1,4 +1,5 @@
 using Hydrocephalus.Application;
+using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
@@ -336,6 +337,126 @@ public sealed class SyntheticPipelineTests
         IReportStore store,
         IAuditLog audit) =>
         Build(new StubImporter(study), engine, store, audit);
+
+    [Fact]
+    public async Task The_series_the_clinician_names_is_the_one_analysed()
+    {
+        // Приложение берёт лучшую серию по своему правилу, но решает, что
+        // смотреть, врач. Если бы выбор игнорировался, экран показывал бы одну
+        // серию, а отчёт описывал другую — и заметить это было бы нечем.
+        var importer = new StubImporter(TwoSeries());
+        var engine = new StubInferenceEngine(QualityAssessment.Clean(), Completed());
+
+        var useCase = Build(importer, engine, new RecordingReportStore(), new RecordingAuditLog());
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        await useCase.AnalyseSeriesAsync(
+            workingCopy,
+            "series-0002",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(["series-0002"], engine.AnalysedSeries);
+    }
+
+    [Fact]
+    public async Task Switching_series_is_not_recorded_as_a_second_import()
+    {
+        // По журналу должно быть видно, сколько раз исследование попадало
+        // на эту машину. Вторая запись об импорте при переключении серии
+        // сделала бы этот счёт неправдой.
+        var importer = new StubImporter(TwoSeries());
+        var audit = new RecordingAuditLog();
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            new RecordingReportStore(),
+            audit);
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        await useCase.AnalyseWorkingCopyAsync(
+            workingCopy,
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        await useCase.AnalyseSeriesAsync(
+            workingCopy,
+            "series-0002",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Single(audit.Events, item => item.Code == AuditEventCode.StudyImported);
+    }
+
+    [Fact]
+    public async Task A_series_outside_the_working_copy_cannot_be_analysed()
+    {
+        // Рассогласование запроса и рабочей копии. Молча выбрать другую серию
+        // здесь означало бы проанализировать не то, о чём просили.
+        var importer = new StubImporter(TwoSeries());
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            new RecordingReportStore(),
+            new RecordingAuditLog());
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        await Assert.ThrowsAsync<DomainRuleViolationException>(
+            () => useCase.AnalyseSeriesAsync(
+                workingCopy,
+                "series-does-not-exist",
+                Synthetic.Clinician(),
+                progress: null,
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Naming_a_series_does_not_bypass_the_analyse_right()
+    {
+        var importer = new StubImporter(TwoSeries());
+        var audit = new RecordingAuditLog();
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            new RecordingReportStore(),
+            audit);
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => useCase.AnalyseSeriesAsync(
+                workingCopy,
+                "series-0002",
+                Synthetic.Unconfigured(),
+                progress: null,
+                CancellationToken.None));
+
+        Assert.Equal([AuditEventCode.AccessDenied], audit.Codes);
+    }
+
+    /// <summary>Исследование из двух серий: одну выбирает приложение, другую — врач.</summary>
+    private static ImagingStudy TwoSeries()
+    {
+        var study = Synthetic.Study();
+
+        return study with
+        {
+            Series =
+            [
+                study.Series[0],
+                study.Series[0] with { PseudonymousSeriesId = "series-0002" },
+            ],
+        };
+    }
 
     private static AnalyzeStudyUseCase Build(
         StubImporter importer,

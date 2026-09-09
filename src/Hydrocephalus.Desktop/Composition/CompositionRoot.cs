@@ -197,6 +197,48 @@ public sealed class CompositionRoot : IDisposable
             ?? throw new InvalidOperationException(
                 "The study has no series suitable for viewing.");
 
+        return await this.ShowAsync(workingCopy, series, justImported: true, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Переключает просмотр и анализ на другую серию открытого исследования.
+    ///
+    /// Переанализ обязателен, а не желателен: оставить прежний отчёт рядом
+    /// с новой картинкой значило бы подписать одну серию числами, полученными
+    /// по другой. Исследование при этом не импортируется заново — рабочая копия
+    /// уже есть, и вторая копия тех же данных пациента на диске не нужна.
+    /// </summary>
+    /// <param name="pseudonymousSeriesId">Псевдонимный идентификатор выбранной серии.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Состояние экрана просмотра и отчёт по выбранной серии.</returns>
+    /// <exception cref="InvalidOperationException">Если исследование не открыто.</exception>
+    public async Task<OpenedStudy> ShowSeriesAsync(
+        string pseudonymousSeriesId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pseudonymousSeriesId);
+
+        var workingCopy = this.opened
+            ?? throw new InvalidOperationException("No study is open, so there is no series to show.");
+
+        var series = workingCopy.Study.Series.FirstOrDefault(item => string.Equals(
+            item.PseudonymousSeriesId,
+            pseudonymousSeriesId,
+            StringComparison.Ordinal))
+            ?? throw new InvalidOperationException(
+                "The requested series is not part of the open study.");
+
+        return await this.ShowAsync(workingCopy, series, justImported: false, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<OpenedStudy> ShowAsync(
+        WorkingCopy workingCopy,
+        ImagingSeries series,
+        bool justImported,
+        CancellationToken cancellationToken)
+    {
         var volume = await DicomVolumeReader
             .LoadAsync(
                 this.importer.SessionFor(workingCopy.VolumeReference),
@@ -220,9 +262,21 @@ public sealed class CompositionRoot : IDisposable
         // ExecuteAsync импортировал бы исследование второй раз: на диске
         // оказалось бы две копии одних и тех же данных, и экспортируемый отчёт
         // описывал бы не то, что показано на экране.
-        this.report = await this.AnalyzeStudy
-            .AnalyseWorkingCopyAsync(workingCopy, this.Actor, progress: null, cancellationToken)
-            .ConfigureAwait(false);
+        //
+        // Событие импорта пишется только при первом показе: переключение серии
+        // импортом не является, и вторая запись сделала бы журнал неправдой.
+        this.report = justImported
+            ? await this.AnalyzeStudy
+                .AnalyseWorkingCopyAsync(workingCopy, this.Actor, progress: null, cancellationToken)
+                .ConfigureAwait(false)
+            : await this.AnalyzeStudy
+                .AnalyseSeriesAsync(
+                    workingCopy,
+                    series.PseudonymousSeriesId,
+                    this.Actor,
+                    progress: null,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
         return new OpenedStudy
         {

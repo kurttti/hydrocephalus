@@ -224,6 +224,39 @@ public sealed class ResultReadoutTests
         ],
     };
 
+    [Fact]
+    public void Only_series_that_can_be_opened_are_offered_for_selection()
+    {
+        // Отброшенную серию открыть нечем: её данных на диске нет. Предложить
+        // её в списке значило бы обещать то, чего не будет.
+        var analysed = Series(AcquisitionTier.Extended);
+
+        var choices = ResultReadout.ChoicesFor(new AnalysedStudy
+        {
+            Study = Study(analysed),
+            Analysed = analysed,
+            Excluded = [Excluded()],
+        });
+
+        Assert.Equal(analysed.PseudonymousSeriesId, Assert.Single(choices).Id);
+    }
+
+    [Fact]
+    public void A_series_is_offered_by_its_properties_because_it_has_no_name()
+    {
+        // Псевдонимный идентификатор читается как случайная строка. Различать
+        // серии врачу приходится по взвешенности, уровню и размерам.
+        var choice = Assert.Single(ResultReadout.ChoicesFor(new AnalysedStudy
+        {
+            Study = Study(Series(AcquisitionTier.Extended)),
+            Analysed = Series(AcquisitionTier.Extended),
+        }));
+
+        Assert.Contains("T2", choice.Text, StringComparison.Ordinal);
+        Assert.Contains("расширенный", choice.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(choice.Id, choice.Text, StringComparison.Ordinal);
+    }
+
     private static string Number(double value) =>
         value.ToString("0.###", CultureInfo.CurrentCulture);
 
