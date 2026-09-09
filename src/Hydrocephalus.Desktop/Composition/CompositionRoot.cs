@@ -239,6 +239,11 @@ public sealed class CompositionRoot : IDisposable
         bool justImported,
         CancellationToken cancellationToken)
     {
+        // Отчёт по прежней серии перестаёт быть текущим до того, как начнётся
+        // работа над новой. Иначе неудачный переход оставил бы его доступным
+        // к экспорту, а описывал бы он не ту серию, которая перед врачом.
+        this.report = null;
+
         var volume = await DicomVolumeReader
             .LoadAsync(
                 this.importer.SessionFor(workingCopy.VolumeReference),
@@ -306,7 +311,8 @@ public sealed class CompositionRoot : IDisposable
         CancellationToken cancellationToken)
     {
         var current = this.report
-            ?? throw new InvalidOperationException("No study is open, so there is no report to export.");
+            ?? throw new InvalidOperationException(
+                "There is no current report to export: no study is open, or the last analysis did not finish.");
 
         var reference = await this.exportReport.ExecuteAsync(
             new Hydrocephalus.Application.ReportExportRequest

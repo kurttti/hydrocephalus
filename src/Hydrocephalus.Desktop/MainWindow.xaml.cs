@@ -42,6 +42,10 @@ public partial class MainWindow : Window
 
     private bool hasOpenStudy;
 
+    // Серия, которая действительно на экране. Список показывает выбор врача,
+    // и после неудачной попытки эти двое расходятся, если не вернуть его назад.
+    private string? displayedSeriesId;
+
     /// <summary>Создаёт главное окно.</summary>
     public MainWindow()
     {
@@ -108,8 +112,6 @@ public partial class MainWindow : Window
                 .ConfigureAwait(true);
 
             this.Show(opened);
-            this.hasOpenStudy = true;
-            this.UpdateExportAvailability();
         }
         catch (AccessDeniedException)
         {
@@ -272,6 +274,12 @@ public partial class MainWindow : Window
         {
             surface.Redraw();
         }
+
+        // Признак открытого исследования ставится здесь, а не у вызывающего:
+        // показов два — открытие и смена серии, — и разойдись они, экспорт
+        // после несостоявшейся смены остался бы выключенным навсегда.
+        this.hasOpenStudy = true;
+        this.UpdateExportAvailability();
     }
 
     /// <summary>
@@ -347,6 +355,8 @@ public partial class MainWindow : Window
     {
         this.SeriesSelector.SelectionChanged -= this.OnSeriesChanged;
 
+        this.displayedSeriesId = study.Analysed.PseudonymousSeriesId;
+
         var items = ResultReadout.ChoicesFor(study);
 
         this.SeriesSelector.ItemsSource = items;
@@ -397,6 +407,8 @@ public partial class MainWindow : Window
         {
             this.StatusText.Text =
                 "Роль, заданная при установке, не даёт права на анализ исследования.";
+
+            this.AbandonSeriesChange("Результата нет: роль не даёт права на анализ.");
         }
         catch (Exception exception)
         {
@@ -404,13 +416,43 @@ public partial class MainWindow : Window
             // а не потерять рабочую копию. Но панель результата обязана
             // перестать описывать то, чего на экране нет.
             this.StatusText.Text = "Показать серию не удалось: " + exception.Message;
-            this.ClearResult("Результата нет: серию показать не удалось.");
+
+            this.AbandonSeriesChange("Результата нет: серию показать не удалось.");
         }
         finally
         {
             this.OpenButton.IsEnabled = true;
             this.SeriesSelector.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// Возвращает экран в согласованное состояние после несостоявшегося
+    /// перехода на другую серию.
+    ///
+    /// На экране осталась прежняя серия, а в списке стоит выбранная. Оставить
+    /// это как есть значило бы подписать изображение именем другой серии —
+    /// ровно та ошибка, ради которой список и переключает анализ вместе
+    /// с картинкой. Экспорт при этом выключается: отчёт по прежней серии
+    /// сборка уже отпустила, и выгружать нечего.
+    /// </summary>
+    /// <param name="message">Что показать в панели результата.</param>
+    private void AbandonSeriesChange(string message)
+    {
+        this.SeriesSelector.SelectionChanged -= this.OnSeriesChanged;
+
+        this.SeriesSelector.SelectedItem = (this.SeriesSelector.ItemsSource as IEnumerable<SeriesChoice>)?
+            .FirstOrDefault(item => string.Equals(
+                item.Id,
+                this.displayedSeriesId,
+                StringComparison.Ordinal));
+
+        this.SeriesSelector.SelectionChanged += this.OnSeriesChanged;
+
+        this.ClearResult(message);
+
+        this.hasOpenStudy = false;
+        this.UpdateExportAvailability();
     }
 
     private void ConfigureWindowSliders(StudyView opened)
