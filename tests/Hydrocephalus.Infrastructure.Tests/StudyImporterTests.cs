@@ -2,6 +2,7 @@ using FellowOakDicom;
 using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Infrastructure.Dicom;
 using Hydrocephalus.Infrastructure.Volumes;
 
@@ -196,6 +197,35 @@ public sealed class StudyImporterTests : IDisposable
 
         Assert.Single(result.Study.Series);
         Assert.Single(await ReadAllAsync(importer, result));
+
+        // Отброшенная серия описывается, а не исчезает: врач, видящий одну
+        // серию, иначе не отличит «серия была одна» от «было две, одну убрали».
+        var excluded = Assert.Single(result.ExcludedSeries);
+
+        Assert.Equal(
+            QualityIssueCode.BurnedInAnnotation,
+            Assert.Single(excluded.Issues).Code);
+
+        Assert.NotEqual(
+            result.Study.Series[0].PseudonymousSeriesId,
+            excluded.Series.PseudonymousSeriesId);
+    }
+
+    [Fact]
+    public async Task A_study_without_dropped_series_says_so_with_an_empty_list()
+    {
+        // Пустой список — утверждение «ничего не отброшено», а не отсутствие
+        // сведений: иначе чистое исследование выглядело бы так же, как то,
+        // о котором ничего не известно.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.source.FullName, "clean.dcm"),
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "P-1");
+
+        var result = await this.Importer().ImportAsync(this.source.FullName, CancellationToken.None);
+
+        Assert.Empty(result.ExcludedSeries);
     }
 
     [Fact]

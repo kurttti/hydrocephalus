@@ -261,7 +261,7 @@ public partial class MainWindow : Window
         }
 
         this.ConfigureWindowSliders(view);
-        this.ShowResult(ResultReadout.Describe(opened.Report, opened.Series));
+        this.ShowResult(ResultReadout.Describe(opened.Report, opened.Analysed));
 
         this.StatusText.Text = view.HasMask
             ? "Открыто. Маска получена baseline-методом и не является проверенной сегментацией."

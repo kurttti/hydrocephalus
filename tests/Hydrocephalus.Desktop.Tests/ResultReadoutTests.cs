@@ -1,5 +1,6 @@
 using System.Globalization;
 using Hydrocephalus.Desktop.Results;
+using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Provenance;
@@ -166,15 +167,91 @@ public sealed class ResultReadoutTests
         Assert.Single(Section("Итог", report).Rows);
     }
 
+    [Fact]
+    public void A_series_that_never_reached_the_working_copy_is_still_listed()
+    {
+        // Врач, видящий одну серию, не может отличить «серия была одна»
+        // от «было две, одну отбросили». Второе — повод посмотреть на выгрузку,
+        // а не работать с остатком.
+        var section = Section(
+            "Серии исследования",
+            Report(),
+            excluded: [Excluded()]);
+
+        Assert.Equal(2, section.Rows.Count);
+        Assert.Contains("не загружена", section.Rows[1].Text, StringComparison.Ordinal);
+        Assert.Equal(ResultSeverity.Blocking, section.Rows[1].Severity);
+    }
+
+    [Fact]
+    public void The_reason_a_series_was_dropped_is_shown_with_it()
+    {
+        // Замечание разбора срезов при импорте до отчёта не доходит: отчёта
+        // по отброшенной серии не существует. Единственное место, где врач
+        // может его увидеть, — этот раздел.
+        var section = Section("Серии исследования", Report(), excluded: [Excluded()]);
+
+        var note = section.Rows[1].Note ?? string.Empty;
+
+        Assert.Contains("плоскост", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("mixedOrientations", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_analysed_series_is_marked_among_the_others()
+    {
+        var section = Section("Серии исследования", Report());
+
+        Assert.Contains("выбрана для анализа", Assert.Single(section.Rows).Text, StringComparison.Ordinal);
+    }
+
+    private static ExcludedSeries Excluded() => new()
+    {
+        Series = Series(AcquisitionTier.Baseline, "series-0002"),
+        Issues =
+        [
+            new QualityIssue
+            {
+                Code = QualityIssueCode.InconsistentGeometry,
+                Severity = QualityIssueSeverity.Blocking,
+                Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["reason"] = "mixedOrientations",
+                    ["instances"] = "60",
+                    ["distinctOrientations"] = "3",
+                },
+            },
+        ],
+    };
+
     private static string Number(double value) =>
         value.ToString("0.###", CultureInfo.CurrentCulture);
 
     private static ResultSection Section(
         string title,
         AnalysisReport report,
-        ImagingSeries? series = null) =>
-        ResultReadout.Describe(report, series ?? Series(AcquisitionTier.Extended))
+        ImagingSeries? series = null,
+        IReadOnlyList<ExcludedSeries>? excluded = null)
+    {
+        var analysed = series ?? Series(AcquisitionTier.Extended);
+
+        return ResultReadout.Describe(
+                report,
+                new AnalysedStudy
+                {
+                    Study = Study(analysed),
+                    Analysed = analysed,
+                    Excluded = excluded ?? [],
+                })
             .Single(section => string.Equals(section.Title, title, StringComparison.Ordinal));
+    }
+
+    private static ImagingStudy Study(params ImagingSeries[] series) => new()
+    {
+        PseudonymousStudyId = "study-0001",
+        PseudonymousSubjectId = "subject-0001",
+        Series = series,
+    };
 
     /// <summary>Замечание входного контроля качества: такие доходят до отчёта.</summary>
     private static QualityIssue ThickSlice() => new()
@@ -243,9 +320,9 @@ public sealed class ResultReadoutTests
         // верное число с пометкой об ошибке измерения.
         new MeasurementRange(0.0, 2500.0));
 
-    private static ImagingSeries Series(AcquisitionTier tier) => new()
+    private static ImagingSeries Series(AcquisitionTier tier, string id = "series-0001") => new()
     {
-        PseudonymousSeriesId = "series-0001",
+        PseudonymousSeriesId = id,
         Geometry = new SeriesGeometry
         {
             AcquisitionType = MrAcquisitionType.ThreeDimensional,

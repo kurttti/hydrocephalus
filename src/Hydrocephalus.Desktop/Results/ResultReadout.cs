@@ -52,13 +52,16 @@ public sealed record ResultSection
 /// а не опускаются: «UnsupportedVoxelGeometry» ничего не говорит врачу, а «толщина
 /// среза 5 мм при допустимых 1,5 мм» говорит, и по этому уже можно действовать.
 ///
-/// До отчёта сегодня доходят только замечания входного контроля качества
-/// (<c>InputQualityControl</c>): толщина среза, размер пикселя, зазор, неквадратный
-/// пиксель, поле обзора и покрытие. Замечания разбора срезов при импорте и замечания
-/// сегментации в <see cref="AnalysisReport.Quality"/> не попадают — первые оставляют
-/// серию за пределами рабочей копии, вторые движок не переносит в результат. Тексты
-/// для них здесь есть и проверены, но это заготовка на будущее, а не то, что видно
-/// врачу сейчас.
+/// Замечания приходят из двух мест и показываются в разных разделах.
+/// В «Контроле качества» — замечания входного контроля (<c>InputQualityControl</c>)
+/// к выбранной серии: толщина среза, размер пикселя, зазор, неквадратный пиксель,
+/// поле обзора, покрытие. В «Сериях исследования» — замечания разбора срезов
+/// при импорте: они оставляют серию за пределами рабочей копии, и увидеть их
+/// в отчёте нельзя, потому что отчёта по такой серии не существует.
+///
+/// Замечания сегментации не показываются нигде: движок оставляет от неё только
+/// маску и достоверность. Тексты для них здесь есть и проверены, но это заготовка,
+/// а не то, что видно врачу сейчас.
 ///
 /// Два правила, которые здесь соблюдаются намеренно.
 ///
@@ -94,12 +97,12 @@ public static class ResultReadout
     /// Описывает отчёт разделами экрана.
     /// </summary>
     /// <param name="report">Отчёт по открытому исследованию.</param>
-    /// <param name="series">Серия, по которой выполнялся анализ.</param>
-    /// <returns>Разделы: итог, измерения, контроль качества.</returns>
-    public static IReadOnlyList<ResultSection> Describe(AnalysisReport report, ImagingSeries series)
+    /// <param name="study">Состав исследования и выбранная серия.</param>
+    /// <returns>Разделы: итог, измерения, контроль качества, серии.</returns>
+    public static IReadOnlyList<ResultSection> Describe(AnalysisReport report, AnalysedStudy study)
     {
         ArgumentNullException.ThrowIfNull(report);
-        ArgumentNullException.ThrowIfNull(series);
+        ArgumentNullException.ThrowIfNull(study);
 
         return
         [
@@ -107,14 +110,73 @@ public static class ResultReadout
             new ResultSection
             {
                 Title = "Измерения",
-                Rows = DescribeMeasurements(report.Biomarkers, series),
+                Rows = DescribeMeasurements(report.Biomarkers, study.Analysed),
             },
             new ResultSection
             {
                 Title = "Контроль качества",
                 Rows = DescribeQuality(report.Quality),
             },
+            new ResultSection
+            {
+                Title = "Серии исследования",
+                Rows = DescribeSeries(study),
+            },
         ];
+    }
+
+    private static List<ResultRow> DescribeSeries(AnalysedStudy study)
+    {
+        var rows = new List<ResultRow>();
+
+        foreach (var series in study.Study.Series)
+        {
+            var analysed = ReferenceEquals(series, study.Analysed)
+                || string.Equals(
+                    series.PseudonymousSeriesId,
+                    study.Analysed.PseudonymousSeriesId,
+                    StringComparison.Ordinal);
+
+            rows.Add(new ResultRow
+            {
+                Text = Describe(series) + (analysed ? " — выбрана для анализа" : string.Empty),
+                Severity = ResultSeverity.Neutral,
+            });
+        }
+
+        // Отброшенные серии перечисляются вместе с остальными, а не прячутся:
+        // «в исследовании была одна серия» и «было восемь, семь отброшено» —
+        // разные положения дел, и второе значит, что смотреть надо на выгрузку,
+        // а не на остаток.
+        foreach (var excluded in study.Excluded)
+        {
+            rows.Add(new ResultRow
+            {
+                Text = Describe(excluded.Series) + " — не загружена",
+                Note = excluded.Issues.Count == 0
+                    ? "Причина в рабочей копии не сохранена."
+                    : string.Join(" ", excluded.Issues.Select(Describe)),
+                Severity = ResultSeverity.Blocking,
+            });
+        }
+
+        return rows;
+    }
+
+    private static string Describe(ImagingSeries series)
+    {
+        var geometry = series.Geometry;
+        var dimensions = geometry.Dimensions;
+
+        var text = NameOf(series.Weighting) + ", " + NameOf(series.Tier) + ", "
+            + dimensions.Columns.ToString(CultureInfo.CurrentCulture) + "×"
+            + dimensions.Rows.ToString(CultureInfo.CurrentCulture) + "×"
+            + dimensions.Slices.ToString(CultureInfo.CurrentCulture)
+            + ", шаг срезов " + Number(geometry.SliceSpacingMillimetres) + " мм";
+
+        // Постконтрастная серия называется постконтрастной: конвейер работает
+        // только по нативным сериям, и по одной геометрии этого не увидеть.
+        return series.IsContrastEnhanced ? text + ", постконтрастная" : text;
     }
 
     private static List<ResultRow> DescribeOutcome(AnalysisOutcome outcome) => outcome switch

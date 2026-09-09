@@ -94,6 +94,23 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
             .Where(series => !blockedSeries.Contains(series.PseudonymousSeriesId))
             .ToList();
 
+        // Отброшенные серии описываются, а не исчезают. Данные их на диск
+        // не попадают — только описание и замечание, по которому видно,
+        // почему серия ушла в ручной контроль.
+        var excludedSeries = study.Series
+            .Where(series => blockedSeries.Contains(series.PseudonymousSeriesId))
+            .Select(series => new ExcludedSeries
+            {
+                Series = series,
+                Issues = [.. scan.Findings
+                    .Where(finding => string.Equals(
+                        finding.PseudonymousSeriesId,
+                        series.PseudonymousSeriesId,
+                        StringComparison.Ordinal))
+                    .Select(finding => finding.Issue)],
+            })
+            .ToList();
+
         var retainedIds = retainedSeries
             .Select(series => series.PseudonymousSeriesId)
             .ToHashSet(StringComparer.Ordinal);
@@ -141,6 +158,7 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
         {
             Study = study with { Series = retainedSeries },
             VolumeReference = session.Directory,
+            ExcludedSeries = excludedSeries,
         };
     }
 

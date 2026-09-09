@@ -228,7 +228,12 @@ public sealed class CompositionRoot : IDisposable
         {
             View = new StudyView(volume, mask),
             Report = this.report,
-            Series = series,
+            Analysed = new Results.AnalysedStudy
+            {
+                Study = workingCopy.Study,
+                Analysed = series,
+                Excluded = workingCopy.ExcludedSeries,
+            },
         };
     }
 
