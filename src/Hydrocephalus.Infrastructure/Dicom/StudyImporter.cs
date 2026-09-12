@@ -78,8 +78,49 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
                 "The import source contains more than one study; a single study must be selected before import.");
         }
 
-        var study = scan.Studies[0];
+        return await this.CreateWorkingCopyAsync(scan, scan.Studies[0], cancellationToken)
+            .ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Импортирует одно исследование из уже разобранного источника.
+    ///
+    /// Ретроспективная выборка лежит папками на много пациентов, а контракт
+    /// <see cref="ImportAsync"/> намеренно отказывает источнику с несколькими
+    /// исследованиями: в интерфейсе выбирать за врача нельзя. Пакетной обработке
+    /// выбор делать можно — исследование названо явно псевдонимом, — и источник
+    /// при этом не читается заново: разбор уже знает, какие файлы к какой серии
+    /// относятся.
+    /// </summary>
+    /// <param name="scan">Результат разбора источника.</param>
+    /// <param name="pseudonymousStudyId">Псевдонимный идентификатор исследования.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Рабочая копия исследования.</returns>
+    /// <exception cref="DomainRuleViolationException">Если разбор не знает такого исследования.</exception>
+    public async Task<WorkingCopy> ImportStudyAsync(
+        DicomScanResult scan,
+        string pseudonymousStudyId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scan);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pseudonymousStudyId);
+
+        var study = scan.Studies.FirstOrDefault(item => string.Equals(
+                item.PseudonymousStudyId,
+                pseudonymousStudyId,
+                StringComparison.Ordinal))
+            ?? throw new DomainRuleViolationException(
+                "The scanned source does not contain the requested study.");
+
+        return await this.CreateWorkingCopyAsync(scan, study, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<WorkingCopy> CreateWorkingCopyAsync(
+        DicomScanResult scan,
+        ImagingStudy study,
+        CancellationToken cancellationToken)
+    {
         // Серия с блокирующим замечанием — прежде всего вписанные в изображение
         // аннотации — в рабочую копию не попадает (ADR 0003): такие серии уходят
         // в ручной контроль. Если пригодных серий не остаётся, исследование
@@ -131,7 +172,7 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
         try
         {
             var written = await this.WriteWorkingCopyAsync(
-                    sourceReference,
+                    scan,
                     session,
                     study.PseudonymousSubjectId,
                     retainedIds,
@@ -218,23 +259,28 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
         ProtectedDirectory.Create(directory, this.workingCopyOptions.RestrictAccessToCurrentUser);
 
     private async Task<Dictionary<string, int>> WriteWorkingCopyAsync(
-        string sourceReference,
+        DicomScanResult scan,
         WorkingCopySession session,
         string pseudonymousSubjectId,
         HashSet<string> retainedSeriesIds,
         CancellationToken cancellationToken)
     {
         var deidentifier = new DicomDeidentifier(this.importOptions);
-        var walk = new ImportSourceWalk(this.importOptions, sourceReference);
         var written = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        // Отказы второго прохода отбрасываются: те же файлы уже отклонены разбором
-        // и попали в его результат. Общий обход задаёт обоим проходам одни и те же
-        // лимиты — но не одинаковый набор файлов, если каталог меняется между
-        // проходами. Расхождение ловит проверка числа записанных срезов.
-        var ignoredRejections = new List<ImportRejection>();
+        // Пишутся файлы, принятые разбором, а не весь источник заново. Причин две.
+        // Повтор уже принятого экземпляра разбор отбросил, а второй обход прочитал
+        // бы его снова и насчитал срезов больше, чем есть; в выборке таких
+        // повторов тысячи. И источник на много исследований не читается целиком
+        // ради каждого из них. Если файл исчез или изменился после разбора,
+        // расхождение ловит проверка числа записанных срезов.
+        var files = retainedSeriesIds
+            .Order(StringComparer.Ordinal)
+            .SelectMany(seriesId => scan.SourceFilesBySeries.TryGetValue(seriesId, out var paths)
+                ? paths
+                : []);
 
-        foreach (var file in walk.EnumerateFiles(ignoredRejections))
+        foreach (var path in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -242,7 +288,7 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
 
             try
             {
-                source = await DicomFile.OpenAsync(file.FullName).ConfigureAwait(false);
+                source = await DicomFile.OpenAsync(path).ConfigureAwait(false);
             }
             catch (Exception exception)
                 when (exception is DicomFileException or IOException or InvalidOperationException)

@@ -24,4 +24,15 @@ public sealed record DicomScanResult
 
     /// <summary>Замечания к принятым сериям.</summary>
     public required IReadOnlyList<SeriesFinding> Findings { get; init; }
+
+    /// <summary>
+    /// Принятые файлы каждой серии, по псевдонимному идентификатору серии.
+    ///
+    /// Внутреннее, а не открытое: пути источника содержат фамилии пациентов,
+    /// и наружу из инфраструктуры они не выходят. Нужны импорту, чтобы записать
+    /// ровно те экземпляры, которые принял разбор, — без повторов и без второго
+    /// обхода источника.
+    /// </summary>
+    internal IReadOnlyDictionary<string, IReadOnlyList<string>> SourceFilesBySeries { get; init; } =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 }

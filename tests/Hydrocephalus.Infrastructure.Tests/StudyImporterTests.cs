@@ -275,6 +275,90 @@ public sealed class StudyImporterTests : IDisposable
     }
 
     [Fact]
+    public async Task A_file_exported_twice_does_not_break_the_import()
+    {
+        // В реальной выборке повтор уже принятого экземпляра — 2805 файлов:
+        // одна и та же серия лежит в выгрузке дважды. Разбор отбрасывает повтор
+        // по SOPInstanceUID, и запись обязана делать то же, иначе она насчитает
+        // срезов больше, чем нашёл разбор, и объявит рабочую копию неполной.
+        for (var index = 0; index < 3; index++)
+        {
+            var uid = SyntheticDicom.WriteSlice(
+                Path.Combine(this.source.FullName, "first", index + ".dcm"),
+                studyUid: "1.2.3.1",
+                seriesUid: "1.2.3.11",
+                patientId: "P-1",
+                slicePosition: index);
+
+            SyntheticDicom.WriteSlice(
+                Path.Combine(this.source.FullName, "copy", index + ".dcm"),
+                studyUid: "1.2.3.1",
+                seriesUid: "1.2.3.11",
+                patientId: "P-1",
+                slicePosition: index,
+                sopInstanceUid: uid);
+        }
+
+        var importer = this.Importer();
+        var result = await importer.ImportAsync(this.source.FullName, CancellationToken.None);
+
+        Assert.Equal(3, Assert.Single(result.Study.Series).Geometry.Dimensions.Slices);
+        Assert.Equal(3, (await ReadAllAsync(importer, result)).Count);
+    }
+
+    [Fact]
+    public async Task One_study_is_imported_from_a_source_holding_several()
+    {
+        // Ретроспективная выборка лежит папками на много пациентов. Импорт
+        // выбранного исследования берёт только его серии и не читает источник
+        // заново: повторный обход на каждое из 136 исследований превратил бы
+        // пакетный замер в сутки чтения диска.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.source.FullName, "a.dcm"),
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "P-1");
+
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.source.FullName, "b.dcm"),
+            studyUid: "1.2.3.2",
+            seriesUid: "1.2.3.22",
+            patientId: "P-2");
+
+        var options = new DicomImportOptions { PseudonymSalt = Salt };
+        var scan = await new DicomStudyScanner(options).ScanAsync(this.source.FullName, CancellationToken.None);
+
+        var importer = this.Importer();
+        var wanted = scan.Studies[1];
+
+        var result = await importer.ImportStudyAsync(scan, wanted.PseudonymousStudyId, CancellationToken.None);
+
+        Assert.Equal(wanted.PseudonymousStudyId, result.Study.PseudonymousStudyId);
+        Assert.Equal(
+            Assert.Single(wanted.Series).PseudonymousSeriesId,
+            Assert.Single(result.Study.Series).PseudonymousSeriesId);
+
+        // Файл соседнего исследования в рабочую копию не попал.
+        Assert.Single(await ReadAllAsync(importer, result));
+    }
+
+    [Fact]
+    public async Task A_study_absent_from_the_scan_is_refused()
+    {
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.source.FullName, "a.dcm"),
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "P-1");
+
+        var scan = await new DicomStudyScanner(new DicomImportOptions { PseudonymSalt = Salt })
+            .ScanAsync(this.source.FullName, CancellationToken.None);
+
+        await Assert.ThrowsAsync<DomainRuleViolationException>(
+            () => this.Importer().ImportStudyAsync(scan, "no-such-study", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Source_without_a_readable_study_is_refused()
     {
         await File.WriteAllTextAsync(

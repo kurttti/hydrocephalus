@@ -99,7 +99,7 @@ public sealed class DicomStudyScanner
                 seriesBuilders[seriesUid] = builder;
             }
 
-            builder.AddInstance(dataset);
+            builder.AddInstance(dataset, file.FullName);
         }
 
         var studies = BuildStudies(seriesBuilders.Values, findings);
@@ -109,6 +109,10 @@ public sealed class DicomStudyScanner
             Studies = studies,
             Rejections = rejections,
             Findings = findings,
+            SourceFilesBySeries = seriesBuilders.Values.ToDictionary(
+                builder => builder.PseudonymousSeriesId,
+                builder => builder.Files,
+                StringComparer.Ordinal),
         };
     }
 
@@ -154,6 +158,8 @@ public sealed class DicomStudyScanner
         // срезов, — без них «совпадающие положения» нечем объяснить.
         private readonly List<SliceSample> samples = [];
 
+        private readonly List<string> files = [];
+
         internal SeriesBuilder(DicomDataset first, DicomImportOptions options)
         {
             this.first = first;
@@ -176,8 +182,20 @@ public sealed class DicomStudyScanner
 
         internal string PseudonymousSubjectId { get; }
 
-        internal void AddInstance(DicomDataset dataset) =>
+        internal string PseudonymousSeriesId => Pseudonyms.Derive(
+            this.options.PseudonymSalt,
+            "series",
+            this.first.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty));
+
+        // Только принятые экземпляры: повтор уже принятого SOPInstanceUID сюда
+        // не попадает, и запись не насчитает срезов больше, чем нашёл разбор.
+        internal IReadOnlyList<string> Files => this.files;
+
+        internal void AddInstance(DicomDataset dataset, string path)
+        {
             this.samples.Add(DicomGeometryReader.ReadSample(dataset));
+            this.files.Add(path);
+        }
 
         internal ImagingSeries Build(List<SeriesFinding> findings)
         {
