@@ -90,6 +90,97 @@ public sealed class DeidentificationTests
     }
 
     [Fact]
+    public void Digits_of_a_short_identifier_inside_a_coordinate_are_not_a_leak()
+    {
+        // Прогон по выборке: серийный номер аппарата и цифровой PatientID
+        // «находились» в координатах среза, номер исследования — в новом UID.
+        // Такие совпадения случайны и отказывали большинству исследований.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "24681",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.DeviceSerialNumber, "13579");
+                dataset.AddOrUpdate(DicomTag.StudyID, "4242");
+                dataset.AddOrUpdate(DicomTag.ImagePositionPatient, -124681.5m, 113579.25m, 424242.0m);
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Empty(DeidentificationAudit.Inspect(
+            result.Dataset,
+            fileMetaInfo: null,
+            result.SourceSecrets,
+            relativePath: "series/instance.dcm"));
+    }
+
+    [Fact]
+    public void Patient_weight_is_not_searched_for_as_an_identifier()
+    {
+        // Вес «100» совпадал с кодом кодировки ISO_IR 100 и отказывал четверти
+        // выборки. Вес — физическая величина, а не идентификатор; сам тег
+        // по-прежнему удаляется, и это проверяется по списку профиля.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.SpecificCharacterSet, "ISO_IR 100");
+                dataset.AddOrUpdate(DicomTag.PatientWeight, 100m);
+                dataset.AddOrUpdate(DicomTag.PatientSize, 1.75m);
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.False(result.Dataset.Contains(DicomTag.PatientWeight));
+        Assert.Empty(DeidentificationAudit.Inspect(
+            result.Dataset,
+            fileMetaInfo: null,
+            result.SourceSecrets,
+            relativePath: "series/instance.dcm"));
+    }
+
+    [Fact]
+    public void A_short_identifier_copied_into_text_is_still_a_leak()
+    {
+        // Отдельное число ищется по-прежнему: идентификатор, вписанный
+        // в сохраняемое текстовое поле, — ровно то, что проверка должна ловить.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientId: "24681",
+            customize: dataset => dataset.AddOrUpdate(
+                DicomTag.ManufacturerModelName,
+                "Skyra ID 24681"));
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Contains(
+            DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm"),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
+    [Theory]
+    [InlineData("ISO_IR 100", "100", true)]
+    [InlineData("-124681.5", "24681", false)]
+    [InlineData("2.25.1234567890123", "4567", false)]
+    [InlineData("ID 24681", "24681", true)]
+    [InlineData("24681", "24681", true)]
+    [InlineData("19551103101500", "19551103", true)]
+    [InlineData("Skyra Ivanov", "Ivanov", true)]
+    [InlineData("ab-MRN-778899", "MRN-778899", true)]
+    public void Short_numbers_match_whole_long_numbers_and_text_match_inside(
+        string value,
+        string secret,
+        bool expected)
+    {
+        // Восемь цифр — дата рождения — ищутся подстрокой: дата внутри DT
+        // и есть утечка. Текст ищется подстрокой всегда.
+        Assert.Equal(expected, DeidentificationAudit.Contains(value, secret));
+    }
+
+    [Fact]
     public void Audit_reports_a_source_value_left_in_the_path()
     {
         var source = SyntheticDicom.BuildSlice(

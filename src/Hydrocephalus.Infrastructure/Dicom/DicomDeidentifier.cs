@@ -103,6 +103,15 @@ internal sealed class DicomDeidentifier
                 continue;
             }
 
+            // Рост и вес пациента профиль удаляет, но искать их значения в результате
+            // бессмысленно: это физические величины, а не идентификаторы, и вес «100»
+            // совпадает с кодом кодировки ISO_IR 100 у каждого второго файла.
+            // Удаление самих тегов по-прежнему проверяется по списку профиля.
+            if (item.Tag == DicomTag.PatientWeight || item.Tag == DicomTag.PatientSize)
+            {
+                continue;
+            }
+
             var isSecret = DeidentificationProfile.IsRemoved(item.Tag)
                 || item.ValueRepresentation == DicomVR.PN
                 || (item.ValueRepresentation == DicomVR.UI

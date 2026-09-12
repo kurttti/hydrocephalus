@@ -53,6 +53,18 @@ internal static class DeidentificationAudit
     internal const string PathLocation = "path";
 
     /// <summary>
+    /// Длина, начиная с которой число ищется подстрокой: восемь цифр — дата DA.
+    /// </summary>
+    internal const int LongNumberLength = 8;
+
+    // Разделители числовых лексем: всё, кроме цифр и точки. Знак минус тоже
+    // разделитель, иначе «-12345» не совпало бы с «12345».
+    private static readonly char[] NotNumeric = [.. Enumerable
+        .Range(0, 128)
+        .Select(code => (char)code)
+        .Where(character => !char.IsAsciiDigit(character) && character != '.')];
+
+    /// <summary>
     /// Проверяет деидентифицированный экземпляр.
     /// </summary>
     /// <param name="dataset">Обработанный набор тегов.</param>
@@ -145,7 +157,7 @@ internal static class DeidentificationAudit
                     continue;
                 }
 
-                if (secrets.Any(secret => value.Contains(secret, StringComparison.OrdinalIgnoreCase)))
+                if (secrets.Any(secret => Contains(value, secret)))
                 {
                     violations.Add(new DeidentificationViolation(
                         DeidentificationViolationCode.ResidualSourceValue,
@@ -155,6 +167,51 @@ internal static class DeidentificationAudit
             }
         }
     }
+
+    /// <summary>
+    /// Встречается ли исходное значение в значении результата.
+    ///
+    /// Короткое число ищется как отдельное число, а не как подстрока. Прогон
+    /// по ретроспективной выборке показал, что подстрочный поиск коротких чисел
+    /// отказывает большинству исследований и ни разу не находит утечку:
+    /// серийный номер аппарата «находился» в координатах среза, номер
+    /// исследования — в заново созданном UID вида 2.25.…, цифровой PatientID —
+    /// в ImagePositionPatient. Три-пять цифр подряд встречаются в любом
+    /// числовом поле случайно.
+    ///
+    /// Отдельное число при этом по-прежнему находится: идентификатор, скопированный
+    /// в текстовое поле («ID 12345»), даёт нарушение. Длинные числа — даты
+    /// рождения, длинные номера карт — ищутся подстрокой, как раньше: случайное
+    /// совпадение восьми цифр подряд пренебрежимо, а дата рождения внутри
+    /// значения DT — именно та утечка, ради которой поиск ведётся.
+    ///
+    /// Текстовые значения ищутся подстрокой без изменений.
+    /// </summary>
+    /// <param name="value">Значение результата.</param>
+    /// <param name="secret">Исходное значение.</param>
+    /// <returns><see langword="true"/>, если исходное значение найдено.</returns>
+    internal static bool Contains(string value, string secret)
+    {
+        if (!IsShortNumber(secret))
+        {
+            return value.Contains(secret, StringComparison.OrdinalIgnoreCase);
+        }
+
+        foreach (var token in value.Split(NotNumeric, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (string.Equals(token.Trim('.'), secret.Trim('.'), StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsShortNumber(string secret) =>
+        secret.Length < LongNumberLength
+        && secret.Any(char.IsAsciiDigit)
+        && secret.All(character => char.IsAsciiDigit(character) || character == '.');
 
     private static string Describe(DicomTag tag) =>
         $"({tag.Group:x4},{tag.Element:x4})";
