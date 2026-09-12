@@ -44,6 +44,10 @@ public sealed class CompositionRoot : IDisposable
 
     private readonly Hydrocephalus.Application.ExportReportUseCase exportReport;
 
+    private readonly Hydrocephalus.Application.ReadAuditJournalUseCase readAuditJournal;
+
+    private readonly ApplicationPaths paths;
+
     // Открытое исследование держится здесь, а не в окне: рабочая копия — это
     // расшифрованные данные пациента на диске, и решать, когда они исчезнут,
     // должен тот же слой, который их создал.
@@ -55,20 +59,24 @@ public sealed class CompositionRoot : IDisposable
         Hydrocephalus.Application.AnalyzeStudyUseCase analyzeStudy,
         Hydrocephalus.Application.ExportDatasetManifestUseCase exportDatasetManifest,
         Hydrocephalus.Application.ExportReportUseCase exportReport,
+        Hydrocephalus.Application.ReadAuditJournalUseCase readAuditJournal,
         StudyImporter importer,
         HashChainAuditLog auditLog,
         PipelineIdentity pipeline,
         Actor actor,
-        WorkingCopyRetentionPolicy retention)
+        WorkingCopyRetentionPolicy retention,
+        ApplicationPaths paths)
     {
         this.AnalyzeStudy = analyzeStudy;
         this.ExportDatasetManifest = exportDatasetManifest;
         this.exportReport = exportReport;
+        this.readAuditJournal = readAuditJournal;
         this.importer = importer;
         this.auditLog = auditLog;
         this.Pipeline = pipeline;
         this.Actor = actor;
         this.Retention = retention;
+        this.paths = paths;
     }
 
     /// <summary>Сценарий анализа исследования.</summary>
@@ -167,6 +175,13 @@ public sealed class CompositionRoot : IDisposable
             auditLog,
             TimeProvider.System);
 
+        // Читатель журнала отдельно от писателя: писать в журнал должны все
+        // сценарии, а читать его — право обслуживания установки.
+        var readAuditJournal = new Hydrocephalus.Application.ReadAuditJournalUseCase(
+            new AuditJournalReader(paths.AuditLogPath),
+            auditLog,
+            TimeProvider.System);
+
         // Файл настроек лежит рядом с исполняемым файлом, а не в профиле
         // пользователя: роль задаёт тот, кто разворачивает приложение, и она
         // не должна меняться от того, под кем оно запущено.
@@ -176,11 +191,13 @@ public sealed class CompositionRoot : IDisposable
             useCase,
             exportDatasetManifest,
             exportReport,
+            readAuditJournal,
             importer,
             auditLog,
             pipeline,
             actor,
-            retention);
+            retention,
+            paths);
     }
 
     /// <summary>
@@ -385,6 +402,39 @@ public sealed class CompositionRoot : IDisposable
             cancellationToken).ConfigureAwait(false);
 
         return ReportOutline.Build(JsonReportExportStore.Serialize(export));
+    }
+
+    /// <summary>
+    /// Собирает состояние установки для экрана администрирования.
+    ///
+    /// Право проверяет сценарий, а не экран: выключенная кнопка — удобство,
+    /// а не разграничение. Журнал показывает работу всей установки, и доступ
+    /// к нему не вытекает из права разбирать один случай.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Журнал аудита вместе с расположением файлов и состоянием установки.</returns>
+    /// <exception cref="AccessDeniedException">
+    /// Если у роли нет права на чтение журнала.
+    /// </exception>
+    public async Task<Administration.AdministrationSnapshot> OpenAdministrationAsync(
+        CancellationToken cancellationToken)
+    {
+        var journal = await this.readAuditJournal
+            .ExecuteAsync(this.Actor, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new Administration.AdministrationSnapshot
+        {
+            Journal = journal,
+            AuditLogPath = this.paths.AuditLogPath,
+            WorkingCopyRoot = this.paths.WorkingCopyRoot,
+            ReportRoot = this.paths.ReportRoot,
+            ReportExportRoot = this.paths.ReportExportRoot,
+            DatasetManifestRoot = this.paths.DatasetManifestRoot,
+            Retention = this.Retention,
+            PatientRegistryConfigured = PatientRegistryConfigured,
+            Pipeline = this.Pipeline,
+        };
     }
 
     /// <summary>

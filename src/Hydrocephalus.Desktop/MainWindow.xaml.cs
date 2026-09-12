@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Hydrocephalus.Desktop.Administration;
 using Hydrocephalus.Desktop.Composition;
 using Hydrocephalus.Desktop.Reporting;
 using Hydrocephalus.Desktop.Results;
@@ -223,6 +224,36 @@ public partial class MainWindow : Window
             .ConfigureAwait(true);
     }
 
+    private async void OnAdministrationClick(object sender, RoutedEventArgs e)
+    {
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            this.StatusText.Text = "Приложение не собрано; журнал недоступен.";
+            return;
+        }
+
+        try
+        {
+            var snapshot = await composition.OpenAdministrationAsync(CancellationToken.None)
+                .ConfigureAwait(true);
+
+            new AdministrationWindow(AdministrationReadout.Describe(snapshot)) { Owner = this }
+                .ShowDialog();
+        }
+        catch (AccessDeniedException)
+        {
+            // Отказ уже записан в журнал сценарием: попытка, не оставившая
+            // следа, ничем не отличается от её отсутствия.
+            this.StatusText.Text = "Роль не даёт права на журнал аудита.";
+        }
+        catch (Exception exception)
+        {
+            this.StatusText.Text = "Журнал не прочитан: " + exception.Message;
+        }
+    }
+
     private async void OnExportManifestClick(object sender, RoutedEventArgs e) =>
         await this.ExportAsync(
             "манифест датасета",
@@ -287,6 +318,15 @@ public partial class MainWindow : Window
             current?.Can(Capability.ExportDatasetManifest) == true,
             registryNeeded: false,
             this.hasOpenStudy);
+
+        // Журнал ведётся независимо от того, открыто ли исследование, поэтому
+        // hasStudy здесь не требуется: экран администрирования показывает
+        // установку, а не текущий случай.
+        Configure(
+            this.AdministrationButton,
+            current?.Can(Capability.ReadAuditLog) == true,
+            registryNeeded: false,
+            hasStudy: true);
 
         static void Configure(Button button, bool granted, bool registryNeeded, bool hasStudy)
         {

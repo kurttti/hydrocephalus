@@ -45,6 +45,15 @@
                         Padding="10,4"
                         IsEnabled="False"
                         Click="OnExportManifestClick" />
+
+                <!-- Администрирование не относится к разбору случая и не зависит
+                     от того, открыто ли исследование: журнал ведётся всегда. -->
+                <Button x:Name="AdministrationButton"
+                        Content="_Администрирование"
+                        Margin="18,0,0,0"
+                        Padding="10,4"
+                        IsEnabled="False"
+                        Click="OnAdministrationClick" />
             </StackPanel>
 
             <StackPanel Orientation="Horizontal">
