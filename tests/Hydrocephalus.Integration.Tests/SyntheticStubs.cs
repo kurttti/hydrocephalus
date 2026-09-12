@@ -79,6 +79,12 @@ internal static class Synthetic
 /// Освобождение запоминается: сценарий обязан убрать копию на успехе, ошибке
 /// и отмене, и проверять это надо здесь.
 /// </summary>
+/// <summary>Часы, стоящие на месте: без них два прогона отличаются отметкой времени.</summary>
+internal sealed class FixedTime(DateTimeOffset moment) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => moment;
+}
+
 internal sealed class StubImporter(ImagingStudy study) : IStudyImporter, IWorkingCopyLifetime
 {
     private readonly List<string> released = [];

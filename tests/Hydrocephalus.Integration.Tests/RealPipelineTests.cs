@@ -197,7 +197,49 @@ public sealed class RealPipelineTests : IDisposable
         }
     }
 
-    private Task<AnalysisReport> ExecuteAsync(IReportStore? store = null)
+    [Fact]
+    public async Task The_same_input_gives_a_byte_identical_report()
+    {
+        // «Воспроизводимый результат для одного model package и одного входа»
+        // (docs/windows/README.md) до сих пор ничем не проверялся. Арифметика
+        // в одном процессе детерминирована и так; настоящий источник расхождений
+        // здесь — порядок: множество принятых экземпляров при разборе, порядок
+        // обхода файлов, словари параметров замечаний, порядок серий
+        // в исследовании. Канонический JSON ловит их все разом, поэтому
+        // сравниваются именно его байты, а не поля отчёта.
+        var clock = new FixedTime(new DateTimeOffset(2026, 9, 12, 10, 0, 0, TimeSpan.Zero));
+
+        // Две серии и неполное покрытие по оси срезов: на одной чистой серии
+        // сравнивать было бы нечего — ни порядка, ни замечаний, и тест проходил
+        // бы всегда. 60 срезов по 1 мм — это 60 мм при минимуме 100, то есть
+        // замечание с числами, но не препятствие: анализ доходит до конца.
+        this.WriteSeries(slices: 60);
+
+        this.WriteSeries(
+            sliceThickness: 6.0m,
+            acquisitionType: "2D",
+            slices: 20,
+            seriesDescription: "T2 TSE",
+            seriesUid: "1.2.3.12",
+            filePrefix: "AX");
+
+        var first = await this.ExecuteAsync(clock: clock);
+        var second = await this.ExecuteAsync(clock: clock);
+
+        // Сначала — что сравнивать есть что. Отчёт без замечаний даёт почти
+        // постоянный JSON, и равенство байтов не доказывало бы ничего.
+        var issue = Assert.Single(
+            first.Quality.Issues,
+            candidate => candidate.Parameters.Count > 0);
+
+        Assert.NotEmpty(issue.Parameters);
+
+        Assert.Equal(
+            CanonicalReportJson.Serialize(first),
+            CanonicalReportJson.Serialize(second));
+    }
+
+    private Task<AnalysisReport> ExecuteAsync(IReportStore? store = null, TimeProvider? clock = null)
     {
         var importer = new StudyImporter(
             new DicomImportOptions { PseudonymSalt = Salt },
@@ -219,7 +261,7 @@ public sealed class RealPipelineTests : IDisposable
                 Synthetic.Pipeline()),
             store ?? this.reports,
             this.audit,
-            TimeProvider.System);
+            clock ?? TimeProvider.System);
 
         return useCase.ExecuteAsync(this.source.FullName, Synthetic.Clinician(), progress: null, CancellationToken.None);
     }
@@ -230,19 +272,24 @@ public sealed class RealPipelineTests : IDisposable
         decimal sliceThickness = 1.0m,
         string acquisitionType = "3D",
         int slices = 120,
-        string seriesDescription = "T1 MPRAGE")
+        string seriesDescription = "T1 MPRAGE",
+        string seriesUid = "1.2.3.11",
+        string filePrefix = "IM",
+        decimal? sliceSpacing = null)
     {
+        var step = sliceSpacing ?? sliceThickness;
+
         for (var index = 0; index < slices; index++)
         {
             SyntheticStudyFiles.WriteSlice(
-                Path.Combine(this.source.FullName, $"IM{index:D4}.dcm"),
+                Path.Combine(this.source.FullName, $"{filePrefix}{index:D4}.dcm"),
                 studyUid: "1.2.3.1",
-                seriesUid: "1.2.3.11",
+                seriesUid: seriesUid,
                 patientId: "P-1",
                 seriesDescription: seriesDescription,
                 acquisitionType: acquisitionType,
                 sliceThickness: sliceThickness,
-                slicePosition: index * sliceThickness);
+                slicePosition: index * step);
         }
     }
 }
