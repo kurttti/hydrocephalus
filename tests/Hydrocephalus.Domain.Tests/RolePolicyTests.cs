@@ -73,7 +73,26 @@ public sealed class RolePolicyTests
         // и совмещать их по умолчанию значит раздавать доступ без нужды.
         var administrator = Actor.Create("admin-1", ClinicalRole.Administrator);
 
-        Assert.Empty(administrator.Capabilities);
+        Assert.False(administrator.Can(Capability.AnalyseStudy));
+        Assert.False(administrator.Can(Capability.ExportDeidentifiedReport));
+        Assert.False(administrator.Can(Capability.ExportClinicalReport));
+        Assert.False(administrator.Can(Capability.ExportDatasetManifest));
+    }
+
+    [Fact]
+    public void Only_an_administrator_reads_the_audit_log()
+    {
+        // Журнал показывает работу всей установки. Разбор одного случая
+        // этого не требует, а обслуживание — требует; данных пациента
+        // в журнале нет, поэтому право относится ко второму, а не к первому.
+        Assert.True(Actor.Create("admin-1", ClinicalRole.Administrator)
+            .Can(Capability.ReadAuditLog));
+
+        Assert.False(Actor.Create("clinician-1", ClinicalRole.Clinician)
+            .Can(Capability.ReadAuditLog));
+
+        Assert.False(Actor.Create("researcher-1", ClinicalRole.Researcher)
+            .Can(Capability.ReadAuditLog));
     }
 
     [Fact]

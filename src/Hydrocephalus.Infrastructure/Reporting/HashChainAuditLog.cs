@@ -120,6 +120,11 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
 
     /// <summary>
     /// Проверяет целостность журнала.
+    ///
+    /// Обход выполняет <see cref="AuditJournalReader"/>: цепочка читается
+    /// и проверяется одним и тем же кодом. Вторая реализация той же проверки
+    /// разошлась бы с первой молча, и экран администрирования показывал бы
+    /// не то, что показывает проверка.
     /// </summary>
     /// <param name="path">Путь файла журнала.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
@@ -128,36 +133,9 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        if (!File.Exists(path))
-        {
-            return new AuditVerification(IsIntact: true, VerifiedRecords: 0, FirstBrokenRecord: null, GenesisHash);
-        }
+        var walk = await AuditJournalReader.WalkAsync(path, cancellationToken).ConfigureAwait(false);
 
-        var lines = await File.ReadAllLinesAsync(path, Encoding.UTF8, cancellationToken)
-            .ConfigureAwait(false);
-
-        var previous = GenesisHash;
-        var verified = 0;
-
-        for (var index = 0; index < lines.Length; index++)
-        {
-            if (string.IsNullOrWhiteSpace(lines[index]))
-            {
-                continue;
-            }
-
-            if (!TryReadRecord(lines[index], out var payload, out var recordedPrevious, out var recordedHash)
-                || !string.Equals(recordedPrevious, previous, StringComparison.Ordinal)
-                || !string.Equals(ComputeHash(previous, payload), recordedHash, StringComparison.Ordinal))
-            {
-                return new AuditVerification(IsIntact: false, verified, FirstBrokenRecord: index, previous);
-            }
-
-            previous = recordedHash;
-            verified++;
-        }
-
-        return new AuditVerification(IsIntact: true, verified, FirstBrokenRecord: null, previous);
+        return walk.Verification;
     }
 
     private static string BuildLine(string payload, string previousHash, string hash)
@@ -176,7 +154,7 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private static bool TryReadRecord(
+    internal static bool TryReadRecord(
         string line,
         out string payload,
         out string previousHash,
@@ -226,12 +204,27 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
         return GenesisHash;
     }
 
-    private static string ComputeHash(string previousHash, string payload) =>
+    internal static string ComputeHash(string previousHash, string payload) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(previousHash + "" + payload)));
 
     /// <summary>
     /// Сериализует событие в устойчивую строку.
     /// Порядок полей задан кодом: иначе одна и та же запись давала бы разный хеш.
+    ///
+    /// Записываются **все** поля события. Поле, оставленное без записи, теряется
+    /// безвозвратно — журнал единственное место, где оно хранится. Без инициатора
+    /// отказ по правам превращается в «кто-то попытался»; без варианта экспорта
+    /// запись об экспорте не отвечает на главный вопрос — ушли ли наружу
+    /// идентификаторы пациента; без итога уборки остаётся «что-то убрали» там,
+    /// где записывалось «данные пациента должны были исчезнуть и не исчезли».
+    ///
+    /// Пустые поля записываются как null, а не пропускаются: состав записи
+    /// не зависит от данных, иначе событие без инициатора не отличить
+    /// от события, у которого инициатора забыли записать.
+    ///
+    /// Поля, добавленные позже, не делают прежние записи недействительными:
+    /// проверка пересчитывает хеш от содержимого, лежащего в файле, а не от
+    /// заново собранного. Журнал установки переживает обновление приложения.
     /// </summary>
     private static string SerializeEvent(AuditEvent auditEvent)
     {
@@ -246,6 +239,23 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
                 auditEvent.OccurredAt.ToUniversalTime().ToString(TimestampFormat, CultureInfo.InvariantCulture));
             writer.WriteString("pseudonymousStudyId", auditEvent.PseudonymousStudyId);
             writer.WriteString("modelVersion", auditEvent.ModelVersion);
+            writer.WriteString("pseudonymousActorId", auditEvent.PseudonymousActorId);
+            writer.WriteString("reportExportVariant", auditEvent.ReportExportVariant?.ToString());
+
+            if (auditEvent.Retention is { } retention)
+            {
+                writer.WriteStartObject("retention");
+                writer.WriteNumber("expired", retention.Expired);
+                writer.WriteNumber("orphaned", retention.Orphaned);
+                writer.WriteNumber("failed", retention.Failed);
+                writer.WriteNumber("timeToLiveHours", retention.TimeToLiveHours);
+                writer.WriteEndObject();
+            }
+            else
+            {
+                writer.WriteNull("retention");
+            }
+
             writer.WriteEndObject();
         }
 

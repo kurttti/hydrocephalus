@@ -20,10 +20,21 @@ public sealed class RoleReadoutTests
         Assert.DoesNotContain("нет", Describe(role), StringComparison.Ordinal);
 
     [Theory]
-    [InlineData(ClinicalRole.Administrator)]
     [InlineData(ClinicalRole.Unspecified)]
     public void A_role_without_rights_says_so(ClinicalRole role) =>
         Assert.Contains("доступных операций нет", Describe(role), StringComparison.Ordinal);
+
+    [Fact]
+    public void A_role_that_cannot_open_a_study_says_so()
+    {
+        // У администратора есть ровно одно право — журнал аудита, — и без
+        // этой оговорки приложение выглядело бы сломанным: кнопки на месте,
+        // а открыть исследование нельзя.
+        var text = Describe(ClinicalRole.Administrator);
+
+        Assert.DoesNotContain("доступных операций нет", text, StringComparison.Ordinal);
+        Assert.Contains("разбор исследований недоступен", text, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void A_configured_administrator_reads_differently_from_an_unconfigured_installation()
