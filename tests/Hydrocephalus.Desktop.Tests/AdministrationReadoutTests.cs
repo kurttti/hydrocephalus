@@ -44,7 +44,7 @@ public sealed class AdministrationReadoutTests
         // проверка не делает.
         var rows = Section(Describe(Journal(Verified(1))), "Целостность журнала");
 
-        var anchor = Assert.Single(rows, row => row.Text.Contains("Хеш последней", StringComparison.Ordinal));
+        var anchor = Assert.Single(rows, row => row.Text.Contains("Хеш последней проверенной", StringComparison.Ordinal));
 
         Assert.Contains("aaaa", anchor.Text, StringComparison.Ordinal);
         Assert.Contains("вне журнала", anchor.Note ?? string.Empty, StringComparison.Ordinal);
@@ -91,6 +91,21 @@ public sealed class AdministrationReadoutTests
         Assert.Equal(ResultSeverity.Blocking, broken.Severity);
         Assert.Equal(ResultSeverity.Warning, beyond.Severity);
         Assert.NotEqual(broken.Note, beyond.Note);
+    }
+
+    [Fact]
+    public void An_unreadable_record_has_no_doubled_space()
+    {
+        var journal = Journal(new AuditRecord
+        {
+            Number = 1,
+            Integrity = AuditRecordIntegrity.Broken,
+            IsReadable = false,
+        });
+
+        var row = Assert.Single(Section(Describe(journal), "События"));
+
+        Assert.DoesNotContain("  ", row.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -213,7 +228,7 @@ public sealed class AdministrationReadoutTests
 
         var row = Assert.Single(
             Section(Describe(journal), "Целостность журнала"),
-            item => item.Text.Contains("не дописана", StringComparison.Ordinal));
+            item => item.Text.Contains("не завершена", StringComparison.Ordinal));
 
         Assert.Equal(ResultSeverity.Neutral, row.Severity);
     }
@@ -254,6 +269,72 @@ public sealed class AdministrationReadoutTests
     }
 
     [Fact]
+    public void After_a_break_the_anchor_hash_is_not_called_the_end_of_the_file()
+    {
+        // При разрыве последняя проверенная запись и последняя запись файла —
+        // разные записи, и именно тогда хеш сравнивают с якорем.
+        var journal = new AuditJournal
+        {
+            Records = [Verified(1), Broken(2)],
+            IsIntact = false,
+            LatestHash = new string('a', 64),
+            TailIsIncomplete = false,
+        };
+
+        var anchor = Assert.Single(
+            Section(Describe(journal), "Целостность журнала"),
+            row => row.Text.Contains("Хеш последней проверенной", StringComparison.Ordinal));
+
+        Assert.Contains("до разрыва", anchor.Note ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Paths_under_the_profile_do_not_carry_the_account_name()
+    {
+        // Каталоги приложения лежат в профиле пользователя, а имя учётной записи
+        // в клинике обычно образовано от фамилии сотрудника. На этом экране оно
+        // стояло бы в трёх строках от псевдонимов инициаторов.
+        var paths = Composition.ApplicationPaths.UnderLocalApplicationData();
+
+        var sections = AdministrationReadout.Describe(Snapshot(Journal()) with
+        {
+            AuditLogPath = paths.AuditLogPath,
+            WorkingCopyRoot = paths.WorkingCopyRoot,
+            ReportRoot = paths.ReportRoot,
+            ReportExportRoot = paths.ReportExportRoot,
+            DatasetManifestRoot = paths.DatasetManifestRoot,
+        });
+
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        foreach (var row in sections.SelectMany(section => section.Rows))
+        {
+            Assert.DoesNotContain(profile, row.Text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains(
+            Section(sections, "Хранение"),
+            row => row.Text.Contains("%LOCALAPPDATA%", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_named_code_unknown_to_this_version_keeps_its_name()
+    {
+        // Более новая версия пишет код, которого эта не знает. Разбор даёт
+        // Unspecified, и без исходного имени запись стала бы «событием
+        // неизвестного кода» без указания какого.
+        var journal = Journal(Verified(1) with
+        {
+            Code = AuditEventCode.Unspecified,
+            CodeName = "ModelPackageLoaded",
+        });
+
+        var row = Assert.Single(Section(Describe(journal), "События"));
+
+        Assert.Contains("Событие ModelPackageLoaded", row.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_code_unknown_to_this_version_is_not_shown_as_a_known_one()
     {
         // Запись, сделанная более новой версией приложения, должна остаться
@@ -269,7 +350,10 @@ public sealed class AdministrationReadoutTests
         sections.Single(section => string.Equals(section.Title, title, StringComparison.Ordinal)).Rows;
 
     private static IReadOnlyList<ResultSection> Describe(AuditJournal journal) =>
-        AdministrationReadout.Describe(new AdministrationSnapshot
+        AdministrationReadout.Describe(Snapshot(journal));
+
+    private static AdministrationSnapshot Snapshot(AuditJournal journal) =>
+        new()
         {
             Journal = journal,
             AuditLogPath = @"C:\data\audit\audit.log",
@@ -286,7 +370,7 @@ public sealed class AdministrationReadoutTests
                 LabelMapVersion = PipelineIdentity.NotImplementedVersion,
                 ApplicationCommitSha = "0123456789abcdef",
             },
-        });
+        };
 
     private static AuditJournal Journal(params AuditRecord[] records) => new()
     {

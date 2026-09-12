@@ -50,6 +50,16 @@ public sealed record AuditRecord
     /// <summary>Код события; <see cref="AuditEventCode.Unspecified"/> у нечитаемой записи.</summary>
     public AuditEventCode Code { get; init; }
 
+    /// <summary>
+    /// Код события так, как он записан в файле.
+    ///
+    /// Хранится рядом с разобранным кодом, потому что разбор его теряет:
+    /// событие, добавленное более новой версией приложения, не отображается
+    /// ни в одно известное значение и стало бы «событием неизвестного кода»
+    /// без указания, какого именно. Читателю журнала нужно второе.
+    /// </summary>
+    public string? CodeName { get; init; }
+
     /// <summary>Момент события, если он прочитан.</summary>
     public DateTimeOffset? OccurredAt { get; init; }
 

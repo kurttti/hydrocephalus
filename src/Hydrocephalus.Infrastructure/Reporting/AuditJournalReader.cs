@@ -172,6 +172,7 @@ public sealed class AuditJournalReader : IAuditJournalSource
                 Integrity = integrity,
                 IsReadable = true,
                 Code = ReadCode(root),
+                CodeName = ReadText(root, "code"),
                 OccurredAt = ReadMoment(root),
                 PseudonymousStudyId = ReadText(root, "pseudonymousStudyId"),
                 ModelVersion = ReadText(root, "modelVersion"),
@@ -190,7 +191,8 @@ public sealed class AuditJournalReader : IAuditJournalSource
     }
 
     // Неизвестный код — не повод потерять запись: событие, добавленное
-    // в новой версии, останется видимым в журнале, прочитанном старой.
+    // в новой версии, останется видимым в журнале, прочитанном старой,
+    // и под своим именем: оно сохраняется отдельно в CodeName.
     private static AuditEventCode ReadCode(JsonElement root) =>
         Enum.TryParse<AuditEventCode>(ReadText(root, "code"), ignoreCase: false, out var code)
             ? code

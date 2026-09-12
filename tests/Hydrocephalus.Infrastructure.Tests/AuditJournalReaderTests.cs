@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Infrastructure.Reporting;
@@ -193,6 +196,36 @@ public sealed class AuditJournalReaderTests : IDisposable
 
         Assert.True(truncated.IsIntact);
         Assert.NotEqual(full.LatestHash, truncated.LatestHash);
+    }
+
+    [Fact]
+    public async Task A_code_from_a_newer_version_keeps_its_name()
+    {
+        // Более новая версия пишет событие, которого эта не знает. Разбор кода
+        // даёт Unspecified, а имя должно дожить до экрана: «событие неизвестного
+        // кода» без указания какого не помогает разбирающему журнал.
+        const string payload =
+            """{"code":"ModelPackageLoaded","occurredAt":"2026-03-14T09:26:53.0000000Z"}""";
+
+        var separator = ((char)0x1E).ToString();
+        var hash = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(HashChainAuditLog.GenesisHash + separator + payload)));
+
+        var line = JsonSerializer.Serialize(new
+        {
+            @event = payload,
+            previousHash = HashChainAuditLog.GenesisHash,
+            hash,
+        });
+
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(this.Path)!);
+        await File.WriteAllTextAsync(this.Path, line + Environment.NewLine, CancellationToken.None);
+
+        var record = Assert.Single((await this.ReadAsync()).Records);
+
+        Assert.Equal(AuditRecordIntegrity.Verified, record.Integrity);
+        Assert.Equal(AuditEventCode.Unspecified, record.Code);
+        Assert.Equal("ModelPackageLoaded", record.CodeName);
     }
 
     private Task<AuditJournal> ReadAsync() =>

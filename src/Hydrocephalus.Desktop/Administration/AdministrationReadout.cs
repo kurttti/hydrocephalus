@@ -84,13 +84,13 @@ public static class AdministrationReadout
             // место, где что-то не так.
             return new ResultRow
             {
-                Text = Position(record) + " запись не читается",
+                Text = Position(record) + "запись не читается",
                 Note = NoteFor(record.Integrity),
                 Severity = ResultSeverity.Blocking,
             };
         }
 
-        var text = Position(record) + Moment(record.OccurredAt) + " — " + NameOf(record.Code);
+        var text = Position(record) + Moment(record.OccurredAt) + " — " + NameOf(record);
 
         if (record.ReportExportVariant is { } variant)
         {
@@ -146,11 +146,16 @@ public static class AdministrationReadout
 
         rows.Add(new ResultRow
         {
-            Text = "Хеш последней записи: " + journal.LatestHash,
+            // Хеш последней **проверенной** записи, а не последней в файле:
+            // при разрыве это разные записи, и именно тогда хеш сравнивают с якорем.
+            Text = "Хеш последней проверенной записи: " + journal.LatestHash,
 
             // Граница защиты названа прямо: без внешнего якоря «цепочка цела»
             // не означает «журнал полон».
-            Note = "Целая цепочка не означает полного журнала: удаление хвоста "
+            Note = (journal.IsIntact
+                    ? string.Empty
+                    : "При разрыве это не последняя запись файла, а последняя до разрыва. ")
+                + "Целая цепочка не означает полного журнала: удаление хвоста "
                 + "оставляет остаток корректным. Обнаружить это можно только "
                 + "сравнением этого хеша с записанным вне журнала.",
             Severity = ResultSeverity.Warning,
@@ -160,9 +165,12 @@ public static class AdministrationReadout
         {
             rows.Add(new ResultRow
             {
-                Text = "Последняя строка файла не дописана.",
-                Note = "Журнал дописывается в конец, и чтение застало запись незавершённой. "
-                    + "Это не разрыв цепочки.",
+                Text = "Последняя строка файла не завершена и не читается.",
+
+                // Причина не утверждается: незавершённую запись и обрыв файла
+                // по содержимому не различить.
+                Note = "Запись могла дописываться в момент чтения либо файл оборван. "
+                    + "Отличить одно от другого нечем; в проверку цепочки строка не входит.",
                 Severity = ResultSeverity.Neutral,
             });
         }
@@ -257,7 +265,9 @@ public static class AdministrationReadout
 
     private static ResultRow Place(string what, string path) => new()
     {
-        Text = what + ": " + path,
+        // Путь профиля содержит имя учётной записи, а оно в клинике обычно
+        // образовано от фамилии сотрудника — рядом с псевдонимами в журнале.
+        Text = what + ": " + PathReadout.Describe(path),
         Severity = ResultSeverity.Neutral,
     };
 
@@ -332,6 +342,16 @@ public static class AdministrationReadout
 
     private static string Count(int value) =>
         value.ToString(CultureInfo.CurrentCulture);
+
+    // Код, которого эта версия не знает, показывается под тем именем, под каким
+    // записан: «событие неизвестного кода» без указания какого не помогает
+    // тому, кто разбирает журнал.
+    private static string NameOf(AuditRecord record) =>
+        record.Code == AuditEventCode.Unspecified
+        && !string.IsNullOrWhiteSpace(record.CodeName)
+        && !string.Equals(record.CodeName, nameof(AuditEventCode.Unspecified), StringComparison.Ordinal)
+            ? "Событие " + record.CodeName
+            : NameOf(record.Code);
 
     private static string NameOf(ReportExportVariant variant) => variant switch
     {

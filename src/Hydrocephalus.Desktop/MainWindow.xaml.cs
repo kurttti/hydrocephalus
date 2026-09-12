@@ -276,7 +276,9 @@ public partial class MainWindow : Window
 
             // Показывается каталог, а не файл: имя файла содержит псевдоним
             // исследования, а строка состояния видна на экране в кабинете.
-            this.StatusText.Text = $"Экспортирован {what}. Каталог: {directory}";
+            // По той же причине путь профиля заменён переменной окружения:
+            // в нём имя учётной записи.
+            this.StatusText.Text = $"Экспортирован {what}. Каталог: {PathReadout.Describe(directory)}";
         }
         catch (AccessDeniedException)
         {
