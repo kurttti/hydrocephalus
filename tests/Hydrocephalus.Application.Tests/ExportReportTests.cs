@@ -195,6 +195,83 @@ public sealed class ExportReportTests
             Moment));
     }
 
+    [Fact]
+    public async Task A_preview_writes_no_file()
+    {
+        // Смысл предпросмотра в том, что файла ещё нет: врач смотрит и решает.
+        var store = new RecordingExportStore();
+
+        await UseCase(store, new EmptyRegistry()).PreviewAsync(
+            Request(ReportExportVariant.Deidentified, Clinician),
+            CancellationToken.None);
+
+        Assert.Empty(store.Written);
+    }
+
+    [Fact]
+    public async Task A_preview_shows_exactly_what_the_export_would_write()
+    {
+        // Две сборки содержимого разошлись бы незаметно, и предпросмотр начал бы
+        // защищать от того, чего в файле нет, пропуская то, что в нём есть.
+        var store = new RecordingExportStore();
+        var useCase = UseCase(store, new EmptyRegistry());
+
+        var previewed = await useCase.PreviewAsync(
+            Request(ReportExportVariant.Deidentified, Clinician),
+            CancellationToken.None);
+
+        await useCase.ExecuteAsync(
+            Request(ReportExportVariant.Deidentified, Clinician),
+            CancellationToken.None);
+
+        Assert.Equal(previewed, Assert.Single(store.Written));
+    }
+
+    [Fact]
+    public async Task A_preview_needs_the_same_right_as_the_export()
+    {
+        // Показ клинического варианта — такое же раскрытие идентификаторов,
+        // как запись в файл. Предпросмотр без проверки права стал бы обходом
+        // разграничения через экран.
+        var audit = new RecordingAudit();
+
+        await Assert.ThrowsAsync<AccessDeniedException>(
+            () => UseCase(new RecordingExportStore(), KnownPatient(), audit).PreviewAsync(
+                Request(ReportExportVariant.Clinical, Researcher),
+                CancellationToken.None));
+
+        Assert.Equal(AuditEventCode.AccessDenied, Assert.Single(audit.Events).Code);
+    }
+
+    [Fact]
+    public async Task A_preview_leaves_a_trace_of_its_own()
+    {
+        // Раскрытие на экране без следа в журнале ничем не отличается от того,
+        // которого не было. Код отдельный: файл никуда не ушёл.
+        var audit = new RecordingAudit();
+
+        await UseCase(new RecordingExportStore(), new EmptyRegistry(), audit).PreviewAsync(
+            Request(ReportExportVariant.Deidentified, Clinician),
+            CancellationToken.None);
+
+        var recorded = Assert.Single(audit.Events);
+
+        Assert.Equal(AuditEventCode.ReportPreviewed, recorded.Code);
+        Assert.Equal(ReportExportVariant.Deidentified, recorded.ReportExportVariant);
+        Assert.Equal(Clinician.PseudonymousUserId, recorded.PseudonymousActorId);
+    }
+
+    [Fact]
+    public async Task A_preview_of_a_study_the_registry_does_not_know_is_refused()
+    {
+        // Показать обезличенное под клиническим заголовком нельзя: врач решит,
+        // что перед ним карта конкретного пациента, и отправит её как таковую.
+        await Assert.ThrowsAsync<DomainRuleViolationException>(
+            () => UseCase(new RecordingExportStore(), new EmptyRegistry()).PreviewAsync(
+                Request(ReportExportVariant.Clinical, Clinician),
+                CancellationToken.None));
+    }
+
     private static ExportReportUseCase UseCase(
         IReportExportStore store,
         IPatientIdentityRegistry registry,

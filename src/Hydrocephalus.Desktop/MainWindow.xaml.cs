@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Hydrocephalus.Desktop.Composition;
+using Hydrocephalus.Desktop.Reporting;
 using Hydrocephalus.Desktop.Results;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Access;
@@ -160,20 +161,67 @@ public partial class MainWindow : Window
     }
 
     private async void OnExportDeidentifiedClick(object sender, RoutedEventArgs e) =>
-        await this.ExportAsync(
-            "обезличенный отчёт",
-            composition => composition.ExportReportAsync(
-                ReportExportVariant.Deidentified,
-                CancellationToken.None))
+        await this.ExportReportAsync("обезличенный отчёт", ReportExportVariant.Deidentified)
             .ConfigureAwait(true);
 
     private async void OnExportClinicalClick(object sender, RoutedEventArgs e) =>
-        await this.ExportAsync(
-            "клинический отчёт",
-            composition => composition.ExportReportAsync(
-                ReportExportVariant.Clinical,
-                CancellationToken.None))
+        await this.ExportReportAsync("клинический отчёт", ReportExportVariant.Clinical)
             .ConfigureAwait(true);
+
+    /// <summary>
+    /// Показывает отчёт и экспортирует его, если врач подтвердил.
+    ///
+    /// Предпросмотр — обязательный шаг, а не отдельная кнопка рядом с экспортом:
+    /// кнопку «посмотреть» можно не нажать, а файл уходит вовне один раз.
+    /// Содержимое собирается тем же сценарием, что и при записи, поэтому
+    /// показано ровно то, что будет записано.
+    /// </summary>
+    private async Task ExportReportAsync(string what, ReportExportVariant variant)
+    {
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            this.StatusText.Text = "Приложение не собрано; экспорт недоступен.";
+            return;
+        }
+
+        try
+        {
+            var lines = await Task.Run(
+                () => composition.PreviewReportAsync(variant, CancellationToken.None))
+                .ConfigureAwait(true);
+
+            var preview = new ReportPreviewWindow(what, lines) { Owner = this };
+
+            preview.ShowDialog();
+
+            if (!preview.Confirmed)
+            {
+                // Закрытое окно означает «не отправлять». Молчание здесь
+                // выглядело бы как несработавшая кнопка.
+                this.StatusText.Text = $"Экспорт отменён ({what}).";
+                return;
+            }
+        }
+        catch (AccessDeniedException)
+        {
+            // Показ клинического варианта — такое же раскрытие, как запись
+            // в файл, и право проверяется до показа, а не до записи.
+            this.StatusText.Text = $"Роль не даёт права на {what}.";
+            return;
+        }
+        catch (Exception exception)
+        {
+            this.StatusText.Text = $"Предпросмотр не удался ({what}): " + exception.Message;
+            return;
+        }
+
+        await this.ExportAsync(
+            what,
+            target => target.ExportReportAsync(variant, CancellationToken.None))
+            .ConfigureAwait(true);
+    }
 
     private async void OnExportManifestClick(object sender, RoutedEventArgs e) =>
         await this.ExportAsync(

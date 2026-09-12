@@ -29,36 +29,6 @@ public static class PdfReportRenderer
     private const double LineHeight = 15;
     private const double SectionGap = 10;
 
-    private static readonly Dictionary<string, string> Captions = new(StringComparer.Ordinal)
-    {
-        ["variant"] = "Вариант экспорта",
-        ["exportedAt"] = "Экспортировано",
-        ["exportedBy"] = "Экспортировал",
-        ["limitations"] = "Ограничения",
-        ["patient"] = "Пациент",
-        ["fullName"] = "ФИО",
-        ["medicalRecordNumber"] = "Номер карты",
-        ["birthDate"] = "Дата рождения",
-        ["report"] = "Отчёт",
-        ["pseudonymousStudyId"] = "Псевдоним исследования",
-        ["createdAt"] = "Сформирован",
-        ["quality"] = "Контроль качества",
-        ["issues"] = "Замечания",
-        ["code"] = "Код",
-        ["severity"] = "Степень",
-        ["parameters"] = "Параметры",
-        ["outcome"] = "Результат",
-        ["reason"] = "Причина",
-        ["prediction"] = "Прогноз",
-        ["pipeline"] = "Версии конвейера",
-        ["preprocessingVersion"] = "Предобработка",
-        ["featureSchemaVersion"] = "Схема признаков",
-        ["labelMapVersion"] = "Label map",
-        ["modelVersion"] = "Версия модели",
-        ["applicationCommitSha"] = "Сборка приложения",
-        ["clinicianAnnotations"] = "Комментарии врача",
-    };
-
     private static bool fontsConfigured;
 
     /// <summary>
@@ -93,9 +63,12 @@ public static class PdfReportRenderer
 
         writer.Heading("Отчёт анализа");
 
-        foreach (var property in json.RootElement.EnumerateObject())
+        // Раскладка общая с экраном предпросмотра: врач решает, отправлять ли
+        // файл, глядя на его содержимое, и вторая раскладка разошлась бы
+        // с первой незаметно.
+        foreach (var line in ReportOutline.Build(canonicalJson))
         {
-            writer.Write(property, depth: 0);
+            writer.Write(line);
         }
 
         using var stream = new MemoryStream();
@@ -133,9 +106,6 @@ public static class PdfReportRenderer
             ? value.GetString() ?? string.Empty
             : string.Empty;
 
-    private static string Caption(string name) =>
-        Captions.TryGetValue(name, out var caption) ? caption : name;
-
     /// <summary>Постраничная укладка текста с переносом на новую страницу.</summary>
     private sealed class PageWriter
     {
@@ -160,69 +130,14 @@ public static class PdfReportRenderer
             this.y += LineHeight * 2;
         }
 
-        internal void Write(JsonProperty property, int depth)
+        internal void Write(ReportLine line)
         {
-            var caption = Caption(property.Name);
+            this.Line(line.Text, line.IsHeading ? this.bold : this.regular, line.Depth);
 
-            switch (property.Value.ValueKind)
+            if (line.GapAfter)
             {
-                case JsonValueKind.Object:
-                    this.Line(caption, this.bold, depth);
-
-                    foreach (var nested in property.Value.EnumerateObject())
-                    {
-                        this.Write(nested, depth + 1);
-                    }
-
-                    this.y += SectionGap;
-                    break;
-
-                case JsonValueKind.Array:
-                    this.Line(caption, this.bold, depth);
-
-                    var index = 0;
-
-                    foreach (var item in property.Value.EnumerateArray())
-                    {
-                        this.WriteValue($"{++index}", item, depth + 1);
-                    }
-
-                    if (index == 0)
-                    {
-                        this.Line("— нет", this.regular, depth + 1);
-                    }
-
-                    this.y += SectionGap;
-                    break;
-
-                default:
-                    this.Line($"{caption}: {Scalar(property.Value)}", this.regular, depth);
-                    break;
+                this.y += SectionGap;
             }
-        }
-
-        private static string Scalar(JsonElement value) => value.ValueKind switch
-        {
-            JsonValueKind.String => value.GetString() ?? string.Empty,
-            JsonValueKind.Null => "—",
-            _ => value.GetRawText(),
-        };
-
-        private void WriteValue(string caption, JsonElement value, int depth)
-        {
-            if (value.ValueKind == JsonValueKind.Object)
-            {
-                this.Line(caption, this.bold, depth);
-
-                foreach (var nested in value.EnumerateObject())
-                {
-                    this.Write(nested, depth + 1);
-                }
-
-                return;
-            }
-
-            this.Line($"{caption}: {Scalar(value)}", this.regular, depth);
         }
 
         private XGraphics NewPage()

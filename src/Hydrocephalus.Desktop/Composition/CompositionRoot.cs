@@ -355,6 +355,39 @@ public sealed class CompositionRoot : IDisposable
     }
 
     /// <summary>
+    /// Готовит отчёт к показу, ничего не записывая.
+    ///
+    /// Экспорт — действие с последствиями вовне, и увидеть, что уходит, нужно
+    /// до того, как оно ушло. Содержимое собирается тем же сценарием, что и при
+    /// экспорте, и раскладывается той же раскладкой, что уходит в PDF: иначе
+    /// экран показывал бы одно, а в файл попадало другое.
+    /// </summary>
+    /// <param name="variant">Вариант экспорта.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Строки отчёта в том виде, в каком они попадут в файл.</returns>
+    /// <exception cref="InvalidOperationException">Если исследование не открыто.</exception>
+    public async Task<IReadOnlyList<ReportLine>> PreviewReportAsync(
+        ReportExportVariant variant,
+        CancellationToken cancellationToken)
+    {
+        var current = this.report
+            ?? throw new InvalidOperationException(
+                "There is no current report to preview: no study is open, or the last analysis did not finish.");
+
+        var export = await this.exportReport.PreviewAsync(
+            new Hydrocephalus.Application.ReportExportRequest
+            {
+                Report = current,
+                Variant = variant,
+                RequestedBy = this.Actor,
+                AcknowledgeAnnotationsMayContainPhi = false,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return ReportOutline.Build(JsonReportExportStore.Serialize(export));
+    }
+
+    /// <summary>
     /// Экспортирует манифест датасета по открытому исследованию.
     /// </summary>
     /// <param name="cancellationToken">Токен отмены.</param>

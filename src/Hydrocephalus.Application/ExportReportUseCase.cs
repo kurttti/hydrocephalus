@@ -86,6 +86,70 @@ public sealed class ExportReportUseCase
         ReportExportRequest request,
         CancellationToken cancellationToken)
     {
+        var export = await this.PrepareAsync(request, cancellationToken).ConfigureAwait(false);
+
+        var reference = await this.store.WriteAsync(export, cancellationToken).ConfigureAwait(false);
+
+        await this.auditLog.RecordAsync(
+            new AuditEvent
+            {
+                Code = AuditEventCode.ReportExported,
+                OccurredAt = export.ExportedAt,
+                PseudonymousStudyId = request.Report.PseudonymousStudyId,
+                PseudonymousActorId = request.RequestedBy.PseudonymousUserId,
+                ReportExportVariant = request.Variant,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return reference;
+    }
+
+    /// <summary>
+    /// Готовит отчёт к показу, ничего не записывая.
+    ///
+    /// Предпросмотр проходит тот же путь, что и экспорт: то же право, тот же
+    /// разбор варианта, та же сборка содержимого. Иначе экран показывал бы
+    /// одно, а в файл уходило другое — то есть ровно то, от чего предпросмотр
+    /// и защищает.
+    ///
+    /// Право проверяется всерьёз, а не для вида: клинический вариант содержит
+    /// идентификаторы пациента, и показ его на экране — такое же раскрытие,
+    /// как запись в файл. Поэтому же показ попадает в журнал.
+    /// </summary>
+    /// <param name="request">Запрос на экспорт.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Содержимое, которое было бы записано.</returns>
+    /// <exception cref="DomainRuleViolationException">
+    /// Если вариант не задан, реестр не знает пациента либо не подтверждён
+    /// риск PHI в комментариях.
+    /// </exception>
+    /// <exception cref="AccessDeniedException">
+    /// Если у инициатора нет права на этот вариант экспорта.
+    /// </exception>
+    public async Task<ReportExport> PreviewAsync(
+        ReportExportRequest request,
+        CancellationToken cancellationToken)
+    {
+        var export = await this.PrepareAsync(request, cancellationToken).ConfigureAwait(false);
+
+        await this.auditLog.RecordAsync(
+            new AuditEvent
+            {
+                Code = AuditEventCode.ReportPreviewed,
+                OccurredAt = export.ExportedAt,
+                PseudonymousStudyId = request.Report.PseudonymousStudyId,
+                PseudonymousActorId = request.RequestedBy.PseudonymousUserId,
+                ReportExportVariant = request.Variant,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return export;
+    }
+
+    private async Task<ReportExport> PrepareAsync(
+        ReportExportRequest request,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(request);
 
         var capability = request.Variant switch
@@ -103,24 +167,9 @@ public sealed class ExportReportUseCase
         await this.RequireAsync(request.RequestedBy, capability, cancellationToken)
             .ConfigureAwait(false);
 
-        var export = request.Variant == ReportExportVariant.Clinical
+        return request.Variant == ReportExportVariant.Clinical
             ? await this.BuildClinicalAsync(request, cancellationToken).ConfigureAwait(false)
             : this.BuildDeidentified(request);
-
-        var reference = await this.store.WriteAsync(export, cancellationToken).ConfigureAwait(false);
-
-        await this.auditLog.RecordAsync(
-            new AuditEvent
-            {
-                Code = AuditEventCode.ReportExported,
-                OccurredAt = export.ExportedAt,
-                PseudonymousStudyId = request.Report.PseudonymousStudyId,
-                PseudonymousActorId = request.RequestedBy.PseudonymousUserId,
-                ReportExportVariant = request.Variant,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        return reference;
     }
 
     private ReportExport BuildDeidentified(ReportExportRequest request)
