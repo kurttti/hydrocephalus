@@ -7,6 +7,7 @@
     <Project Path="src/Hydrocephalus.Infrastructure/Hydrocephalus.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/Hydrocephalus.BatchMeasure/Hydrocephalus.BatchMeasure.csproj" />
     <Project Path="tools/Hydrocephalus.Inventory/Hydrocephalus.Inventory.csproj" />
     <Project Path="tools/Hydrocephalus.ReviewPlan/Hydrocephalus.ReviewPlan.csproj" />
   </Folder>
