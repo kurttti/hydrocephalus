@@ -34,7 +34,13 @@ public sealed partial class ExceptionTextSourceTests
         Assert.Empty(offenders);
     }
 
-    [GeneratedRegex(@"\.Message\b")]
+    // Шаблон узкий намеренно: ищутся Message, InnerException и ToString()
+    // у переменных, под которыми в этом коде держат исключения. ToString()
+    // утекает больше, чем Message: к тексту добавляются стек и, у
+    // FileNotFoundException, имя файла. Если тест сработает на невинном члене
+    // с таким же именем, переименовывается переменная, а не ослабляется шаблон:
+    // ослабленный шаблон перестаёт находить что-либо.
+    [GeneratedRegex(@"\b(exception|ex|error|cause|inner|e\.Exception)\.(Message\b|InnerException\b|ToString\s*\()")]
     private static partial Regex MessageAccess();
 
     private static string RepositoryRoot()

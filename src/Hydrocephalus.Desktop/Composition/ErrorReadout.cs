@@ -47,6 +47,8 @@ public static class ErrorReadout
     // и общая ветвь первой проглотила бы более точную.
     private static string CategoryOf(Exception exception) => exception switch
     {
+        // Окна перехватывают отказ по правам раньше и называют операцию сами;
+        // сюда он доходит только необработанным, через обработчик приложения.
         AccessDeniedException => "роль не даёт права на эту операцию",
         OperationCanceledException => "операция отменена",
         DomainRuleViolationException => "данные не отвечают требованиям приложения",

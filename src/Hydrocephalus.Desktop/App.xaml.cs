@@ -21,6 +21,12 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        // Подписка до сборки: исключение из обработчика, не обёрнутого в try,
+        // иначе дошло бы до стандартного окна WPF, а оно показывает текст
+        // исключения вместе со стеком — то есть путь к исходному файлу,
+        // в котором бывает фамилия пациента.
+        this.DispatcherUnhandledException += this.OnDispatcherUnhandledException;
+
         try
         {
             this.Composition = await CompositionRoot
@@ -50,6 +56,34 @@ public partial class App : System.Windows.Application
 
             this.Shutdown(1);
         }
+    }
+
+    /// <summary>
+    /// Необработанное исключение в потоке интерфейса.
+    ///
+    /// Показывается категория по типу, а не текст исключения (см. ErrorReadout).
+    /// Приложение после этого закрывается, а не продолжает работу: состояние,
+    /// в котором оно оказалось, неизвестно, а при закрытии рабочая копия
+    /// с данными пациента уничтожается — продолжать с неизвестным состоянием
+    /// значило бы оставить её на диске неопределённо долго.
+    ///
+    /// Исключения фоновых потоков сюда не приходят и остаются за Windows;
+    /// все длительные операции окна выполняются через await в потоке интерфейса
+    /// и обёрнуты в обработчики с той же раскладкой.
+    /// </summary>
+    private void OnDispatcherUnhandledException(
+        object sender,
+        System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        e.Handled = true;
+
+        MessageBox.Show(
+            ErrorReadout.Describe(e.Exception),
+            "Непредвиденная ошибка — приложение будет закрыто",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+
+        this.Shutdown(2);
     }
 
     /// <summary>
