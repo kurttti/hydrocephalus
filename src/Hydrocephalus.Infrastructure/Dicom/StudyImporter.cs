@@ -225,7 +225,7 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
         CancellationToken cancellationToken)
     {
         var deidentifier = new DicomDeidentifier(this.importOptions);
-        var walk = new QuarantineWalk(this.importOptions, sourceReference);
+        var walk = new ImportSourceWalk(this.importOptions, sourceReference);
         var written = new Dictionary<string, int>(StringComparer.Ordinal);
 
         // Отказы второго прохода отбрасываются: те же файлы уже отклонены разбором

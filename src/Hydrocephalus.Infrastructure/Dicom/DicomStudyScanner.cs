@@ -43,7 +43,7 @@ public sealed class DicomStudyScanner
         // срезу пару с нулевым расстоянием и прочиталась бы как два набора срезов.
         var acceptedInstances = new HashSet<string>(StringComparer.Ordinal);
 
-        var walk = new QuarantineWalk(this.options, rootDirectory);
+        var walk = new ImportSourceWalk(this.options, rootDirectory);
 
         foreach (var file in walk.EnumerateFiles(rejections))
         {

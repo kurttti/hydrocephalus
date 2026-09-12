@@ -1,7 +1,11 @@
 namespace Hydrocephalus.Infrastructure.Dicom;
 
 /// <summary>
-/// Обход каталога приёмки с ограничениями из <see cref="DicomImportOptions"/>.
+/// Обход каталога источника с ограничениями из <see cref="DicomImportOptions"/>.
+///
+/// Источник читается по месту: отдельной копии исходных файлов приложение
+/// не создаёт, поэтому обход — единственное место, где оно вообще касается
+/// данных с PHI в именах (ADR 0006).
 ///
 /// Обход вынесен отдельно, потому что его выполняют двое: разбор структуры
 /// (<see cref="DicomStudyScanner"/>) и создание рабочей копии
@@ -12,7 +16,7 @@ namespace Hydrocephalus.Infrastructure.Dicom;
 /// Обход написан явной очередью, а не рекурсивным поиском по маске: слишком
 /// глубокая структура должна давать отказ с кодом, а не необработанное исключение.
 /// </summary>
-internal sealed class QuarantineWalk
+internal sealed class ImportSourceWalk
 {
     private readonly DicomImportOptions options;
     private readonly string rootDirectory;
@@ -20,7 +24,7 @@ internal sealed class QuarantineWalk
     /// <summary>Создаёт обход.</summary>
     /// <param name="options">Ограничения приёма и соль псевдонимизации.</param>
     /// <param name="rootDirectory">Корневой каталог обхода.</param>
-    internal QuarantineWalk(DicomImportOptions options, string rootDirectory)
+    internal ImportSourceWalk(DicomImportOptions options, string rootDirectory)
     {
         this.options = options;
         this.rootDirectory = rootDirectory;
