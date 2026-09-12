@@ -31,6 +31,20 @@ public sealed class BatchPlanTests : IDisposable
     }
 
     [Fact]
+    public void Refusals_of_one_rule_fold_into_one_line_but_keep_the_tag()
+    {
+        // Числа различаются между исследованиями и дробят одну причину
+        // на десятки строк; код тега говорит, что именно не прошло проверку.
+        Assert.Equal(
+            "The working copy is incomplete: # of # instances were written for one series.",
+            BatchPlan.NormaliseRuleMessage("The working copy is incomplete: 6 of 3 instances were written for one series."));
+
+        Assert.Equal(
+            "Deidentification audit rejected the working copy: # violation(s); first X at (0008,1090).",
+            BatchPlan.NormaliseRuleMessage("Deidentification audit rejected the working copy: 2 violation(s); first X at (0008,1090)."));
+    }
+
+    [Fact]
     public void Output_inside_the_repository_is_refused()
     {
         // Каталог теста лежит внутри репозитория: сборка идёт из него.

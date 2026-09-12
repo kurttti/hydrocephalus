@@ -107,6 +107,27 @@ public static class BatchPlan
         return [.. order.Select(id => chosen[id])];
     }
 
+    /// <summary>
+    /// Приводит текст отказа по правилу приложения к виду, общему для всех
+    /// исследований: числа заменяются знаком «#», коды тегов вида (gggg,eeee)
+    /// сохраняются — по ним видно, какой тег не прошёл проверку.
+    ///
+    /// Применяется только к <c>DomainRuleViolationException</c>: её тексты
+    /// пишутся в коде приложения. Текст стороннего исключения сюда не попадает —
+    /// в нём бывает путь к источнику.
+    /// </summary>
+    /// <param name="message">Текст отказа.</param>
+    /// <returns>Текст без чисел, различающихся между исследованиями.</returns>
+    public static string NormaliseRuleMessage(string message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        return System.Text.RegularExpressions.Regex.Replace(
+            message,
+            @"(?<![(,])\b\d+(\.\d+)?\b(?![,)])",
+            "#");
+    }
+
     private static int SliceCount(ImagingStudy study) =>
         study.Series.Sum(series => series.Geometry.Dimensions.Slices);
 }

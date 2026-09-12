@@ -188,7 +188,7 @@ for (var index = 0; index < plan.Count; index++)
 
         var outcome = report.Outcome switch
         {
-            AnalysisOutcome.Refused refused => "Refused/" + refused.Reason,
+            AnalysisOutcome.Refused refused => "Refused/" + refused.Reason.Code,
             AnalysisOutcome.Completed => "Completed",
             _ => "Unknown",
         };
@@ -221,7 +221,7 @@ for (var index = 0; index < plan.Count; index++)
 
         record["biomarkers"] = report.Biomarkers.Select(biomarker => new
         {
-            Method = biomarker.Method.ToString(),
+            Method = biomarker.Method.Code,
             biomarker.Value,
             Unit = biomarker.Unit.ToString(),
             Quality = biomarker.Quality.ToString(),
@@ -235,7 +235,7 @@ for (var index = 0; index < plan.Count; index++)
 
         foreach (var biomarker in report.Biomarkers)
         {
-            Count(qualities, biomarker.Method + "/" + biomarker.Quality);
+            Count(qualities, biomarker.Method.Code + "/" + biomarker.Quality);
 
             if (biomarker.IsOutOfRange)
             {
@@ -246,8 +246,14 @@ for (var index = 0; index < plan.Count; index++)
     catch (Exception exception)
     {
         // Сохраняется тип, а не текст: текст исключения ввода-вывода содержит
-        // путь к источнику, а в пути — фамилия пациента.
-        var type = exception.GetType().Name;
+        // путь к источнику, а в пути — фамилия пациента. Исключение — отказ
+        // по правилу приложения: его текст написан в нашем коде и собирается
+        // из констант, чисел, кодов тегов и перечислений. Без него 82 отказа
+        // одного типа неразличимы. Числа заменяются, чтобы отказы одного
+        // правила складывались в одну строку.
+        var type = exception is Hydrocephalus.Domain.DomainRuleViolationException
+            ? exception.GetType().Name + ": " + BatchPlan.NormaliseRuleMessage(exception.Message)
+            : exception.GetType().Name;
 
         Count(failures, type);
         record["outcome"] = "Failed";
