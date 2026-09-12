@@ -58,7 +58,8 @@ public sealed class CompositionRoot : IDisposable
         StudyImporter importer,
         HashChainAuditLog auditLog,
         PipelineIdentity pipeline,
-        Actor actor)
+        Actor actor,
+        WorkingCopyRetentionPolicy retention)
     {
         this.AnalyzeStudy = analyzeStudy;
         this.ExportDatasetManifest = exportDatasetManifest;
@@ -67,6 +68,7 @@ public sealed class CompositionRoot : IDisposable
         this.auditLog = auditLog;
         this.Pipeline = pipeline;
         this.Actor = actor;
+        this.Retention = retention;
     }
 
     /// <summary>Сценарий анализа исследования.</summary>
@@ -83,6 +85,14 @@ public sealed class CompositionRoot : IDisposable
 
     /// <summary>Версии конвейера, попадающие в отчёт.</summary>
     public PipelineIdentity Pipeline { get; }
+
+    /// <summary>
+    /// Действующая политика хранения рабочих копий.
+    ///
+    /// Показывается врачу: ADR 0006 называет риском молчаливое удаление
+    /// незавершённого разбора случая и требует, чтобы срок был виден заранее.
+    /// </summary>
+    public WorkingCopyRetentionPolicy Retention { get; }
 
     /// <summary>
     /// Тот, от чьего имени выполняются операции.
@@ -118,10 +128,20 @@ public sealed class CompositionRoot : IDisposable
             new DicomImportOptions { PseudonymSalt = salt },
             new WorkingCopyOptions { RootDirectory = paths.WorkingCopyRoot });
 
+        // Срок хранения задаёт тот, кто разворачивает приложение, — рядом
+        // с ролью и тем же способом. Значение по умолчанию остаётся 24 часа.
+        var retention = RetentionSettings.Read(AppContext.BaseDirectory);
+
         // Уборка до начала любой новой работы: осиротевшие рабочие копии
         // от прерванных сеансов сами не исчезнут — сеанс, который должен был
-        // их удалить, уже не выполняется (ADR 0006).
-        WorkingCopyRetention.Sweep(paths.WorkingCopyRoot, TimeProvider.System.GetUtcNow());
+        // их удалить, уже не выполняется (ADR 0006). Итог попадает в журнал:
+        // без записи политика хранения недоказуема.
+        await new Hydrocephalus.Application.SweepWorkingCopiesUseCase(
+                new WorkingCopyRetentionService(paths.WorkingCopyRoot, retention),
+                auditLog,
+                TimeProvider.System)
+            .ExecuteAsync(cancellationToken)
+            .ConfigureAwait(false);
 
         var useCase = new Hydrocephalus.Application.AnalyzeStudyUseCase(
             importer,
@@ -159,7 +179,8 @@ public sealed class CompositionRoot : IDisposable
             importer,
             auditLog,
             pipeline,
-            actor);
+            actor,
+            retention);
     }
 
     /// <summary>

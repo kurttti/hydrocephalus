@@ -68,10 +68,18 @@ public partial class MainWindow : Window
     /// роль, иначе рядом с настройкой установки завёлся бы второй источник.
     /// </summary>
     /// <param name="value">Инициатор операций приложения.</param>
-    internal void ShowActor(Actor value)
+    /// <param name="retention">Действующая политика хранения рабочих копий.</param>
+    internal void ShowActor(Actor value, WorkingCopyRetentionPolicy retention)
     {
         this.actor = value;
         this.RoleText.Text = RoleReadout.Describe(value);
+
+        // Срок хранения назван до того, как он что-нибудь удалит. ADR 0006
+        // называет риском именно молчаливую пропажу незавершённого разбора
+        // случая: срок, о котором узнают в момент пропажи данных, требованию
+        // «заранее видимо» не отвечает.
+        this.StatusText.Text = "Исследование не открыто. " + RetentionSettings.Describe(retention);
+
         this.UpdateExportAvailability();
     }
 

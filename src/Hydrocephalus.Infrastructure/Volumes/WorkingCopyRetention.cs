@@ -19,10 +19,22 @@ public sealed record WorkingCopyRetentionPolicy
 
 /// <summary>
 /// Результат уборки.
+///
+/// Причины удаления различаются: срок жизни и уборка за прерванным сеансом —
+/// разные требования ADR 0006, и одно число на двоих не отвечает ни на один
+/// из двух вопросов. Неудавшееся удаление считается отдельно и не попадает
+/// в удалённые: каталог остался на диске, и называть его удалённым значило бы
+/// записать в журнал неправду.
 /// </summary>
-/// <param name="Removed">Число удалённых сеансов.</param>
-/// <param name="Kept">Число оставленных сеансов.</param>
-public readonly record struct RetentionSweep(int Removed, int Kept);
+/// <param name="Expired">Сеансов удалено по истечении срока жизни.</param>
+/// <param name="Orphaned">Сеансов удалено как осиротевшие.</param>
+/// <param name="Kept">Сеансов оставлено.</param>
+/// <param name="Failed">Сеансов, которые не удалось удалить.</param>
+public readonly record struct RetentionSweep(int Expired, int Orphaned, int Kept, int Failed)
+{
+    /// <summary>Всего удалено сеансов.</summary>
+    public int Removed => Expired + Orphaned;
+}
 
 /// <summary>
 /// Уборка рабочих копий: по сроку и после прерванных сеансов.
@@ -60,11 +72,13 @@ public static class WorkingCopyRetention
 
         if (!Directory.Exists(root))
         {
-            return new RetentionSweep(0, 0);
+            return default;
         }
 
-        var removed = 0;
+        var expired = 0;
+        var orphaned = 0;
         var kept = 0;
+        var failed = 0;
 
         foreach (var directory in Directory.EnumerateDirectories(root))
         {
@@ -76,18 +90,34 @@ public static class WorkingCopyRetention
                 continue;
             }
 
-            if (ShouldRemove(directory, now, policy.TimeToLive))
+            var reason = ReasonToRemove(directory, now, policy.TimeToLive);
+
+            if (reason is null)
             {
-                Remove(directory);
-                removed++;
+                kept++;
+                continue;
+            }
+
+            if (!Remove(directory))
+            {
+                // Каталог занят другим процессом. Ключ уже удалён, поэтому
+                // содержимое нечитаемо, но каталог на диске остался — и считать
+                // его удалённым значило бы записать в журнал неправду.
+                failed++;
+                continue;
+            }
+
+            if (reason == RemovalReason.Expired)
+            {
+                expired++;
             }
             else
             {
-                kept++;
+                orphaned++;
             }
         }
 
-        return new RetentionSweep(removed, kept);
+        return new RetentionSweep(expired, orphaned, kept, failed);
     }
 
     /// <summary>
@@ -115,13 +145,16 @@ public static class WorkingCopyRetention
             : null;
     }
 
-    private static bool ShouldRemove(string directory, DateTimeOffset now, TimeSpan timeToLive)
+    private static RemovalReason? ReasonToRemove(
+        string directory,
+        DateTimeOffset now,
+        TimeSpan timeToLive)
     {
         if (!File.Exists(Path.Combine(directory, WorkingCopySession.KeyFileName)))
         {
             // Ключа нет — читать нечего. Такой каталог остался от прерванного
             // удаления либо от сеанса, не дошедшего до создания ключа.
-            return true;
+            return RemovalReason.Orphaned;
         }
 
         var createdAt = CreatedAtOf(directory);
@@ -130,14 +163,15 @@ public static class WorkingCopyRetention
         {
             // Отметки нет или она нечитаема: возраст неизвестен. Оставить такой
             // каталог значило бы хранить данные бессрочно, а это ровно то,
-            // против чего политика и вводится.
-            return true;
+            // против чего политика и вводится. Это не истёкший срок, а сеанс,
+            // о котором ничего не известно, — и в журнале это разные строки.
+            return RemovalReason.Orphaned;
         }
 
-        return now - createdAt.Value >= timeToLive;
+        return now - createdAt.Value >= timeToLive ? RemovalReason.Expired : null;
     }
 
-    private static void Remove(string directory)
+    private static bool Remove(string directory)
     {
         // Ключ первым: если удаление прервётся, данные уже нечитаемы.
         try
@@ -150,11 +184,20 @@ public static class WorkingCopyRetention
             }
 
             Directory.Delete(directory, recursive: true);
+
+            return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // Каталог занят другим процессом. Ключ, если он был, уже удалён;
             // повторная попытка выполняется при следующем старте.
+            return false;
         }
+    }
+
+    private enum RemovalReason
+    {
+        Expired,
+        Orphaned,
     }
 }

@@ -29,7 +29,9 @@ public partial class App : System.Windows.Application
 
             // Окно создаётся по StartupUri до того, как сборка завершится,
             // поэтому роль в него передаётся, а не читается им при загрузке.
-            (this.MainWindow as MainWindow)?.ShowActor(this.Composition.Actor);
+            (this.MainWindow as MainWindow)?.ShowActor(
+                this.Composition.Actor,
+                this.Composition.Retention);
         }
         catch (Exception exception)
         {

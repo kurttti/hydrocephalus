@@ -185,6 +185,12 @@ public sealed class WorkingCopyProtectionTests : IDisposable
             new WorkingCopyRetentionPolicy { TimeToLive = TimeSpan.FromHours(24) });
 
         Assert.Equal(1, sweep.Removed);
+
+        // Истёкший срок и уборка за прерванным сеансом — разные требования
+        // ADR 0006, и в журнале это разные строки: по одному числу на двоих
+        // нельзя ответить ни на один из двух вопросов.
+        Assert.Equal(1, sweep.Expired);
+        Assert.Equal(0, sweep.Orphaned);
     }
 
     [Fact]
@@ -224,6 +230,12 @@ public sealed class WorkingCopyProtectionTests : IDisposable
         var sweep = WorkingCopyRetention.Sweep(this.root.FullName, Moment);
 
         Assert.Equal(1, sweep.Removed);
+        Assert.Equal(1, sweep.Orphaned);
+
+        // Осиротевший каталог не истёк по сроку: его возраст неизвестен,
+        // и назвать его просроченным значило бы отчитаться о работе политики
+        // хранения там, где сработала уборка за сбоем.
+        Assert.Equal(0, sweep.Expired);
         Assert.False(Directory.Exists(orphan.FullName));
     }
 
@@ -239,7 +251,30 @@ public sealed class WorkingCopyProtectionTests : IDisposable
             "не дата",
             CancellationToken.None);
 
-        Assert.Equal(1, WorkingCopyRetention.Sweep(this.root.FullName, Moment).Removed);
+        var sweep = WorkingCopyRetention.Sweep(this.root.FullName, Moment);
+
+        Assert.Equal(1, sweep.Removed);
+        Assert.Equal(1, sweep.Orphaned);
+    }
+
+    [Fact]
+    public async Task A_directory_that_could_not_be_removed_is_not_counted_as_removed()
+    {
+        // Ключ к этому моменту уже удалён, поэтому содержимое нечитаемо,
+        // но каталог остался на диске. Назвать его удалённым значило бы
+        // записать в журнал неправду ровно о том, ради чего журнал ведётся.
+        var session = await this.SessionAsync("locked");
+
+        await using var held = new FileStream(
+            Path.Combine(session.Directory, "held.bin"),
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None);
+
+        var sweep = WorkingCopyRetention.Sweep(this.root.FullName, Moment.AddHours(25));
+
+        Assert.Equal(0, sweep.Removed);
+        Assert.Equal(1, sweep.Failed);
     }
 
     [Fact]
