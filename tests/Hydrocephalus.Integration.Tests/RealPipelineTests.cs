@@ -1,6 +1,7 @@
 using FellowOakDicom;
 using Hydrocephalus.Application;
 using Hydrocephalus.Domain.Abstractions;
+using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Inference;
@@ -198,6 +199,45 @@ public sealed class RealPipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task A_real_series_is_measured_end_to_end()
+    {
+        // До сих пор ни один сценарный тест не доходил до измерения: у фикстур
+        // не было пикселей, и движок честно возвращал пустой список. Проверялся
+        // весь путь, кроме того единственного места, где появляются миллилитры.
+        this.WriteSeries(phantom: true);
+
+        var report = await this.ExecuteAsync();
+
+        var biomarker = Assert.Single(report.Biomarkers);
+
+        Assert.Equal("volume.ventricular-system", biomarker.Method.Code);
+        Assert.Equal(MeasurementUnit.Millilitre, biomarker.Unit);
+        Assert.True(biomarker.Value > 0, "Объём желудочка на фантоме обязан быть положительным.");
+
+        // Пометка достоверности проверяется здесь, а не только в модульном тесте
+        // движка: у RegionVolumes значение по умолчанию — «надёжно», и потеря
+        // аргумента где-нибудь по дороге дала бы правдоподобное число
+        // с чужой уверенностью в клиническом отчёте.
+        Assert.Equal(MeasurementQuality.Questionable, biomarker.Quality);
+    }
+
+    [Fact]
+    public async Task A_measured_study_still_refuses_to_classify()
+    {
+        // Измерение не превращает конвейер в диагностический: проверенного
+        // model package по-прежнему нет (ADR 0004).
+        this.WriteSeries(phantom: true);
+
+        var report = await this.ExecuteAsync();
+
+        Assert.NotEmpty(report.Biomarkers);
+
+        var refusal = Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
+
+        Assert.Equal(RefusalCode.ModelPackageUnusable, refusal.Reason.Code);
+    }
+
+    [Fact]
     public async Task The_same_input_gives_a_byte_identical_report()
     {
         // «Воспроизводимый результат для одного model package и одного входа»
@@ -213,7 +253,7 @@ public sealed class RealPipelineTests : IDisposable
         // сравнивать было бы нечего — ни порядка, ни замечаний, и тест проходил
         // бы всегда. 60 срезов по 1 мм — это 60 мм при минимуме 100, то есть
         // замечание с числами, но не препятствие: анализ доходит до конца.
-        this.WriteSeries(slices: 60);
+        this.WriteSeries(slices: 60, phantom: true);
 
         this.WriteSeries(
             sliceThickness: 6.0m,
@@ -233,6 +273,10 @@ public sealed class RealPipelineTests : IDisposable
             candidate => candidate.Parameters.Count > 0);
 
         Assert.NotEmpty(issue.Parameters);
+
+        // С фантомом в сравнение попадают и измерения, то есть порядок обхода
+        // маски и сегментации, а не только разбор DICOM.
+        Assert.NotEmpty(first.Biomarkers);
 
         Assert.Equal(
             CanonicalReportJson.Serialize(first),
@@ -275,7 +319,8 @@ public sealed class RealPipelineTests : IDisposable
         string seriesDescription = "T1 MPRAGE",
         string seriesUid = "1.2.3.11",
         string filePrefix = "IM",
-        decimal? sliceSpacing = null)
+        decimal? sliceSpacing = null,
+        bool phantom = false)
     {
         var step = sliceSpacing ?? sliceThickness;
 
@@ -289,7 +334,10 @@ public sealed class RealPipelineTests : IDisposable
                 seriesDescription: seriesDescription,
                 acquisitionType: acquisitionType,
                 sliceThickness: sliceThickness,
-                slicePosition: index * step);
+                slicePosition: index * step,
+                phantom: phantom,
+                sliceIndex: index,
+                sliceCount: slices);
         }
     }
 }
