@@ -142,7 +142,7 @@ public partial class MainWindow : Window
         {
             // В сообщение попадает только техническая причина: ни имён файлов,
             // ни идентификаторов исследования в тексте ошибки быть не должно.
-            this.StatusText.Text = "Открыть не удалось: " + exception.Message;
+            this.StatusText.Text = "Открыть не удалось: " + ErrorReadout.Describe(exception);
 
             // Предыдущее исследование к этому моменту уже освобождено сборкой,
             // и оставить кнопки экспорта включёнными значило бы предложить
@@ -214,7 +214,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            this.StatusText.Text = $"Предпросмотр не удался ({what}): " + exception.Message;
+            this.StatusText.Text = $"Предпросмотр не удался ({what}): " + ErrorReadout.Describe(exception);
             return;
         }
 
@@ -250,7 +250,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            this.StatusText.Text = "Журнал не прочитан: " + exception.Message;
+            this.StatusText.Text = "Журнал не прочитан: " + ErrorReadout.Describe(exception);
         }
     }
 
@@ -288,7 +288,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            this.StatusText.Text = $"Экспорт не удался ({what}): " + exception.Message;
+            this.StatusText.Text = $"Экспорт не удался ({what}): " + ErrorReadout.Describe(exception);
         }
     }
 
@@ -516,7 +516,7 @@ public partial class MainWindow : Window
             // Исследование остаётся открытым: не удалось показать серию,
             // а не потерять рабочую копию. Но панель результата обязана
             // перестать описывать то, чего на экране нет.
-            this.StatusText.Text = "Показать серию не удалось: " + exception.Message;
+            this.StatusText.Text = "Показать серию не удалось: " + ErrorReadout.Describe(exception);
 
             this.AbandonSeriesChange("Результата нет: серию показать не удалось.");
         }
