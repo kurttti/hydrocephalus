@@ -157,6 +157,44 @@ internal static class DeidentificationProfile
         new(0x0008, 0x1150), // ReferencedSOPClassUID
     ];
 
+    /// <summary>
+    /// Удаляемые описательные поля: название рабочего места и описания
+    /// исследования, серии, протокола и процедуры. Удаляются как свободный текст,
+    /// но на практике их значение нередко дословно повторяет техническое поле —
+    /// модель аппарата, катушку, область. Такое повторение нового сведения
+    /// о пациенте не раскрывает (решение владельца данных, ADR 0003).
+    /// </summary>
+    private static readonly HashSet<DicomTag> DescriptiveTags =
+    [
+        new(0x0008, 0x1010), // StationName
+        new(0x0008, 0x1030), // StudyDescription
+        new(0x0008, 0x103E), // SeriesDescription
+        new(0x0018, 0x1030), // ProtocolName
+        new(0x0020, 0x4000), // ImageComments
+        new(0x0032, 0x1060), // RequestedProcedureDescription
+        new(0x0040, 0x0241), // PerformedStationAETitle
+        new(0x0040, 0x0242), // PerformedStationName
+        new(0x0040, 0x0254), // PerformedProcedureStepDescription
+    ];
+
+    /// <summary>
+    /// Сохраняемые технические поля, в которых дословное совпадение с удалённым
+    /// описательным полем прощается: оборудование и параметры получения,
+    /// значения которых задаёт аппарат, а не человек. Прощается только
+    /// совпадение целого значения — подстрока по-прежнему нарушение.
+    /// </summary>
+    private static readonly HashSet<DicomTag> TechnicalTags =
+    [
+        new(0x0008, 0x0008), // ImageType
+        new(0x0008, 0x0070), // Manufacturer
+        new(0x0008, 0x0104), // CodeMeaning
+        new(0x0008, 0x1090), // ManufacturerModelName
+        new(0x0018, 0x0015), // BodyPartExamined
+        new(0x0018, 0x1210), // ConvolutionKernel
+        new(0x0018, 0x1250), // ReceiveCoilName
+        new(0x0018, 0x1251), // TransmitCoilName
+    ];
+
     private static readonly HashSet<DicomTag> Removed = [.. RemovedTags];
 
     private static readonly HashSet<DicomTag> PreservedUids = [.. PreservedUidTags];
@@ -171,6 +209,16 @@ internal static class DeidentificationProfile
     /// <param name="tag">Проверяемый тег.</param>
     /// <returns><see langword="true"/>, если тег подлежит удалению.</returns>
     internal static bool IsRemoved(DicomTag tag) => Removed.Contains(tag);
+
+    /// <summary>Проверяет, относится ли удаляемый тег к описательным полям.</summary>
+    /// <param name="tag">Проверяемый тег.</param>
+    /// <returns><see langword="true"/>, если тег описательный.</returns>
+    internal static bool IsDescriptive(DicomTag tag) => DescriptiveTags.Contains(tag);
+
+    /// <summary>Проверяет, относится ли сохраняемый тег к техническим полям.</summary>
+    /// <param name="tag">Проверяемый тег.</param>
+    /// <returns><see langword="true"/>, если тег технический.</returns>
+    internal static bool IsTechnical(DicomTag tag) => TechnicalTags.Contains(tag);
 
     /// <summary>
     /// Проверяет, относится ли тег к группам, удаляемым целиком: приватным,

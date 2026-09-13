@@ -398,7 +398,8 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
             instance.Dataset,
             metaInfo,
             instance.SourceSecrets,
-            relativePath);
+            relativePath,
+            instance.DescriptiveOnlySecrets);
 
         if (violations.Count == 0)
         {

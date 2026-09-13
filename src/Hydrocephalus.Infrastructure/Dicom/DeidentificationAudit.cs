@@ -71,23 +71,30 @@ internal static class DeidentificationAudit
     /// <param name="fileMetaInfo">Метаинформация файла либо <see langword="null"/>.</param>
     /// <param name="sourceSecrets">Исходные значения, которых не должно быть в результате.</param>
     /// <param name="relativePath">Путь файла внутри рабочей копии.</param>
+    /// <param name="descriptiveOnlySecrets">
+    /// Исходные значения только из описательных полей; их дословное совпадение
+    /// с техническим полем нарушением не считается. <see langword="null"/> —
+    /// не прощать ничего.
+    /// </param>
     /// <returns>Список нарушений; пустой список означает успех.</returns>
     internal static IReadOnlyList<DeidentificationViolation> Inspect(
         DicomDataset dataset,
         DicomDataset? fileMetaInfo,
         IReadOnlySet<string> sourceSecrets,
-        string relativePath)
+        string relativePath,
+        IReadOnlySet<string>? descriptiveOnlySecrets = null)
     {
         ArgumentNullException.ThrowIfNull(dataset);
         ArgumentNullException.ThrowIfNull(sourceSecrets);
 
         var violations = new List<DeidentificationViolation>();
+        var excusable = descriptiveOnlySecrets ?? new HashSet<string>(StringComparer.Ordinal);
 
-        Inspect(dataset, sourceSecrets, violations);
+        Inspect(dataset, sourceSecrets, excusable, violations);
 
         if (fileMetaInfo is not null)
         {
-            Inspect(fileMetaInfo, sourceSecrets, violations);
+            Inspect(fileMetaInfo, sourceSecrets, excusable, violations);
         }
 
         foreach (var secret in sourceSecrets)
@@ -107,6 +114,7 @@ internal static class DeidentificationAudit
     private static void Inspect(
         DicomDataset dataset,
         IReadOnlySet<string> secrets,
+        IReadOnlySet<string> excusable,
         List<DeidentificationViolation> violations)
     {
         foreach (var item in dataset)
@@ -131,7 +139,7 @@ internal static class DeidentificationAudit
             {
                 foreach (var child in sequence.Items)
                 {
-                    Inspect(child, secrets, violations);
+                    Inspect(child, secrets, excusable, violations);
                 }
 
                 continue;
@@ -157,7 +165,10 @@ internal static class DeidentificationAudit
                     continue;
                 }
 
-                if (secrets.Any(secret => Contains(value, secret)))
+                var technical = DeidentificationProfile.IsTechnical(item.Tag);
+
+                if (secrets.Any(secret => Contains(value, secret)
+                    && !(technical && IsExcusedRepetition(value, secret, excusable))))
                 {
                     violations.Add(new DeidentificationViolation(
                         DeidentificationViolationCode.ResidualSourceValue,
@@ -223,7 +234,10 @@ internal static class DeidentificationAudit
     /// <returns><see langword="true"/>, если исходное значение найдено.</returns>
     internal static bool PathContains(string relativePath, string secret)
     {
-        if (!IsShortNumber(secret))
+        // Короткое значение из шестнадцатеричных знаков («FE», «DE», «AB»)
+        // находится внутри шестнадцатеричного псевдонима так же случайно,
+        // как короткое число: папка пациента иНТГ не открывалась именно так.
+        if (!IsShortNumber(secret) && !IsShortHexLike(secret))
         {
             return relativePath.Contains(secret, StringComparison.OrdinalIgnoreCase);
         }
@@ -231,8 +245,30 @@ internal static class DeidentificationAudit
         return relativePath
             .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
             .Select(Path.GetFileNameWithoutExtension)
-            .Any(segment => string.Equals(segment, secret, StringComparison.Ordinal));
+            .Any(segment => string.Equals(segment, secret, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// Прощается ли совпадение: техническое поле целиком равно значению,
+    /// пришедшему только из описательных полей.
+    ///
+    /// Прогон по выборке: 39 исследований не открывались, потому что имя
+    /// станции равнялось модели аппарата, а описание исследования «HEAD» —
+    /// области и катушке. Нового сведения о пациенте такое повторение не
+    /// раскрывает: значение и так лежит в поле, которое профиль сохраняет.
+    /// Подстрока не прощается никогда, как и значение, встреченное хоть раз
+    /// в идентифицирующем поле.
+    /// </summary>
+    /// <param name="value">Значение технического поля результата.</param>
+    /// <param name="secret">Исходное значение.</param>
+    /// <param name="excusable">Значения только из описательных полей.</param>
+    /// <returns><see langword="true"/>, если совпадение прощается.</returns>
+    internal static bool IsExcusedRepetition(string value, string secret, IReadOnlySet<string> excusable) =>
+        excusable.Contains(secret)
+        && string.Equals(value.Trim(), secret, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsShortHexLike(string secret) =>
+        secret.Length < LongNumberLength && secret.All(char.IsAsciiHexDigit);
 
     private static bool IsShortNumber(string secret) =>
         secret.Length < LongNumberLength

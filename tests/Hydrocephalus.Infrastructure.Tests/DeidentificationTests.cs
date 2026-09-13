@@ -161,6 +161,86 @@ public sealed class DeidentificationTests
             violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
     }
 
+    [Fact]
+    public void A_description_repeating_a_retained_device_field_exactly_is_not_a_leak()
+    {
+        // Решение владельца данных (ADR 0003): 39 исследований выборки
+        // не открывались, потому что имя станции равнялось модели аппарата,
+        // а описание исследования «HEAD» — анатомической области. Значение
+        // и так лежит в сохраняемом поле; нового сведения повтор не раскрывает.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.StationName, "Avanto");
+                dataset.AddOrUpdate(DicomTag.ManufacturerModelName, "Avanto");
+                dataset.AddOrUpdate(DicomTag.StudyDescription, "HEAD");
+                dataset.AddOrUpdate(DicomTag.BodyPartExamined, "HEAD");
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Empty(DeidentificationAudit.Inspect(
+            result.Dataset,
+            fileMetaInfo: null,
+            result.SourceSecrets,
+            "series/instance.dcm",
+            result.DescriptiveOnlySecrets));
+    }
+
+    [Fact]
+    public void A_name_copied_into_a_device_field_is_still_a_leak_even_when_it_is_also_a_description()
+    {
+        // Значение, встреченное хоть раз в идентифицирующем поле, не прощается:
+        // фамилия, вписанная в название катушки, — утечка, даже если её же
+        // оператор вписал и в имя станции.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientName: "Sidorov",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.StationName, "Sidorov");
+                dataset.AddOrUpdate(DicomTag.ReceiveCoilName, "Sidorov");
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Contains(
+            DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm", result.DescriptiveOnlySecrets),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue
+                && violation.Location == "(0018,1250)");
+    }
+
+    [Theory]
+    [InlineData(0x0008, 0x1090, "Skyra MR-ROOM-2")]
+    [InlineData(0x0018, 0x0024, "MR-ROOM-2")]
+    public void A_description_is_forgiven_only_as_a_whole_value_of_a_device_field(
+        ushort group,
+        ushort element,
+        string retained)
+    {
+        // Подстрока в техническом поле и дословный повтор в нетехническом
+        // сохраняемом поле (SequenceName) по-прежнему нарушение.
+        var tag = new DicomTag(group, element);
+
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.StationName, "MR-ROOM-2");
+                dataset.AddOrUpdate(tag, retained);
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Contains(
+            DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm", result.DescriptiveOnlySecrets),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
     [Theory]
     [InlineData("ISO_IR 100", "100", true)]
     [InlineData("-124681.5", "24681", false)]
@@ -185,6 +265,8 @@ public sealed class DeidentificationTests
     [InlineData("a1f3/24681.dcm", "24681", true)]
     [InlineData("24681/instance.dcm", "24681", true)]
     [InlineData("series/Ivanov.dcm", "Ivanov", true)]
+    [InlineData("a1f3/4f2fe81e9c.dcm", "FE", false)]
+    [InlineData("a1f3/fe.dcm", "FE", true)]
     public void A_short_number_in_the_path_counts_only_as_a_whole_segment(
         string relativePath,
         string secret,

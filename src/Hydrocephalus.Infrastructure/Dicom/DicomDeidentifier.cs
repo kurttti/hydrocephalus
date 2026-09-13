@@ -22,6 +22,14 @@ internal sealed record DeidentifiedInstance
     /// в другом теге или во вложенной последовательности.
     /// </summary>
     public required IReadOnlySet<string> SourceSecrets { get; init; }
+
+    /// <summary>
+    /// Исходные значения, пришедшие только из описательных полей — имени
+    /// станции, описаний исследования, серии и процедуры — и ни из одного
+    /// идентифицирующего. Только такое значение проверка прощает, когда оно
+    /// дословно совпадает с сохраняемым техническим полем (ADR 0003).
+    /// </summary>
+    public IReadOnlySet<string> DescriptiveOnlySecrets { get; init; } = new HashSet<string>(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -61,7 +69,12 @@ internal sealed class DicomDeidentifier
         ArgumentNullException.ThrowIfNull(source);
 
         var secrets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        CollectSecrets(source, secrets);
+        var descriptive = new HashSet<string>(StringComparer.Ordinal);
+        var identifying = new HashSet<string>(StringComparer.Ordinal);
+
+        CollectSecrets(source, secrets, descriptive, identifying);
+
+        descriptive.ExceptWith(identifying);
 
         var instanceId = Pseudonyms.Derive(
             this.options.PseudonymSalt,
@@ -80,6 +93,7 @@ internal sealed class DicomDeidentifier
             Dataset = clean,
             PseudonymousInstanceId = instanceId,
             SourceSecrets = secrets,
+            DescriptiveOnlySecrets = descriptive,
         };
     }
 
@@ -89,7 +103,11 @@ internal sealed class DicomDeidentifier
     /// Обход рекурсивный: исходные UID прячутся во вложенных последовательностях
     /// вроде ReferencedImageSequence.
     /// </summary>
-    private static void CollectSecrets(DicomDataset dataset, HashSet<string> secrets)
+    private static void CollectSecrets(
+        DicomDataset dataset,
+        HashSet<string> secrets,
+        HashSet<string> descriptive,
+        HashSet<string> identifying)
     {
         foreach (var item in dataset)
         {
@@ -97,7 +115,7 @@ internal sealed class DicomDeidentifier
             {
                 foreach (var child in sequence.Items)
                 {
-                    CollectSecrets(child, secrets);
+                    CollectSecrets(child, secrets, descriptive, identifying);
                 }
 
                 continue;
@@ -129,6 +147,11 @@ internal sealed class DicomDeidentifier
                 if (trimmed.Length >= MinimumSecretLength)
                 {
                     secrets.Add(trimmed);
+
+                    // Значение, встреченное хоть раз в идентифицирующем поле,
+                    // не прощается нигде: имя пациента, вписанное в название
+                    // катушки, остаётся утечкой, даже если совпадает дословно.
+                    (DeidentificationProfile.IsDescriptive(item.Tag) ? descriptive : identifying).Add(trimmed);
                 }
             }
         }
