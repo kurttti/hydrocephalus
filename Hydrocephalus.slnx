@@ -10,6 +10,7 @@
     <Project Path="tools/Hydrocephalus.BatchMeasure/Hydrocephalus.BatchMeasure.csproj" />
     <Project Path="tools/Hydrocephalus.Inventory/Hydrocephalus.Inventory.csproj" />
     <Project Path="tools/Hydrocephalus.ReviewPlan/Hydrocephalus.ReviewPlan.csproj" />
+    <Project Path="tools/Hydrocephalus.SegmentationCheck/Hydrocephalus.SegmentationCheck.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hydrocephalus.Application.Tests/Hydrocephalus.Application.Tests.csproj" />

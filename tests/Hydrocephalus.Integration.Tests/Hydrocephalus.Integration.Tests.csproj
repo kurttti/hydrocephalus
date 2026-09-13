@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\Hydrocephalus.Infrastructure\Hydrocephalus.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Hydrocephalus.Inference\Hydrocephalus.Inference.csproj" />
     <ProjectReference Include="..\..\tools\Hydrocephalus.BatchMeasure\Hydrocephalus.BatchMeasure.csproj" />
+    <ProjectReference Include="..\..\tools\Hydrocephalus.SegmentationCheck\Hydrocephalus.SegmentationCheck.csproj" />
   </ItemGroup>
 
 </Project>
