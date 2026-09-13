@@ -84,6 +84,23 @@ public sealed class BaselineMeasurementEngineTests
     }
 
     [Fact]
+    public async Task A_failed_threshold_yields_no_volume_rather_than_zero_millilitres()
+    {
+        // Пакетный замер выборки: на всех восьми реальных сериях T1 порог
+        // ликвора встал не там, сегментация отдала пустую маску, и отчёт получил
+        // «0 мл, недостоверно». Нулевого объёма желудочков у живого человека
+        // не бывает — это отказ метода, а не результат, и числом в отчёте
+        // он выглядит как измерение.
+        //
+        // Воспроизводится честно: у фантома ликвор яркий, а серия помечена T1,
+        // поэтому порог ищет тёмный ликвор и выбирает всю ткань головы.
+        var result = await Analyse(Series(weighting: SeriesWeighting.T1));
+
+        Assert.Empty(result.Biomarkers);
+        Assert.IsType<AnalysisOutcome.Refused>(result.Outcome);
+    }
+
+    [Fact]
     public async Task An_unreadable_volume_does_not_take_the_report_down_with_it()
     {
         // Сжатый синтаксис передачи — обычное состояние реальной выгрузки.
