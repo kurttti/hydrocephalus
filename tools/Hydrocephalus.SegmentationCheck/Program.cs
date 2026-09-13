@@ -58,7 +58,7 @@ await using var results = new StreamWriter(
     append: false,
     Encoding.UTF8);
 
-await results.WriteLineAsync("file,site,weighting,outcome,volume_ml,csf_fraction_of_head_selected,seconds");
+await results.WriteLineAsync("file,site,weighting,outcome,volume_ml,refusal_detail,seconds");
 
 var outcomes = new Dictionary<string, int>(StringComparer.Ordinal);
 var volumes = new Dictionary<string, List<double>>(StringComparer.Ordinal);
@@ -100,7 +100,7 @@ foreach (var archive in archives)
 
         string outcome;
         double volume = 0;
-        string fraction = string.Empty;
+        string detail = string.Empty;
 
         try
         {
@@ -114,10 +114,17 @@ foreach (var archive in archives)
             var voxels = NiftiVolumeReader.Parse(content.GetBuffer().AsSpan(0, (int)content.Length));
             var segmentation = BaselineVentricleSegmentation.Segment(voxels, weighting);
 
-            fraction = segmentation.Issues
-                .Where(issue => issue.Parameters.ContainsKey("selectedFraction"))
-                .Select(issue => issue.Parameters["selectedFraction"])
-                .FirstOrDefault() ?? string.Empty;
+            // Отказ называется своей причиной: «порог не отделил ликвор»
+            // и «маска неправдоподобно мала» — разные поломки метода.
+            var refusal = segmentation.Issues
+                .FirstOrDefault(issue => issue.Severity == Hydrocephalus.Domain.Quality.QualityIssueSeverity.Blocking);
+
+            if (refusal is not null)
+            {
+                detail = refusal.Parameters.GetValueOrDefault("selectedFraction")
+                    ?? refusal.Parameters.GetValueOrDefault("millilitres")
+                    ?? string.Empty;
+            }
 
             volume = RegionVolumes
                 .Measure(segmentation.Mask, AcquisitionTier.Extended, segmentation.Quality)
@@ -125,8 +132,8 @@ foreach (var archive in archives)
 
             outcome = volume > 0
                 ? "volume"
-                : segmentation.Quality == MeasurementQuality.Unreliable
-                    ? "threshold-failed"
+                : refusal is not null
+                    ? "refused:" + refusal.Parameters.GetValueOrDefault("reason", "unknown")
                     : "empty-mask";
 
             if (volume > 0)
@@ -155,7 +162,7 @@ foreach (var archive in archives)
             weighting,
             outcome,
             volume.ToString("0.0", CultureInfo.InvariantCulture),
-            fraction,
+            detail,
             study.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
 
         processed++;

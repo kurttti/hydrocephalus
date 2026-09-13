@@ -19,7 +19,7 @@ namespace Hydrocephalus.Inference.Tests;
 /// </summary>
 public sealed class BaselineMeasurementEngineTests
 {
-    private const int Size = 48;
+    private const int Size = 128;
     private const float Background = 0f;
     private const float Tissue = 300f;
 
@@ -93,7 +93,7 @@ public sealed class BaselineMeasurementEngineTests
         // он выглядит как измерение.
         //
         // Воспроизводится честно: у фантома ликвор яркий, а серия помечена T1,
-        // поэтому порог ищет тёмный ликвор и выбирает всю ткань головы.
+        // поэтому порог ищет тёмный ликвор и внутри головы его не находит.
         var result = await Analyse(Series(weighting: SeriesWeighting.T1));
 
         Assert.Empty(result.Biomarkers);
@@ -240,8 +240,11 @@ public sealed class BaselineMeasurementEngineTests
         private static float[] Build()
         {
             const int Centre = Size / 2;
-            const int HeadRadius = 18;
-            const int VentricleRadius = 6;
+            // Размеры в миллиметрах близки к настоящим: кадр 128 мм охватывает
+            // голову целиком, желудочек около 58 мл лежит в 32 мм от поверхности.
+            // Блок меньше или шар мельче сегментация правильно отвергла бы.
+            const int HeadRadius = 56;
+            const int VentricleRadius = 24;
 
             var values = new float[Size * Size * Size];
 

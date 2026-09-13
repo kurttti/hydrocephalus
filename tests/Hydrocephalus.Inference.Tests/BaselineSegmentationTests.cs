@@ -22,6 +22,7 @@ public sealed class BaselineSegmentationTests
     private const float Tissue = 800f;
     private const float CsfOnT1 = 100f;
     private const float CsfOnT2 = 1600f;
+    private const float GreyMatter = 500f;
 
     [Fact]
     public void The_central_cavity_is_found_on_t1()
@@ -211,6 +212,86 @@ public sealed class BaselineSegmentationTests
                 && issue.Parameters["reason"] == "thresholdDidNotIsolateCsf");
     }
 
+    [Fact]
+    public void The_neck_in_the_frame_does_not_push_the_ventricles_out()
+    {
+        // На IXI в кадр попадает шея, центр тяжести головы уезжает в неё,
+        // и отбор по удалению от центра отбрасывал желудочки на всех сериях T1.
+        // Глубина от поверхности головы от шеи не зависит.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, neck: true);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1);
+
+        AssertRecovers(result.Mask, ventricleRadius: 6);
+    }
+
+    [Fact]
+    public void An_implausibly_small_cavity_is_refused_rather_than_measured()
+    {
+        // Маска в пару миллилитров — не малые желудочки, а промах: на IXI такие
+        // маски лежали в одном роге или в позвоночном канале. Число из неё
+        // выглядело бы как находка.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 3);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1);
+
+        Assert.Equal(0, Count(result.Mask));
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+
+        Assert.Contains(
+            result.Issues,
+            issue => issue.Severity == QualityIssueSeverity.Blocking
+                && issue.Parameters["reason"] == "ventricularSystemImplausiblySmall");
+    }
+
+    [Fact]
+    public void On_t1_the_mask_reaches_into_the_partial_volume_boundary_but_not_the_tissue()
+    {
+        // Порог фона берёт только тёмную сердцевину. Граница желудочка лежит
+        // в частичном объёме, и без дорастания объём занижается; но дорастание
+        // не должно уходить в ткань.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, partialVolume: true);
+
+        var coreOnly = BaselineVentricleSegmentation.Segment(
+            volume,
+            SeriesWeighting.T1,
+            new BaselineSegmentationOptions { BoundaryGrowthMillimetres = 0 });
+
+        var grown = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1);
+
+        Assert.True(
+            Count(grown.Mask) > Count(coreOnly.Mask),
+            "The mask must take in the partial volume around the dark core.");
+
+        // Переход к ткани занимает три отсчёта, дорастание — один (3 мм):
+        // маска не должна дойти до ткани.
+        Assert.True(
+            Count(grown.Mask) < VoxelsWithin(6 + 2),
+            "Growth must stop within the boundary allowance.");
+    }
+
+    [Fact]
+    public void A_cavity_cut_by_the_edge_of_the_frame_is_not_measured()
+    {
+        // Объём по прицельному блоку, обрезающему желудочки, — объём их части,
+        // неотличимый от объёма всей системы. Блок, в который желудочки
+        // поместились целиком, измерять можно; поэтому проверяется маска,
+        // а не толщина блока.
+        // На T2: ликвор ярче порога фона, и обрезанный кадром желудочек
+        // остаётся внутри головы, а не уходит в фон вместе с заливкой.
+        var volume = Phantom(csf: CsfOnT2, ventricleRadius: 6, cutBySlab: true);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T2);
+
+        Assert.Equal(0, Count(result.Mask));
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+
+        Assert.Contains(
+            result.Issues,
+            issue => issue.Severity == QualityIssueSeverity.Blocking
+                && issue.Parameters["reason"] == "ventricularSystemTruncatedByFrame");
+    }
+
     private static void AssertRecovers(VoxelMask mask, int ventricleRadius)
     {
         var expected = VoxelsWithin(ventricleRadius);
@@ -268,14 +349,23 @@ public sealed class BaselineSegmentationTests
         return count;
     }
 
+    // Шаг 3 мм делает фантом похожим на голову по размеру: радиус 20 отсчётов —
+    // 60 мм, желудочек радиусом 6 — около 24 мл. В миллиметровой сетке тот же
+    // фантом был бы меньше грецкого ореха, и пороги глубины и объёма,
+    // заданные для настоящей головы, отбрасывали бы его целиком.
+    private const double SpacingMillimetres = 3.0;
+
     private static VolumeGrid Grid() =>
-        new(new VolumeDimensions(Size, Size, Size), 1.0, 1.0, 1.0);
+        new(new VolumeDimensions(Size, Size, Size), SpacingMillimetres, SpacingMillimetres, SpacingMillimetres);
 
     private static TestVolume Phantom(
         float csf,
         int ventricleRadius,
         bool peripheralCsf = false,
-        bool connectedPeripheralCsf = false)
+        bool connectedPeripheralCsf = false,
+        bool neck = false,
+        bool cutBySlab = false,
+        bool partialVolume = false)
     {
         const int Centre = Size / 2;
         const int HeadRadius = 20;
@@ -284,18 +374,34 @@ public sealed class BaselineSegmentationTests
         {
             var dc = column - Centre;
             var dr = row - Centre;
-            var ds = slice - Centre;
+            // Блок, обрезающий голову: центр у самого края кадра.
+            var ds = cutBySlab ? slice - 3 : slice - Centre;
 
             var distance = Math.Sqrt((dc * dc) + (dr * dr) + (ds * ds));
 
             if (distance > HeadRadius)
             {
-                return Background;
+                // Шея — столб ткани от головы до края кадра.
+                return neck && ds < 0 && ((dc * dc) + (dr * dr)) <= 10 * 10 ? Tissue : Background;
             }
 
             if (distance <= ventricleRadius)
             {
                 return csf;
+            }
+
+            // Частичный объём: интенсивность плавно переходит от ликвора
+            // к серому веществу на протяжении трёх отсчётов. Кора из серого
+            // вещества нужна, чтобы у тёмной части головы было распределение,
+            // как у настоящей: без неё порог фона сам захватывает переход.
+            if (partialVolume && distance <= ventricleRadius + 3)
+            {
+                return (float)(csf + ((GreyMatter - csf) * (distance - ventricleRadius) / 3));
+            }
+
+            if (partialVolume && distance > HeadRadius - 6)
+            {
+                return GreyMatter;
             }
 
             // Тонкая ликворная прослойка у поверхности: по интенсивности такая же,
@@ -327,9 +433,9 @@ public sealed class BaselineSegmentationTests
             this.Geometry = new SeriesGeometry
             {
                 AcquisitionType = MrAcquisitionType.ThreeDimensional,
-                SliceThicknessMillimetres = 1.0,
-                SliceSpacingMillimetres = 1.0,
-                PixelSpacing = new InPlaneSpacing(1.0, 1.0),
+                SliceThicknessMillimetres = SpacingMillimetres,
+                SliceSpacingMillimetres = SpacingMillimetres,
+                PixelSpacing = new InPlaneSpacing(SpacingMillimetres, SpacingMillimetres),
                 Dimensions = grid.Dimensions,
                 RowDirection = new SpatialVector(1, 0, 0),
                 ColumnDirection = new SpatialVector(0, 1, 0),

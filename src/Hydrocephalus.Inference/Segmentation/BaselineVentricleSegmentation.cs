@@ -12,7 +12,8 @@ namespace Hydrocephalus.Inference.Segmentation;
 ///
 /// Все значения — эвристики, подобранные под задачу, а не полученные обучением.
 /// Они вынесены сюда, чтобы их можно было пересматривать явно и чтобы в коде
-/// не оставалось чисел без объяснения.
+/// не оставалось чисел без объяснения. Как они проверялись на публичных
+/// данных, записано в docs/data/README.md.
 /// </summary>
 public sealed record BaselineSegmentationOptions
 {
@@ -22,26 +23,60 @@ public sealed record BaselineSegmentationOptions
     /// Порог внутри головы может встать не между ликвором и тканью, а между
     /// серым и белым веществом — метод Оцу предполагает два класса, а их три.
     /// Тогда «ликвором» окажется половина мозга. Доля выше этой границы означает
-    /// именно такую ошибку, и её нужно назвать, а не выдать объём.
+    /// именно такую ошибку, и её нужно назвать, а не выдать объём. Та же граница
+    /// применяется и к итоговой маске.
     /// </summary>
     public double MaxCsfFractionOfHead { get; init; } = 0.35;
 
     /// <summary>
-    /// Наибольшее удаление самой дальней точки компоненты от центра головы,
-    /// при котором компонента считается желудочковой, в долях радиуса головы.
+    /// Наименьшее расстояние от поверхности головы, мм, на котором должна
+    /// лежать вся компонента, чтобы считаться желудочковой.
     ///
-    /// Условие ставится на самую дальнюю точку, а не на центр компоненты:
-    /// у ликвора, охватывающего мозг оболочкой, центр совпадает с центром
-    /// головы, и проверка по центру пропустила бы его целиком.
+    /// Ликвор в бороздах и наружных пространствах по интенсивности неотличим
+    /// от желудочкового; различает их только расположение. Раньше расположение
+    /// мерилось удалением от центра головы, но центр тяжести головы уезжает
+    /// в шею, если она попала в кадр, и тогда отбрасывались как раз желудочки
+    /// (так было на всех сериях T1 набора IXI). Глубина от поверхности от шеи
+    /// не зависит.
     ///
-    /// Порог отделяет желудочки от ликвора в бороздах и наружных пространствах:
-    /// по интенсивности они неотличимы, различает их только расположение.
-    ///
-    /// Значение выбрано с запасом. При гидроцефалии желудочки вытянуты к задним
-    /// рогам и уходят далеко от центра; тесный порог отбрасывал бы именно
-    /// расширенные желудочки — ровно те, ради измерения которых всё и делается.
+    /// Условие ставится на самую мелкую точку компоненты: ликвор, дотянувшийся
+    /// до поверхности, отбрасывается целиком, даже если большая его часть лежит
+    /// глубоко. При гидроцефалии желудочки растут, но остаются в глубине —
+    /// в отличие от центральности, это условие расширенные желудочки не теряет.
     /// </summary>
-    public double VentricleCentralityFraction { get; init; } = 0.6;
+    public double MinDepthMillimetres { get; init; } = 12;
+
+    /// <summary>
+    /// На сколько отсчётов раздувается голова перед заливкой фона снаружи.
+    ///
+    /// Заливка фона от края кадра проходит в голову по любой тёмной щели,
+    /// дотянувшейся до края: на T1 это ликвор вокруг спинного мозга в шее.
+    /// Дальше она растекается по субарахноидальному пространству, и голова
+    /// кончается на поверхности мозга, а не на коже. Раздувание закрывает
+    /// такие щели на время заливки; после неё голова сжимается обратно.
+    /// </summary>
+    public int LeakClosingVoxels { get; init; } = 2;
+
+    /// <summary>
+    /// На сколько миллиметров маска T1 дорастает за порог фона в сторону
+    /// частичного объёма.
+    ///
+    /// На T1 ликвор отделяется от ткани порогом фона — он надёжен, но берёт
+    /// только тёмную сердцевину желудочка. Граница желудочка лежит в частичном
+    /// объёме между ликвором и тканью, и без дорастания объём занижается вдвое.
+    /// Дорастание ограничено расстоянием, а не только интенсивностью: иначе
+    /// через частичный объём маска перетекла бы в борозды.
+    /// </summary>
+    public double BoundaryGrowthMillimetres { get; init; } = 3;
+
+    /// <summary>
+    /// Наименьший правдоподобный объём желудочковой системы, мл.
+    ///
+    /// Маска меньше этого — не малые желудочки, а промах: метод захватил
+    /// один рог или посторонний ликвор (на IXI такие маски лежали в шее).
+    /// Отказ здесь заменяет число, которое выглядело бы как находка.
+    /// </summary>
+    public double MinVentricleMillilitres { get; init; } = 5;
 
     /// <summary>Наименьший размер компоненты в отсчётах.</summary>
     public int MinComponentVoxels { get; init; } = 50;
@@ -92,7 +127,7 @@ public static class BaselineVentricleSegmentation
     /// baseline-сегментацией, не должен сравниваться с результатом модели
     /// как одинаковый.
     /// </summary>
-    public const string LabelMapVersion = "baseline-1.0.0";
+    public const string LabelMapVersion = "baseline-1.1.0";
 
     /// <summary>
     /// Сегментирует желудочковую систему.
@@ -126,37 +161,82 @@ public static class BaselineVentricleSegmentation
                 "Baseline segmentation needs a known series weighting to decide the CSF threshold."),
         };
 
+        var grid = volume.Grid;
         var headThreshold = IntensityThresholds.Otsu(volume);
-        var head = Head(volume, headThreshold, cancellationToken);
+        var (head, open) = Head(volume, headThreshold, options.LeakClosingVoxels, cancellationToken);
+        var headCount = head.Count(inside => inside);
 
-        if (head.Count == 0)
+        if (headCount == 0)
         {
             throw new DomainRuleViolationException(
                 "Baseline segmentation found no head above the background threshold.");
         }
 
-        // Порог внутри головы, а не по всему кадру: фон занимает большую часть
-        // объёма и утянул бы границу к себе.
-        var csfThreshold = IntensityThresholds.OtsuWithin(volume, head.Voxels);
+        // Порог между тканями считается внутри головы, а не по всему кадру:
+        // фон занимает большую часть объёма и утянул бы границу к себе.
+        // И по голове без закрытия щелей: закрытие запирает внутри воздух
+        // пазух, рта и глотки, и этот воздух утянул бы к себе границу
+        // частичного объёма — на IXI объём желудочков падал на треть.
+        var tissueThreshold = IntensityThresholds.OtsuWithin(volume, open);
 
-        var candidate = Candidate(volume, head.Voxels, csfThreshold, darkCsf, cancellationToken);
+        // Направления несимметричны не случайно. На T2 ликвор — самый яркий
+        // класс головы, и порог Оцу внутри неё отделяет его от ткани. На T1
+        // ликвор — тёмный хвост в один-два процента головы: его вклад в
+        // межклассовую дисперсию ничтожен рядом с парой «серое — белое вещество»,
+        // и порог внутри головы встаёт между ними, забирая шестьдесят процентов
+        // головы. Ни трёхклассовый, ни повторный порог этого не исправляют.
+        // Отделяет ликвор T1 порог фона: всё, что темнее ткани и лежит внутри
+        // головы, — ликвор, кость и воздух пазух, а последние два отсекает
+        // глубина.
+        var csfThreshold = darkCsf ? headThreshold : tissueThreshold;
 
+        var candidate = Candidate(volume, head, csfThreshold, darkCsf, cancellationToken);
         var candidateCount = candidate.Count(value => value != 0);
 
-        if (candidateCount > head.Count * options.MaxCsfFractionOfHead)
+        if (candidateCount > headCount * options.MaxCsfFractionOfHead)
         {
             // Порог встал не там, где предполагалось. Отдать половину мозга
             // как объём желудочков хуже, чем не отдать ничего.
-            return new BaselineSegmentationResult(
-                Empty(volume.Grid),
-                [.. Report(rejectedComponents: 0), ThresholdFailed(candidateCount, head.Count)],
-                MeasurementQuality.Unreliable);
+            return Refused(grid, ThresholdFailed(candidateCount, headCount));
         }
 
-        var labels = SelectVentricles(volume.Grid, candidate, head, options, out var rejected);
+        var depth = DistanceToOutside(grid, head, cancellationToken);
+        var voxelMillilitres = grid.ColumnSpacingMillimetres * grid.RowSpacingMillimetres
+            * grid.SliceSpacingMillimetres / 1000.0;
+
+        var labels = SelectVentricles(grid.Dimensions, candidate, depth, options, out var rejected);
+
+        if (darkCsf)
+        {
+            labels = GrowIntoPartialVolume(volume, head, open, labels, tissueThreshold, csfThreshold, options, cancellationToken);
+        }
+
+        var selected = labels.Count(value => value != 0);
+
+        if (selected > headCount * options.MaxCsfFractionOfHead)
+        {
+            return Refused(grid, ThresholdFailed(selected, headCount));
+        }
+
+        if (TouchesFrame(grid.Dimensions, labels))
+        {
+            // Маска упирается в край кадра: структура обрезана, и объём —
+            // объём её части. Проверяется маска, а не охват серии: прицельный
+            // блок, в который желудочки поместились целиком, измерять можно,
+            // а в клинической выборке почти все серии T2 уровня Extended —
+            // блоки толщиной 30–80 мм.
+            return Refused(grid, TruncatedByFrame());
+        }
+
+        var millilitres = selected * voxelMillilitres;
+
+        if (selected > 0 && millilitres < options.MinVentricleMillilitres)
+        {
+            return Refused(grid, TooSmall(millilitres));
+        }
 
         var mask = new VoxelMask(
-            volume.Grid,
+            grid,
             new LabelMap { Version = LabelMapVersion, Labels = [VentricularSystem] },
             labels);
 
@@ -169,10 +249,13 @@ public static class BaselineVentricleSegmentation
             MeasurementQuality.Questionable);
     }
 
-    private static VoxelMask Empty(VolumeGrid grid) => new(
-        grid,
-        new LabelMap { Version = LabelMapVersion, Labels = [VentricularSystem] },
-        new byte[grid.Dimensions.Columns * grid.Dimensions.Rows * grid.Dimensions.Slices]);
+    private static BaselineSegmentationResult Refused(VolumeGrid grid, QualityIssue reason) => new(
+        new VoxelMask(
+            grid,
+            new LabelMap { Version = LabelMapVersion, Labels = [VentricularSystem] },
+            new byte[grid.Dimensions.Columns * grid.Dimensions.Rows * grid.Dimensions.Slices]),
+        [.. Report(rejectedComponents: 0), reason],
+        MeasurementQuality.Unreliable);
 
     private static QualityIssue ThresholdFailed(long selected, long head) => new()
     {
@@ -182,6 +265,51 @@ public static class BaselineVentricleSegmentation
         {
             ["reason"] = "thresholdDidNotIsolateCsf",
             ["selectedFraction"] = ((double)selected / head).ToString("0.###", CultureInfo.InvariantCulture),
+        },
+    };
+
+    private static QualityIssue TruncatedByFrame() => new()
+    {
+        Code = QualityIssueCode.HeadTruncated,
+        Severity = QualityIssueSeverity.Blocking,
+        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = "ventricularSystemTruncatedByFrame",
+        },
+    };
+
+    private static bool TouchesFrame(VolumeDimensions dimensions, byte[] labels)
+    {
+        for (var slice = 0; slice < dimensions.Slices; slice++)
+        {
+            for (var row = 0; row < dimensions.Rows; row++)
+            {
+                for (var column = 0; column < dimensions.Columns; column++)
+                {
+                    var onFrame = column == 0 || row == 0 || slice == 0
+                        || column == dimensions.Columns - 1
+                        || row == dimensions.Rows - 1
+                        || slice == dimensions.Slices - 1;
+
+                    if (onFrame && labels[Offset(dimensions, column, row, slice)] != 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static QualityIssue TooSmall(double millilitres) => new()
+    {
+        Code = QualityIssueCode.InconsistentGeometry,
+        Severity = QualityIssueSeverity.Blocking,
+        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = "ventricularSystemImplausiblySmall",
+            ["millilitres"] = millilitres.ToString("0.0", CultureInfo.InvariantCulture),
         },
     };
 
@@ -232,9 +360,14 @@ public static class BaselineVentricleSegmentation
     /// к фону вместе с воздухом. Без заливки желудочек оказывается вне головы,
     /// и искать его внутри неё бессмысленно.
     /// </summary>
-    private static HeadExtent Head(
+    /// <returns>
+    /// Голову с закрытыми щелями — по ней ищется ликвор и меряется глубина —
+    /// и голову без закрытия — по ней считаются пороги между тканями.
+    /// </returns>
+    private static (bool[] Closed, bool[] Open) Head(
         IVoxelVolume volume,
         double threshold,
+        int closingVoxels,
         CancellationToken cancellationToken)
     {
         var dimensions = volume.Grid.Dimensions;
@@ -256,58 +389,90 @@ public static class BaselineVentricleSegmentation
             }
         }
 
+        var open = LargestComponent(dimensions, FilledFromOutside(dimensions, above));
+
+        // Раздувание перед заливкой закрывает тёмные щели, по которым фон
+        // затёк бы внутрь, — см. LeakClosingVoxels.
+        var closed = above;
+
+        for (var step = 0; step < closingVoxels; step++)
+        {
+            closed = Dilate(dimensions, closed);
+        }
+
         // Порядок важен. Сначала заливка фона от границы кадра: всё, чего она
         // не достигла, лежит внутри головы, включая ликвор в бороздах, который
         // по интенсивности от фона неотличим. Если сначала взять наибольшую
         // связную область, ободок ткани за таким ликвором окажется отдельной
         // областью и потеряется, а голова выйдет меньше, чем она есть.
-        var head = FilledFromOutside(dimensions, above);
+        var head = FilledFromOutside(dimensions, closed);
 
         // И только теперь — наибольшая область: отдельные яркие пятна вне головы
         // заливкой не убираются, потому что сами лежат выше порога.
         head = LargestComponent(dimensions, head);
 
-        double sumColumn = 0;
-        double sumRow = 0;
-        double sumSlice = 0;
-        long count = 0;
-
-        for (var slice = 0; slice < dimensions.Slices; slice++)
+        // Сжатие возвращает границу на кожу: иначе в голову вошёл бы слой
+        // воздуха толщиной в раздувание, а на T1 он темнее порога и попал бы
+        // в кандидаты.
+        for (var step = 0; step < closingVoxels; step++)
         {
-            for (var row = 0; row < dimensions.Rows; row++)
-            {
-                for (var column = 0; column < dimensions.Columns; column++)
-                {
-                    if (!head[Offset(dimensions, column, row, slice)])
-                    {
-                        continue;
-                    }
+            head = Erode(dimensions, head);
+        }
 
-                    sumColumn += column;
-                    sumRow += row;
-                    sumSlice += slice;
-                    count++;
+        return (head, open);
+    }
+
+    private static bool[] Dilate(VolumeDimensions dimensions, bool[] source)
+    {
+        var result = (bool[])source.Clone();
+
+        for (var offset = 0; offset < source.Length; offset++)
+        {
+            if (source[offset])
+            {
+                continue;
+            }
+
+            foreach (var next in NeighboursOf(dimensions, offset))
+            {
+                if (source[next])
+                {
+                    result[offset] = true;
+                    break;
                 }
             }
         }
 
-        if (count == 0)
+        return result;
+    }
+
+    private static bool[] Erode(VolumeDimensions dimensions, bool[] source)
+    {
+        var result = (bool[])source.Clone();
+
+        for (var offset = 0; offset < source.Length; offset++)
         {
-            return new HeadExtent(head, default, 0, 0);
+            if (!source[offset])
+            {
+                continue;
+            }
+
+            foreach (var next in NeighboursOf(dimensions, offset))
+            {
+                if (!source[next])
+                {
+                    result[offset] = false;
+                    break;
+                }
+            }
         }
 
-        var centre = new Centre(sumColumn / count, sumRow / count, sumSlice / count);
-
-        // Радиус берётся как радиус шара того же объёма: он устойчив к форме
-        // и не зависит от того, попала ли в кадр шея.
-        var radius = Math.Cbrt(3.0 * count / (4.0 * Math.PI));
-
-        return new HeadExtent(head, centre, radius, count);
+        return result;
     }
 
     /// <summary>
     /// Оставляет наибольшую связную область: отдельные яркие пятна вне головы
-    /// встречаются и не должны попадать ни в голову, ни в расчёт её центра.
+    /// встречаются и не должны попадать в голову.
     /// </summary>
     private static bool[] LargestComponent(VolumeDimensions dimensions, bool[] source)
     {
@@ -428,6 +593,161 @@ public static class BaselineVentricleSegmentation
         return head;
     }
 
+    /// <summary>
+    /// Расстояние каждого отсчёта маски до ближайшего отсчёта вне её, мм.
+    ///
+    /// Точное евклидово расстояние с учётом шага по каждой оси: клинические
+    /// серии бывают с толстыми срезами, и расстояние в отсчётах занизило бы
+    /// его поперёк срезов втрое. Вне маски расстояние нулевое. Край кадра
+    /// границей не считается: голова, обрезанная кадром, от этого мельче
+    /// не становится.
+    /// </summary>
+    private static float[] DistanceToOutside(VolumeGrid grid, bool[] inside, CancellationToken cancellationToken)
+    {
+        var dimensions = grid.Dimensions;
+        var squared = new float[inside.Length];
+
+        for (var offset = 0; offset < inside.Length; offset++)
+        {
+            squared[offset] = inside[offset] ? float.PositiveInfinity : 0;
+        }
+
+        // Разделимое преобразование расстояния (Felzenszwalb, Huttenlocher):
+        // одномерный проход по каждой оси по очереди даёт точный квадрат
+        // евклидова расстояния.
+        var columns = dimensions.Columns;
+        var rows = dimensions.Rows;
+        var slices = dimensions.Slices;
+        var longest = Math.Max(columns, Math.Max(rows, slices));
+        var line = new double[longest];
+        var output = new double[longest];
+        var hull = new int[longest];
+        var bounds = new double[longest + 1];
+
+        for (var slice = 0; slice < slices; slice++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            for (var row = 0; row < rows; row++)
+            {
+                var start = Offset(dimensions, 0, row, slice);
+                PassAlong(squared, start, 1, columns, grid.ColumnSpacingMillimetres, line, output, hull, bounds);
+            }
+        }
+
+        for (var slice = 0; slice < slices; slice++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            for (var column = 0; column < columns; column++)
+            {
+                var start = Offset(dimensions, column, 0, slice);
+                PassAlong(squared, start, columns, rows, grid.RowSpacingMillimetres, line, output, hull, bounds);
+            }
+        }
+
+        for (var row = 0; row < rows; row++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            for (var column = 0; column < columns; column++)
+            {
+                var start = Offset(dimensions, column, row, 0);
+                PassAlong(squared, start, columns * rows, slices, grid.SliceSpacingMillimetres, line, output, hull, bounds);
+            }
+        }
+
+        for (var offset = 0; offset < squared.Length; offset++)
+        {
+            squared[offset] = MathF.Sqrt(squared[offset]);
+        }
+
+        return squared;
+    }
+
+    private static void PassAlong(
+        float[] squared,
+        int start,
+        int stride,
+        int count,
+        double spacing,
+        double[] line,
+        double[] output,
+        int[] hull,
+        double[] bounds)
+    {
+        for (var index = 0; index < count; index++)
+        {
+            line[index] = squared[start + (index * stride)];
+        }
+
+        // Нижняя огибающая парабол (x - q)^2 + f(q) в миллиметрах.
+        var parabolas = -1;
+
+        for (var q = 0; q < count; q++)
+        {
+            if (double.IsPositiveInfinity(line[q]))
+            {
+                continue;
+            }
+
+            var position = q * spacing;
+            double intersection;
+
+            while (true)
+            {
+                if (parabolas < 0)
+                {
+                    intersection = double.NegativeInfinity;
+                    break;
+                }
+
+                var other = hull[parabolas] * spacing;
+                intersection = (line[q] + (position * position) - line[hull[parabolas]] - (other * other))
+                    / (2 * (position - other));
+
+                if (intersection > bounds[parabolas])
+                {
+                    break;
+                }
+
+                parabolas--;
+            }
+
+            parabolas++;
+            hull[parabolas] = q;
+            bounds[parabolas] = intersection;
+            bounds[parabolas + 1] = double.PositiveInfinity;
+        }
+
+        if (parabolas < 0)
+        {
+            // Вне головы на этой линии ничего нет: расстояние по ней не
+            // определено и остаётся бесконечным до проходов по другим осям.
+            return;
+        }
+
+        var current = 0;
+
+        for (var index = 0; index < count; index++)
+        {
+            var position = index * spacing;
+
+            while (bounds[current + 1] < position)
+            {
+                current++;
+            }
+
+            var nearest = hull[current] * spacing;
+            output[index] = ((position - nearest) * (position - nearest)) + line[hull[current]];
+        }
+
+        for (var index = 0; index < count; index++)
+        {
+            squared[start + (index * stride)] = (float)output[index];
+        }
+    }
+
     private static IEnumerable<int> NeighboursOf(VolumeDimensions dimensions, int offset)
     {
         var slice = offset / (dimensions.Columns * dimensions.Rows);
@@ -496,18 +816,28 @@ public static class BaselineVentricleSegmentation
         return candidate;
     }
 
-    private static byte[] SelectVentricles(
-        VolumeGrid grid,
-        byte[] candidate,
-        HeadExtent head,
+    /// <summary>
+    /// Дорастание маски T1 от тёмной сердцевины к границе частичного объёма.
+    ///
+    /// Граница частичного объёма — порог Оцу среди отсчётов головы темнее
+    /// порога между тканями: он отделяет ликвор с примесью ткани от серого
+    /// вещества. Маска растёт только в такие отсчёты и не дальше
+    /// <see cref="BaselineSegmentationOptions.BoundaryGrowthMillimetres"/>
+    /// по каждой оси.
+    /// </summary>
+    private static byte[] GrowIntoPartialVolume(
+        IVoxelVolume volume,
+        bool[] head,
+        bool[] open,
+        byte[] labels,
+        double tissueThreshold,
+        double csfThreshold,
         BaselineSegmentationOptions options,
-        out int rejected)
+        CancellationToken cancellationToken)
     {
+        var grid = volume.Grid;
         var dimensions = grid.Dimensions;
-        var visited = new bool[candidate.Length];
-        var components = new List<Component>();
-
-        var stack = new Stack<int>();
+        var darker = new bool[head.Length];
 
         for (var slice = 0; slice < dimensions.Slices; slice++)
         {
@@ -516,32 +846,110 @@ public static class BaselineVentricleSegmentation
                 for (var column = 0; column < dimensions.Columns; column++)
                 {
                     var offset = Offset(dimensions, column, row, slice);
-
-                    if (candidate[offset] == 0 || visited[offset])
-                    {
-                        continue;
-                    }
-
-                    components.Add(Flood(dimensions, candidate, visited, stack, column, row, slice));
+                    darker[offset] = open[offset] && volume[column, row, slice] <= tissueThreshold;
                 }
             }
         }
 
-        var limit = head.Radius * options.VentricleCentralityFraction;
+        if (!Array.Exists(labels, value => value != 0) || !Array.Exists(darker, value => value))
+        {
+            // Расти нечему или некуда: темнее ткани в голове без закрытия ничего
+            // нет, и границы частичного объёма не существует.
+            return labels;
+        }
+
+        // Порог частичного объёма не может быть строже порога сердцевины:
+        // тогда дорастать было бы некуда, а не наоборот.
+        var boundary = Math.Max(csfThreshold, IntensityThresholds.OtsuWithin(volume, darker));
+
+        var steps = new[]
+        {
+            StepsWithin(options.BoundaryGrowthMillimetres, grid.ColumnSpacingMillimetres),
+            StepsWithin(options.BoundaryGrowthMillimetres, grid.RowSpacingMillimetres),
+            StepsWithin(options.BoundaryGrowthMillimetres, grid.SliceSpacingMillimetres),
+        };
+
+        var grown = labels;
+
+        for (var step = 1; step <= steps.Max(); step++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var next = (byte[])grown.Clone();
+
+            for (var slice = 0; slice < dimensions.Slices; slice++)
+            {
+                for (var row = 0; row < dimensions.Rows; row++)
+                {
+                    for (var column = 0; column < dimensions.Columns; column++)
+                    {
+                        var offset = Offset(dimensions, column, row, slice);
+
+                        if (grown[offset] != 0 || !head[offset] || volume[column, row, slice] > boundary)
+                        {
+                            continue;
+                        }
+
+                        var touches =
+                            (step <= steps[0] && ((column > 0 && grown[offset - 1] != 0)
+                                || (column < dimensions.Columns - 1 && grown[offset + 1] != 0)))
+                            || (step <= steps[1] && ((row > 0 && grown[offset - dimensions.Columns] != 0)
+                                || (row < dimensions.Rows - 1 && grown[offset + dimensions.Columns] != 0)))
+                            || (step <= steps[2] && ((slice > 0 && grown[offset - (dimensions.Columns * dimensions.Rows)] != 0)
+                                || (slice < dimensions.Slices - 1 && grown[offset + (dimensions.Columns * dimensions.Rows)] != 0)));
+
+                        if (touches)
+                        {
+                            next[offset] = 1;
+                        }
+                    }
+                }
+            }
+
+            grown = next;
+        }
+
+        return grown;
+    }
+
+    private static int StepsWithin(double millimetres, double spacing) =>
+        spacing > 0 ? (int)Math.Floor((millimetres / spacing) + 1e-9) : 0;
+
+    private static byte[] SelectVentricles(
+        VolumeDimensions dimensions,
+        byte[] candidate,
+        float[] depth,
+        BaselineSegmentationOptions options,
+        out int rejected)
+    {
+        var visited = new bool[candidate.Length];
+        var components = new List<List<int>>();
+
+        var stack = new Stack<int>();
+
+        for (var start = 0; start < candidate.Length; start++)
+        {
+            if (candidate[start] == 0 || visited[start])
+            {
+                continue;
+            }
+
+            components.Add(Flood(dimensions, candidate, visited, stack, start));
+        }
 
         var accepted = components
-            .Where(component => component.Size >= options.MinComponentVoxels)
-            .Where(component => component.FarthestFrom(head.Centre) <= limit)
-            .OrderByDescending(component => component.Size)
+            .Where(component => component.Count >= options.MinComponentVoxels)
+            .Where(component => component.Min(offset => depth[offset]) >= options.MinDepthMillimetres)
+            .OrderByDescending(component => component.Count)
             .Take(options.MaxComponents)
             .ToList();
 
-        rejected = components.Count(component => component.Size >= options.MinComponentVoxels)
+        rejected = components.Count(component => component.Count >= options.MinComponentVoxels)
             - accepted.Count;
 
         var labels = new byte[candidate.Length];
 
-        foreach (var offset in accepted.SelectMany(component => component.Offsets))
+        foreach (var offset in accepted.SelectMany(component => component))
         {
             labels[offset] = 1;
         }
@@ -549,50 +957,26 @@ public static class BaselineVentricleSegmentation
         return labels;
     }
 
-    private static Component Flood(
+    private static List<int> Flood(
         VolumeDimensions dimensions,
         byte[] candidate,
         bool[] visited,
         Stack<int> stack,
-        int startColumn,
-        int startRow,
-        int startSlice)
+        int start)
     {
         stack.Clear();
-        stack.Push(Offset(dimensions, startColumn, startRow, startSlice));
-        visited[Offset(dimensions, startColumn, startRow, startSlice)] = true;
+        stack.Push(start);
+        visited[start] = true;
 
         var offsets = new List<int>();
-        var coordinates = new List<(int Column, int Row, int Slice)>();
 
         while (stack.Count > 0)
         {
             var offset = stack.Pop();
             offsets.Add(offset);
 
-            var slice = offset / (dimensions.Columns * dimensions.Rows);
-            var remainder = offset % (dimensions.Columns * dimensions.Rows);
-            var row = remainder / dimensions.Columns;
-            var column = remainder % dimensions.Columns;
-
-            coordinates.Add((column, row, slice));
-
-            foreach (var (dc, dr, ds) in Neighbours)
+            foreach (var next in NeighboursOf(dimensions, offset))
             {
-                var nextColumn = column + dc;
-                var nextRow = row + dr;
-                var nextSlice = slice + ds;
-
-                if (nextColumn < 0 || nextRow < 0 || nextSlice < 0
-                    || nextColumn >= dimensions.Columns
-                    || nextRow >= dimensions.Rows
-                    || nextSlice >= dimensions.Slices)
-                {
-                    continue;
-                }
-
-                var next = Offset(dimensions, nextColumn, nextRow, nextSlice);
-
                 if (visited[next] || candidate[next] == 0)
                 {
                     continue;
@@ -603,7 +987,7 @@ public static class BaselineVentricleSegmentation
             }
         }
 
-        return new Component(offsets, coordinates);
+        return offsets;
     }
 
     private static readonly (int Column, int Row, int Slice)[] Neighbours =
@@ -618,34 +1002,4 @@ public static class BaselineVentricleSegmentation
 
     private static int Offset(VolumeDimensions dimensions, int column, int row, int slice) =>
         (((slice * dimensions.Rows) + row) * dimensions.Columns) + column;
-
-    private readonly record struct Centre(double Column, double Row, double Slice);
-
-    private readonly record struct HeadExtent(bool[] Voxels, Centre Centre, double Radius, long Count);
-
-    private sealed record Component(List<int> Offsets, List<(int Column, int Row, int Slice)> Coordinates)
-    {
-        public int Size => this.Offsets.Count;
-
-        /// <summary>
-        /// Удаление самой дальней точки компоненты от заданного центра.
-        /// Берётся именно дальняя точка: у оболочки, охватывающей мозг,
-        /// центр совпадает с центром головы.
-        /// </summary>
-        public double FarthestFrom(Centre other)
-        {
-            var farthest = 0.0;
-
-            foreach (var (column, row, slice) in this.Coordinates)
-            {
-                var dc = column - other.Column;
-                var dr = row - other.Row;
-                var ds = slice - other.Slice;
-
-                farthest = Math.Max(farthest, (dc * dc) + (dr * dr) + (ds * ds));
-            }
-
-            return Math.Sqrt(farthest);
-        }
-    }
 }
