@@ -151,6 +151,32 @@ public static class ResultReadout
             DescribeSeries(series)))];
     }
 
+    /// <summary>
+    /// Пункты списка исследований открытой папки.
+    ///
+    /// У исследования на экране нет ни даты, ни описания — они сняты
+    /// деидентификацией, — поэтому пункт называет его порядковым номером
+    /// и тем, что в нём можно измерить: число серий и лучшую для анализа.
+    /// </summary>
+    /// <param name="studies">Исследования папки в порядке разбора.</param>
+    /// <returns>Пункты списка.</returns>
+    public static IReadOnlyList<SeriesChoice> StudyChoicesFor(IReadOnlyList<ImagingStudy> studies)
+    {
+        ArgumentNullException.ThrowIfNull(studies);
+
+        return [.. studies.Select((study, index) =>
+        {
+            var best = Hydrocephalus.Application.AnalyzeStudyUseCase.SelectAnalysableSeries(study);
+
+            var text = "Исследование " + (index + 1).ToString(CultureInfo.CurrentCulture)
+                + " из " + studies.Count.ToString(CultureInfo.CurrentCulture)
+                + ": серий " + study.Series.Count.ToString(CultureInfo.CurrentCulture)
+                + (best is null ? ", серии для анализа нет" : ", лучшая — " + DescribeSeries(best));
+
+            return new SeriesChoice(study.PseudonymousStudyId, text);
+        })];
+    }
+
     private static List<ResultRow> DescribeComposition(AnalysedStudy study)
     {
         var rows = new List<ResultRow>();

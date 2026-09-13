@@ -47,6 +47,38 @@ public sealed class BaselineSegmentationTests
     }
 
     [Fact]
+    public void The_central_cavity_is_found_on_flair()
+    {
+        // На FLAIR ликвор подавлен и тёмный. Порог, ищущий яркий ликвор,
+        // выбрал бы ткань головы.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.Flair);
+
+        AssertRecovers(result.Mask, ventricleRadius: 6);
+    }
+
+    [Fact]
+    public void A_refused_fragment_stays_visible_in_the_review_but_not_in_the_mask()
+    {
+        // При отказе маска для измерения пуста, а врачу нужно видеть, что
+        // метод нашёл и почему не отдал. Разбор — не измерение.
+        var result = BaselineVentricleSegmentation.Segment(
+            Phantom(csf: CsfOnT1, ventricleRadius: 3, peripheralCsf: true),
+            SeriesWeighting.T1);
+
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+        Assert.Equal(0, Count(result.Mask));
+
+        var review = Assert.IsType<VoxelMask>(result.Review);
+        var centre = Size / 2;
+
+        Assert.Equal(1, review[centre, centre, centre]);
+        Assert.Equal(2, review[centre + 19, centre, centre]);
+        Assert.Equal(0, review[2, 2, 2]);
+    }
+
+    [Fact]
     public void A_larger_cavity_yields_a_larger_mask()
     {
         // Метод должен реагировать на размер, а не выдавать одно и то же:

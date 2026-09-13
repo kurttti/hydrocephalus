@@ -1,6 +1,7 @@
 using Hydrocephalus.Desktop.Results;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Reporting;
+using Hydrocephalus.Inference.Segmentation;
 
 namespace Hydrocephalus.Desktop.Composition;
 
@@ -27,4 +28,17 @@ public sealed record OpenedStudy
     /// серий, которые до отчёта вообще не дошли.
     /// </summary>
     public required AnalysedStudy Analysed { get; init; }
+
+    /// <summary>
+    /// Результат сегментации показанной серии либо <see langword="null"/>,
+    /// если она не запускалась. Нужен строке состояния: при отказе маска пуста,
+    /// и без причины экран сказал бы только, что маски нет.
+    /// </summary>
+    public BaselineSegmentationResult? Segmentation { get; init; }
+
+    /// <summary>
+    /// Все исследования открытой папки, включая показанное. Показанное —
+    /// то, чей идентификатор совпадает с <see cref="AnalysedStudy.Study"/>.
+    /// </summary>
+    public IReadOnlyList<Hydrocephalus.Domain.Imaging.ImagingStudy> Studies { get; init; } = [];
 }

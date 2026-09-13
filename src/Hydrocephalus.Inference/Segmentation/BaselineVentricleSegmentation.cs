@@ -94,7 +94,20 @@ public sealed record BaselineSegmentationOptions
 public readonly record struct BaselineSegmentationResult(
     VoxelMask Mask,
     IReadOnlyList<QualityIssue> Issues,
-    MeasurementQuality Quality);
+    MeasurementQuality Quality)
+{
+    /// <summary>
+    /// Разбор решения метода для просмотра врачом: метка 1 — область, которую
+    /// метод выбрал как желудочки, метка 2 — ликвор, который он отбросил.
+    ///
+    /// Нужен именно при отказе. Маска для измерения при отказе пуста, и по ней
+    /// не видно, что метод нашёл и почему не отдал: фрагмент в пару миллилитров,
+    /// область у края кадра или ликвор, отброшенный как периферический. Врач
+    /// различает эти случаи на снимке за секунды; из числа их не различить.
+    /// В измерение разбор не идёт никогда.
+    /// </summary>
+    public VoxelMask? Review { get; init; }
+}
 
 /// <summary>
 /// Классическая сегментация желудочковой системы порогом по интенсивности.
@@ -152,8 +165,10 @@ public static class BaselineVentricleSegmentation
 
         var darkCsf = weighting switch
         {
-            SeriesWeighting.T1 => true,
-            SeriesWeighting.T2 or SeriesWeighting.Flair => false,
+            // На FLAIR сигнал ликвора подавлен, и он тёмный, как на T1. Прежде
+            // FLAIR шёл вместе с T2 — порог искал яркий ликвор и выбирал ткань.
+            SeriesWeighting.T1 or SeriesWeighting.Flair => true,
+            SeriesWeighting.T2 => false,
 
             // Угадать направление порога нельзя: ошибка выделит ткань вместо
             // ликвора и даст объём того же порядка с обратным смыслом.
@@ -197,7 +212,7 @@ public static class BaselineVentricleSegmentation
         {
             // Порог встал не там, где предполагалось. Отдать половину мозга
             // как объём желудочков хуже, чем не отдать ничего.
-            return Refused(grid, ThresholdFailed(candidateCount, headCount));
+            return Refused(grid, ThresholdFailed(candidateCount, headCount), selected: null, candidate);
         }
 
         var depth = DistanceToOutside(grid, head, cancellationToken);
@@ -215,7 +230,7 @@ public static class BaselineVentricleSegmentation
 
         if (selected > headCount * options.MaxCsfFractionOfHead)
         {
-            return Refused(grid, ThresholdFailed(selected, headCount));
+            return Refused(grid, ThresholdFailed(selected, headCount), labels, candidate);
         }
 
         if (TouchesFrame(grid.Dimensions, labels))
@@ -225,14 +240,14 @@ public static class BaselineVentricleSegmentation
             // блок, в который желудочки поместились целиком, измерять можно,
             // а в клинической выборке почти все серии T2 уровня Extended —
             // блоки толщиной 30–80 мм.
-            return Refused(grid, TruncatedByFrame());
+            return Refused(grid, TruncatedByFrame(), labels, candidate);
         }
 
         var millilitres = selected * voxelMillilitres;
 
         if (selected > 0 && millilitres < options.MinVentricleMillilitres)
         {
-            return Refused(grid, TooSmall(millilitres));
+            return Refused(grid, TooSmall(millilitres), labels, candidate);
         }
 
         var mask = new VoxelMask(
@@ -246,16 +261,48 @@ public static class BaselineVentricleSegmentation
 
             // Достоверность задаётся здесь, а не вызывающим: метод не
             // валидирован, и забыть пометить его результат нельзя.
-            MeasurementQuality.Questionable);
+            MeasurementQuality.Questionable)
+        {
+            Review = ReviewOf(grid, labels, candidate),
+        };
     }
 
-    private static BaselineSegmentationResult Refused(VolumeGrid grid, QualityIssue reason) => new(
+    private static BaselineSegmentationResult Refused(
+        VolumeGrid grid,
+        QualityIssue reason,
+        byte[]? selected,
+        byte[] candidate) => new(
         new VoxelMask(
             grid,
             new LabelMap { Version = LabelMapVersion, Labels = [VentricularSystem] },
             new byte[grid.Dimensions.Columns * grid.Dimensions.Rows * grid.Dimensions.Slices]),
         [.. Report(rejectedComponents: 0), reason],
-        MeasurementQuality.Unreliable);
+        MeasurementQuality.Unreliable)
+        {
+            Review = ReviewOf(grid, selected, candidate),
+        };
+
+    /// <summary>Метка отброшенного ликвора в разборе решения.</summary>
+    public static readonly AnatomicalLabel DiscardedCsf = new("discarded-csf");
+
+    private static VoxelMask ReviewOf(VolumeGrid grid, byte[]? selected, byte[] candidate)
+    {
+        var labels = new byte[candidate.Length];
+
+        for (var offset = 0; offset < labels.Length; offset++)
+        {
+            // Выбранное берёт верх: дорастание выводит маску T1 за кандидатов,
+            // и эта кромка тоже часть решения метода.
+            labels[offset] = selected is not null && selected[offset] != 0
+                ? (byte)1
+                : candidate[offset] != 0 ? (byte)2 : (byte)0;
+        }
+
+        return new VoxelMask(
+            grid,
+            new LabelMap { Version = LabelMapVersion, Labels = [VentricularSystem, DiscardedCsf] },
+            labels);
+    }
 
     private static QualityIssue ThresholdFailed(long selected, long head) => new()
     {

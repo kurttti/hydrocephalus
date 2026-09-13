@@ -1,5 +1,6 @@
 using System.Reflection;
 using Hydrocephalus.Desktop.Viewing;
+using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
@@ -52,6 +53,11 @@ public sealed class CompositionRoot : IDisposable
     // расшифрованные данные пациента на диске, и решать, когда они исчезнут,
     // должен тот же слой, который их создал.
     private WorkingCopy? opened;
+
+    // Разбор открытой папки держится, пока она открыта: переключение на другое
+    // исследование той же папки не должно читать источник заново. Пути файлов
+    // из него наружу не выходят.
+    private DicomScanResult? scanned;
 
     private AnalysisReport? report;
 
@@ -221,7 +227,71 @@ public sealed class CompositionRoot : IDisposable
         // ровно вдвое больше данных пациента, чем нужно для работы.
         await this.CloseAsync().ConfigureAwait(false);
 
-        var workingCopy = await this.importer.ImportAsync(sourceDirectory, cancellationToken)
+        this.scanned = null;
+
+        var scan = await this.importer.ScanAsync(sourceDirectory, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Папка с несколькими исследованиями открывается, а не отвергается:
+        // берётся исследование с лучшей для анализа серией, остальные экран
+        // предлагает выбрать. Правило то же, что у выбора серии.
+        var study = Hydrocephalus.Application.AnalyzeStudyUseCase.SelectAnalysableStudy(scan.Studies)
+            ?? throw new DomainRuleViolationException(
+                "The import source contains no readable imaging study.");
+
+        this.scanned = scan;
+
+        return await this.OpenScannedStudyAsync(study.PseudonymousStudyId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Исследования последней разобранной папки; пусто, если разбора не было
+    /// или он не удался.
+    ///
+    /// Нужны экрану и тогда, когда открыть выбранное исследование не удалось:
+    /// отказ одного исследования — например, проверкой деидентификации — не
+    /// повод не предложить остальные.
+    /// </summary>
+    public IReadOnlyList<ImagingStudy> ScannedStudies => this.scanned?.Studies ?? [];
+
+    /// <summary>
+    /// Переключает просмотр на другое исследование уже открытой папки.
+    ///
+    /// Прежняя рабочая копия уничтожается до создания новой — по той же
+    /// причине, что и при открытии папки: две расшифрованные копии на диске
+    /// не нужны.
+    /// </summary>
+    /// <param name="pseudonymousStudyId">Псевдонимный идентификатор исследования.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Состояние экрана просмотра и отчёт по выбранному исследованию.</returns>
+    /// <exception cref="InvalidOperationException">Если папка не открыта.</exception>
+    public async Task<OpenedStudy> ShowStudyAsync(
+        string pseudonymousStudyId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pseudonymousStudyId);
+
+        if (this.scanned is null)
+        {
+            throw new InvalidOperationException("No folder is open, so there is no study to switch to.");
+        }
+
+        await this.CloseAsync().ConfigureAwait(false);
+
+        return await this.OpenScannedStudyAsync(pseudonymousStudyId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<OpenedStudy> OpenScannedStudyAsync(
+        string pseudonymousStudyId,
+        CancellationToken cancellationToken)
+    {
+        var scan = this.scanned
+            ?? throw new InvalidOperationException("No folder is open.");
+
+        var workingCopy = await this.importer
+            .ImportStudyAsync(scan, pseudonymousStudyId, cancellationToken)
             .ConfigureAwait(false);
 
         this.opened = workingCopy;
@@ -292,13 +362,12 @@ public sealed class CompositionRoot : IDisposable
         // Маска строится только когда взвешенность известна: без неё
         // baseline-сегментация отказывается работать, и это не повод
         // не показать изображение.
-        VoxelMask? mask = null;
+        BaselineSegmentationResult? segmentation = null;
 
         if (series.Weighting != SeriesWeighting.Unknown)
         {
-            mask = BaselineVentricleSegmentation
-                .Segment(volume, series.Weighting, cancellationToken: cancellationToken)
-                .Mask;
+            segmentation = BaselineVentricleSegmentation
+                .Segment(volume, series.Weighting, cancellationToken: cancellationToken);
         }
 
         // Анализ идёт по той же рабочей копии, что и просмотр. Отдельный вызов
@@ -323,7 +392,9 @@ public sealed class CompositionRoot : IDisposable
 
         return new OpenedStudy
         {
-            View = new StudyView(volume, mask),
+            View = new StudyView(volume, segmentation?.Mask, segmentation?.Review),
+            Segmentation = segmentation,
+            Studies = this.scanned?.Studies ?? [workingCopy.Study],
             Report = this.report,
             Analysed = new Results.AnalysedStudy
             {

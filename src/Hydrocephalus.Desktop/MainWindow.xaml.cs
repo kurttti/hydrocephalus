@@ -48,6 +48,8 @@ public partial class MainWindow : Window
     // и после неудачной попытки эти двое расходятся, если не вернуть его назад.
     private string? displayedSeriesId;
 
+    private string? displayedStudyId;
+
     /// <summary>Создаёт главное окно.</summary>
     public MainWindow()
     {
@@ -154,11 +156,44 @@ public partial class MainWindow : Window
             // к тому, которое открыть не удалось.
             this.ClearResult("Результата нет: исследование открыть не удалось.");
             this.UpdateExportAvailability();
+            this.OfferOtherStudies(composition);
         }
         finally
         {
             this.OpenButton.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// После неудачного открытия предлагает другие исследования той же папки.
+    ///
+    /// Прежняя картинка убирается: она от прошлого исследования, которое
+    /// сборка уже освободила. Список заполняется, только если выбирать есть из чего.
+    /// </summary>
+    private void OfferOtherStudies(CompositionRoot composition)
+    {
+        this.study = null;
+        this.surfaces.Clear();
+        this.PlaneGrid.Children.Clear();
+        this.SeriesSelector.ItemsSource = null;
+        this.SeriesSelector.IsEnabled = false;
+
+        this.StudySelector.SelectionChanged -= this.OnStudyChanged;
+        this.displayedStudyId = null;
+
+        var studies = composition.ScannedStudies;
+        var items = studies.Count > 1 ? ResultReadout.StudyChoicesFor(studies) : [];
+
+        this.StudySelector.ItemsSource = items;
+        this.StudySelector.SelectedItem = null;
+        this.StudySelector.IsEnabled = items.Count > 1;
+
+        if (items.Count > 1)
+        {
+            this.StatusText.Text += " В папке есть другие исследования — выберите в списке «Исследование».";
+        }
+
+        this.StudySelector.SelectionChanged += this.OnStudyChanged;
     }
 
     private async void OnExportDeidentifiedClick(object sender, RoutedEventArgs e) =>
@@ -351,6 +386,14 @@ public partial class MainWindow : Window
         var view = opened.View;
 
         this.study = view;
+
+        // Переключатели применяются к новому виду, а не остаются от прежнего:
+        // вид создаётся заново при каждом показе, и выключенная врачом маска
+        // иначе молча включилась бы снова.
+        view.ShowOverlay = this.OverlayToggle.IsChecked == true;
+        this.ReviewToggle.IsEnabled = view.HasReview;
+        view.ShowReview = view.HasReview && this.ReviewToggle.IsChecked == true;
+
         this.surfaces.Clear();
         this.PlaneGrid.Children.Clear();
 
@@ -364,12 +407,11 @@ public partial class MainWindow : Window
         }
 
         this.ConfigureWindowSliders(view);
+        this.ConfigureStudySelector(opened);
         this.ConfigureSeriesSelector(opened.Analysed);
         this.ShowResult(ResultReadout.Describe(opened.Report, opened.Analysed));
 
-        this.StatusText.Text = view.HasMask
-            ? "Открыто. Маска получена baseline-методом и не является проверенной сегментацией."
-            : "Открыто. Маска не построена: взвешенность серии не распознана.";
+        this.StatusText.Text = SegmentationReadout.Describe(opened.Segmentation);
 
         foreach (var surface in this.surfaces)
         {
@@ -452,6 +494,79 @@ public partial class MainWindow : Window
     /// исследования запускал бы переключение на ту же серию — то есть
     /// повторный анализ и лишнюю запись в журнале.
     /// </summary>
+    private void ConfigureStudySelector(OpenedStudy opened)
+    {
+        this.StudySelector.SelectionChanged -= this.OnStudyChanged;
+
+        this.displayedStudyId = opened.Analysed.Study.PseudonymousStudyId;
+
+        var items = ResultReadout.StudyChoicesFor(opened.Studies);
+
+        this.StudySelector.ItemsSource = items;
+
+        this.StudySelector.SelectedItem = items.FirstOrDefault(item => string.Equals(
+            item.Id,
+            this.displayedStudyId,
+            StringComparison.Ordinal));
+
+        this.StudySelector.IsEnabled = items.Count > 1;
+
+        this.StudySelector.ToolTip = items.Count > 1
+            ? "В папке несколько исследований; открыто лучшее для анализа"
+            : "В папке одно исследование.";
+
+        this.StudySelector.SelectionChanged += this.OnStudyChanged;
+    }
+
+    private async void OnStudyChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (this.StudySelector.SelectedItem is not SeriesChoice choice
+            || string.Equals(choice.Id, this.displayedStudyId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            return;
+        }
+
+        this.StudySelector.IsEnabled = false;
+        this.SeriesSelector.IsEnabled = false;
+        this.OpenButton.IsEnabled = false;
+        this.StatusText.Text = "Импорт и деидентификация…";
+
+        try
+        {
+            var opened = await Task.Run(
+                () => composition.ShowStudyAsync(choice.Id, CancellationToken.None))
+                .ConfigureAwait(true);
+
+            this.Show(opened);
+        }
+        catch (Exception exception)
+        {
+            // Прежнее исследование к этому моменту уже освобождено сборкой:
+            // оставить его картинку на экране значило бы показывать данные,
+            // которых больше нет, под именем выбранного исследования.
+            this.StatusText.Text = exception is AccessDeniedException
+                ? "Роль, заданная при установке, не даёт права на анализ исследования."
+                : "Открыть исследование не удалось: " + ErrorReadout.Describe(exception);
+
+            this.ClearResult("Результата нет: исследование открыть не удалось.");
+            this.hasOpenStudy = false;
+            this.UpdateExportAvailability();
+            this.OfferOtherStudies(composition);
+        }
+        finally
+        {
+            this.OpenButton.IsEnabled = true;
+            this.StudySelector.IsEnabled = this.StudySelector.Items.Count > 1;
+        }
+    }
+
     private void ConfigureSeriesSelector(AnalysedStudy study)
     {
         this.SeriesSelector.SelectionChanged -= this.OnSeriesChanged;
@@ -609,6 +724,21 @@ public partial class MainWindow : Window
         }
 
         this.study.ShowOverlay = this.OverlayToggle.IsChecked == true;
+
+        foreach (var surface in this.surfaces)
+        {
+            surface.Redraw();
+        }
+    }
+
+    private void OnReviewChanged(object sender, RoutedEventArgs e)
+    {
+        if (this.study is null)
+        {
+            return;
+        }
+
+        this.study.ShowReview = this.ReviewToggle.IsChecked == true;
 
         foreach (var surface in this.surfaces)
         {

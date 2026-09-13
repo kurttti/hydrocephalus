@@ -146,6 +146,37 @@ public sealed class PlaneViewTests
     }
 
     [Fact]
+    public void The_review_replaces_the_mask_only_when_asked_for()
+    {
+        // По умолчанию на экране то, что пошло в измерение; разбор решения
+        // метода — по запросу врача, и тогда на всех трёх видах сразу.
+        var volume = Volume();
+        var mask = Mask(Grid);
+        var review = Mask(Grid, label: 2);
+        var study = new StudyView(volume, mask, review);
+
+        Assert.True(study.HasReview);
+        Assert.All(study.Planes, plane => Assert.DoesNotContain((byte)2, plane.Overlay!));
+
+        study.ShowReview = true;
+
+        Assert.All(study.Planes, plane => Assert.Contains((byte)2, plane.Overlay!));
+
+        study.ShowOverlay = false;
+
+        Assert.All(study.Planes, plane => Assert.Null(plane.Overlay));
+    }
+
+    [Fact]
+    public void A_review_from_another_grid_is_refused()
+    {
+        var other = Mask(Grid with { SliceSpacingMillimetres = 1.0 });
+
+        Assert.Throws<ArgumentException>(
+            () => new PlaneView(Volume(), Mask(Grid), VolumeAxis.AcrossSlices, new WindowLevel(500, 1000), other));
+    }
+
+    [Fact]
     public void Composing_keeps_the_physical_proportions_of_the_plane()
     {
         // Объём анизотропен: вывод «пиксель в пиксель» растянул бы анатомию,
@@ -221,19 +252,19 @@ public sealed class PlaneViewTests
 
     private static TestVolume Volume() => new(Grid);
 
-    private static VoxelMask Mask(VolumeGrid grid)
+    private static VoxelMask Mask(VolumeGrid grid, byte label = 1)
     {
         var dimensions = grid.Dimensions;
         var labels = new byte[dimensions.Columns * dimensions.Rows * dimensions.Slices];
 
         for (var index = 0; index < labels.Length; index++)
         {
-            labels[index] = (byte)(index % 4 == 0 ? 1 : 0);
+            labels[index] = index % 4 == 0 ? label : (byte)0;
         }
 
         return new VoxelMask(
             grid,
-            new LabelMap { Version = "test-1.0.0", Labels = [new AnatomicalLabel("ventricles")] },
+            new LabelMap { Version = "test-1.0.0", Labels = [new AnatomicalLabel("ventricles"), new AnatomicalLabel("discarded")] },
             labels);
     }
 

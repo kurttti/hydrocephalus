@@ -353,6 +353,34 @@ public sealed class ResultReadoutTests
         // верное число с пометкой об ошибке измерения.
         new MeasurementRange(0.0, 2500.0));
 
+    [Fact]
+    public void Studies_of_a_folder_are_named_by_what_can_be_measured_not_by_identifiers()
+    {
+        // Дата и описание исследования сняты деидентификацией; псевдоним врачу
+        // ничего не говорит. Пункт называет номер и лучшую для анализа серию.
+        var thick = new ImagingStudy
+        {
+            PseudonymousStudyId = "study-thick",
+            PseudonymousSubjectId = "subject-0001",
+            Series = [Series(AcquisitionTier.Baseline, "a")],
+        };
+
+        var volume = new ImagingStudy
+        {
+            PseudonymousStudyId = "study-volume",
+            PseudonymousSubjectId = "subject-0001",
+            Series = [Series(AcquisitionTier.Extended, "b"), Series(AcquisitionTier.Baseline, "c")],
+        };
+
+        var choices = ResultReadout.StudyChoicesFor([thick, volume]);
+
+        Assert.Equal(["study-thick", "study-volume"], choices.Select(choice => choice.Id));
+        Assert.StartsWith("Исследование 1 из 2: серий 1", choices[0].Text, StringComparison.Ordinal);
+        Assert.StartsWith("Исследование 2 из 2: серий 2", choices[1].Text, StringComparison.Ordinal);
+        Assert.Contains(ResultReadout.DescribeSeries(volume.Series[0]), choices[1].Text, StringComparison.Ordinal);
+        Assert.All(choices, choice => Assert.DoesNotContain("study-", choice.Text, StringComparison.Ordinal));
+    }
+
     private static ImagingSeries Series(AcquisitionTier tier, string id = "series-0001") => new()
     {
         PseudonymousSeriesId = id,

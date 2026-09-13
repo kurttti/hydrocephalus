@@ -63,6 +63,17 @@
                         Command="ApplicationCommands.Open"
                         ToolTip="Выбрать каталог с DICOM-файлами (Ctrl+O)" />
 
+                <!-- Выбор исследования: в папке пациента их бывает несколько.
+                     Открывается лучшее для анализа, остальные — здесь. -->
+                <TextBlock Text="Исследование" Foreground="#9A9AA6" Margin="18,0,6,0" VerticalAlignment="Center" />
+                <ComboBox x:Name="StudySelector"
+                          Width="260"
+                          VerticalAlignment="Center"
+                          IsEnabled="False"
+                          DisplayMemberPath="Text"
+                          SelectionChanged="OnStudyChanged"
+                          ToolTip="Исследование открытой папки" />
+
                 <!-- Выбор серии: у серии нет имени, поэтому в списке стоят
                      её свойства. Список — не украшение: приложение берёт лучшую
                      серию по своему правилу, а решает, что смотреть, врач. -->
@@ -84,6 +95,19 @@
                           Checked="OnOverlayChanged"
                           Unchecked="OnOverlayChanged"
                           ToolTip="Показывать наложение маски сегментации" />
+
+                <!-- Разбор решения метода: что выбрано и что отброшено.
+                     Нужен при отказе, когда маска для измерения пуста. -->
+                <CheckBox x:Name="ReviewToggle"
+                          Content="_Разбор метода"
+                          Margin="12,0,0,0"
+                          VerticalAlignment="Center"
+                          Foreground="#E6E6EA"
+                          IsChecked="False"
+                          IsEnabled="False"
+                          Checked="OnReviewChanged"
+                          Unchecked="OnReviewChanged"
+                          ToolTip="Вместо маски показать, что метод выбрал (оранжевый) и какой ликвор отбросил (зелёный). В измерение не идёт." />
 
                 <TextBlock Text="Центр" Foreground="#9A9AA6" Margin="24,0,6,0" VerticalAlignment="Center" />
                 <Slider x:Name="CenterSlider" Width="150" VerticalAlignment="Center"

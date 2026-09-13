@@ -83,6 +83,24 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
     }
 
     /// <summary>
+    /// Разбирает источник, ничего не записывая.
+    ///
+    /// Нужен тому, кто выбирает исследование до импорта: папка пациента
+    /// нередко содержит несколько исследований, а рабочую копию стоит создавать
+    /// только для того, которое будут смотреть. Пути файлов остаются внутри
+    /// результата разбора и наружу из инфраструктуры не выходят.
+    /// </summary>
+    /// <param name="sourceReference">Каталог источника.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Результат разбора.</returns>
+    public Task<DicomScanResult> ScanAsync(string sourceReference, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceReference);
+
+        return new DicomStudyScanner(this.importOptions).ScanAsync(sourceReference, cancellationToken);
+    }
+
+    /// <summary>
     /// Импортирует одно исследование из уже разобранного источника.
     ///
     /// Ретроспективная выборка лежит папками на много пациентов, а контракт

@@ -16,13 +16,15 @@ public sealed class StudyView : INotifyPropertyChanged
 {
     private WindowLevel window;
     private bool showOverlay = true;
+    private bool showReview;
 
     /// <summary>
     /// Создаёт экран просмотра.
     /// </summary>
     /// <param name="volume">Объём.</param>
     /// <param name="mask">Маска сегментации либо <see langword="null"/>.</param>
-    public StudyView(IVoxelVolume volume, VoxelMask? mask = null)
+    /// <param name="review">Разбор решения сегментации либо <see langword="null"/>.</param>
+    public StudyView(IVoxelVolume volume, VoxelMask? mask = null, VoxelMask? review = null)
     {
         ArgumentNullException.ThrowIfNull(volume);
 
@@ -32,12 +34,13 @@ public sealed class StudyView : INotifyPropertyChanged
 
         this.Planes =
         [
-            new PlaneView(volume, mask, VolumeAxis.AcrossSlices, this.window),
-            new PlaneView(volume, mask, VolumeAxis.AcrossRows, this.window),
-            new PlaneView(volume, mask, VolumeAxis.AcrossColumns, this.window),
+            new PlaneView(volume, mask, VolumeAxis.AcrossSlices, this.window, review),
+            new PlaneView(volume, mask, VolumeAxis.AcrossRows, this.window, review),
+            new PlaneView(volume, mask, VolumeAxis.AcrossColumns, this.window, review),
         ];
 
         this.HasMask = mask is not null;
+        this.HasReview = review is not null;
     }
 
     /// <inheritdoc/>
@@ -48,6 +51,35 @@ public sealed class StudyView : INotifyPropertyChanged
 
     /// <summary>Признак наличия маски.</summary>
     public bool HasMask { get; }
+
+    /// <summary>Признак наличия разбора решения сегментации.</summary>
+    public bool HasReview { get; }
+
+    /// <summary>
+    /// Показывать ли на всех видах разбор решения вместо маски. Общий
+    /// для трёх видов по той же причине, что и окно: на одном виде маска,
+    /// на другом разбор — и цвета значили бы разное на соседних картинках.
+    /// </summary>
+    public bool ShowReview
+    {
+        get => this.showReview;
+        set
+        {
+            if (this.showReview == value)
+            {
+                return;
+            }
+
+            this.showReview = value;
+
+            foreach (var plane in this.Planes)
+            {
+                plane.ShowReview = value;
+            }
+
+            this.Raise(nameof(this.ShowReview));
+        }
+    }
 
     /// <summary>Окно и уровень, общие для всех видов.</summary>
     public WindowLevel Window

@@ -18,10 +18,12 @@ public sealed class PlaneView : INotifyPropertyChanged
 {
     private readonly IVoxelVolume volume;
     private readonly VoxelMask? mask;
+    private readonly VoxelMask? review;
 
     private int index;
     private WindowLevel window;
     private bool showOverlay = true;
+    private bool showReview;
 
     /// <summary>
     /// Создаёт вид.
@@ -30,7 +32,16 @@ public sealed class PlaneView : INotifyPropertyChanged
     /// <param name="mask">Маска сегментации либо <see langword="null"/>.</param>
     /// <param name="axis">Ось перелистывания.</param>
     /// <param name="window">Начальное окно и уровень.</param>
-    public PlaneView(IVoxelVolume volume, VoxelMask? mask, VolumeAxis axis, WindowLevel window)
+    /// <param name="review">
+    /// Разбор решения сегментации либо <see langword="null"/>: что метод выбрал
+    /// и что отбросил. Показывается вместо маски по запросу врача.
+    /// </param>
+    public PlaneView(
+        IVoxelVolume volume,
+        VoxelMask? mask,
+        VolumeAxis axis,
+        WindowLevel window,
+        VoxelMask? review = null)
     {
         ArgumentNullException.ThrowIfNull(volume);
 
@@ -41,8 +52,14 @@ public sealed class PlaneView : INotifyPropertyChanged
             throw new ArgumentException("The mask does not fit the volume grid.", nameof(mask));
         }
 
+        if (review is not null && !review.Fits(volume))
+        {
+            throw new ArgumentException("The review does not fit the volume grid.", nameof(review));
+        }
+
         this.volume = volume;
         this.mask = mask;
+        this.review = review;
         this.Axis = axis;
         this.window = window;
 
@@ -64,6 +81,30 @@ public sealed class PlaneView : INotifyPropertyChanged
 
     /// <summary>Признак наличия маски.</summary>
     public bool HasMask => this.mask is not null;
+
+    /// <summary>Признак наличия разбора решения сегментации.</summary>
+    public bool HasReview => this.review is not null;
+
+    /// <summary>
+    /// Показывать ли вместо маски разбор решения: выбранное методом и
+    /// отброшенный ликвор. Выключен по умолчанию: на экране по умолчанию
+    /// то, что пошло в измерение, а не черновик метода.
+    /// </summary>
+    public bool ShowReview
+    {
+        get => this.showReview;
+        set
+        {
+            if (this.showReview == value)
+            {
+                return;
+            }
+
+            this.showReview = value;
+            this.Raise(nameof(this.ShowReview));
+            this.Raise(nameof(this.Overlay));
+        }
+    }
 
     /// <summary>Номер показанного среза.</summary>
     public int Index
@@ -126,11 +167,13 @@ public sealed class PlaneView : INotifyPropertyChanged
     public PlaneImage Image => VolumeSlicer.Extract(this.volume, this.Axis, this.index, this.window);
 
     /// <summary>
-    /// Текущий срез маски либо <see langword="null"/>, если маски нет
-    /// или оверлей выключен.
+    /// Текущий срез маски — или разбора решения, если он включён, — либо
+    /// <see langword="null"/>, если показывать нечего или оверлей выключен.
     /// </summary>
     public byte[]? Overlay =>
-        this.showOverlay ? this.mask?.ExtractPlane(this.Axis, this.index) : null;
+        !this.showOverlay ? null
+        : this.showReview && this.review is not null ? this.review.ExtractPlane(this.Axis, this.index)
+        : this.mask?.ExtractPlane(this.Axis, this.index);
 
     /// <summary>Анатомическая плоскость этого вида.</summary>
     public ImagingPlane Plane => this.Image.Plane;

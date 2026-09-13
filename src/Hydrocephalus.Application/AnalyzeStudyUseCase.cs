@@ -336,7 +336,16 @@ public sealed class AnalyzeStudyUseCase
     }
 
     /// <summary>
-    /// Выбирает серию для анализа: наилучший доступный уровень входа среди неконтрастных серий.
+    /// Выбирает серию для анализа среди неконтрастных серий: сначала наилучший
+    /// уровень входа, затем распознанная взвешенность, затем больший охват.
+    ///
+    /// Уровня мало. В ретроспективной выборке у 15 исследований 3D-серий
+    /// несколько, и первой по уровню оказывалась серия с нераспознанной
+    /// взвешенностью — по ней сегментация не запускается вовсе, — хотя рядом
+    /// лежала 3D T1. Порядок взвешенностей — порядок, в котором сегментация
+    /// проверена: T1 на публичном наборе, T2 — ярким ликвором без отдельной
+    /// проверки, FLAIR — последним. Из равных берётся серия с большим числом
+    /// срезов: прицельный блок охватывает желудочки не целиком.
     ///
     /// Открыт наружу, потому что этот же выбор нужен экрану: показывать одну
     /// серию, а измерять другую нельзя, а вторая копия правила разошлась бы
@@ -348,11 +357,48 @@ public sealed class AnalyzeStudyUseCase
     {
         ArgumentNullException.ThrowIfNull(study);
 
-        return study.Series
-            .Where(series => !series.IsContrastEnhanced && series.Tier != AcquisitionTier.Unusable)
-            .OrderByDescending(series => series.Tier)
-            .FirstOrDefault();
+        return RankForAnalysis(study.Series).FirstOrDefault();
     }
+
+    /// <summary>
+    /// Выбирает из нескольких исследований то, в котором серия для анализа
+    /// лучше по тому же правилу, что и выбор серии.
+    ///
+    /// Папка пациента нередко содержит несколько исследований — в выборке
+    /// таких папок 12 из 164. Отказ открывать её оставлял врача без результата,
+    /// а выбор «первого попавшегося» зависел бы от порядка файлов на диске.
+    /// Остальные исследования не прячутся: экран предлагает переключиться.
+    /// </summary>
+    /// <param name="studies">Исследования, найденные в источнике.</param>
+    /// <returns>
+    /// Исследование с лучшей серией; первое по порядку, если подходящей серии
+    /// нет ни в одном; <see langword="null"/>, если исследований нет.
+    /// </returns>
+    public static ImagingStudy? SelectAnalysableStudy(IReadOnlyList<ImagingStudy> studies)
+    {
+        ArgumentNullException.ThrowIfNull(studies);
+
+        var best = RankForAnalysis(studies.SelectMany(study => study.Series)).FirstOrDefault();
+
+        return best is null
+            ? (studies.Count > 0 ? studies[0] : null)
+            : studies.First(study => study.Series.Contains(best));
+    }
+
+    private static IOrderedEnumerable<ImagingSeries> RankForAnalysis(IEnumerable<ImagingSeries> series) =>
+        series
+            .Where(item => !item.IsContrastEnhanced && item.Tier != AcquisitionTier.Unusable)
+            .OrderByDescending(item => item.Tier)
+            .ThenByDescending(item => WeightingPreference(item.Weighting))
+            .ThenByDescending(item => item.Geometry.Dimensions.Slices);
+
+    private static int WeightingPreference(SeriesWeighting weighting) => weighting switch
+    {
+        SeriesWeighting.T1 => 3,
+        SeriesWeighting.T2 => 2,
+        SeriesWeighting.Flair => 1,
+        _ => 0,
+    };
 
     private async Task<AnalysisReport> RefuseAsync(
         ImagingStudy study,
