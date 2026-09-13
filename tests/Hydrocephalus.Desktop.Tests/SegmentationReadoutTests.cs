@@ -55,6 +55,27 @@ public sealed class SegmentationReadoutTests
     }
 
     [Fact]
+    public void A_thick_series_says_volume_is_not_measured_rather_than_naming_a_segmentation_failure()
+    {
+        // «Упирается в край кадра» на толстосрезовой серии читалось как дефект
+        // серии; на деле по ней объём не считается вовсе.
+        var text = SegmentationReadout.Describe(
+            Result(
+                MeasurementQuality.Unreliable,
+                new QualityIssue
+                {
+                    Code = QualityIssueCode.HeadTruncated,
+                    Severity = QualityIssueSeverity.Blocking,
+                    Parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["reason"] = "ventricularSystemTruncatedByFrame" },
+                },
+                filled: false),
+            AcquisitionTier.Baseline);
+
+        Assert.Contains("объём желудочков по ней не считается", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("край кадра", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void An_empty_mask_without_a_refusal_says_the_ventricles_were_not_found()
     {
         var text = SegmentationReadout.Describe(Result(MeasurementQuality.Questionable, issue: null, filled: false));

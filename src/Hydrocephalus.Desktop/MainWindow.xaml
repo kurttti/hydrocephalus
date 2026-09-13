@@ -25,7 +25,7 @@
 
             <!-- Экспорт справа и отдельной группой: это не продолжение
                  настройки просмотра, а действие с последствиями вовне. -->
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
                 <Button x:Name="ExportDeidentifiedButton"
                         Content="Экспорт: о_безличенный"
                         Padding="10,4"
@@ -130,6 +130,10 @@
         <!-- Строка состояния. Отдельно названо, что приложение не является
              диагностической станцией (ADR 0007). -->
         <Border DockPanel.Dock="Bottom" Background="#1B1B22" Padding="10,6">
+            <StackPanel>
+            <!-- Сообщение отдельной строкой и с переносом: в одной строке со сведениями
+                 об установке причина отказа обрезалась на полуслове. -->
+            <TextBlock x:Name="StatusText" Foreground="#9A9AA6" TextWrapping="Wrap" Margin="0,0,0,4" Text="Исследование не открыто." />
             <DockPanel>
                 <TextBlock DockPanel.Dock="Right"
                            Foreground="#7A7A88"
@@ -147,8 +151,9 @@
                            DockPanel.Dock="Right"
                            Foreground="#7A7A88"
                            Margin="0,0,24,0" />
-                <TextBlock x:Name="StatusText" Foreground="#9A9AA6" Text="Исследование не открыто." />
+                <TextBlock />
             </DockPanel>
+            </StackPanel>
         </Border>
 
         <!-- Результат справа и всегда на виду: замечания контроля качества

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Inference.Segmentation;
 
@@ -23,9 +24,19 @@ public static class SegmentationReadout
     /// Описывает результат сегментации.
     /// </summary>
     /// <param name="result">Результат либо <see langword="null"/>, если сегментация не запускалась.</param>
+    /// <param name="tier">Уровень получения показанной серии.</param>
     /// <returns>Строка состояния.</returns>
-    public static string Describe(BaselineSegmentationResult? result)
+    public static string Describe(BaselineSegmentationResult? result, AcquisitionTier tier = AcquisitionTier.Extended)
     {
+        if (tier != AcquisitionTier.Extended)
+        {
+            // По толстым срезам объём не считается вовсе, и причина отказа
+            // сегментации здесь только сбила бы с толку: «упирается в край кадра»
+            // читается как дефект серии, а дело в том, что это не объём.
+            return "Открыто. Серия базового уровня (толстые срезы): объём желудочков по ней не считается."
+                + (result is null ? string.Empty : " Маска и «Разбор метода» — только для ориентировки.");
+        }
+
         if (result is not { } segmentation)
         {
             return "Открыто. Маска не построена: взвешенность серии не распознана.";
