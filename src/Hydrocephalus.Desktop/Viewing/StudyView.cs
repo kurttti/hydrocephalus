@@ -40,6 +40,12 @@ public sealed class StudyView : INotifyPropertyChanged
         ];
 
         this.HasMask = mask is not null;
+
+        var grid = volume.Grid;
+        var inPlane = Math.Max(grid.ColumnSpacingMillimetres, grid.RowSpacingMillimetres);
+
+        this.IsThickSliced = grid.SliceSpacingMillimetres > ThickSliceMillimetres
+            && grid.SliceSpacingMillimetres > inPlane * 2;
         this.HasReview = review is not null;
     }
 
@@ -52,8 +58,23 @@ public sealed class StudyView : INotifyPropertyChanged
     /// <summary>Признак наличия маски.</summary>
     public bool HasMask { get; }
 
+    /// <summary>
+    /// Шаг срезов, мм, начиная с которого реконструкции других плоскостей
+    /// не показываются.
+    /// </summary>
+    public const double ThickSliceMillimetres = 2.5;
+
     /// <summary>Признак наличия разбора решения сегментации.</summary>
     public bool HasReview { get; }
+
+    /// <summary>
+    /// Серия получена толстыми срезами, и реконструкции других плоскостей
+    /// нечитаемы: по 22 срезам через 7 мм «аксиальная» плоскость корональной
+    /// серии — лесенка из полос шириной в сантиметр. Экран показывает только
+    /// плоскость получения; остальные виды остаются в модели для сегментации
+    /// и измерений, но врачу не предъявляются как изображение.
+    /// </summary>
+    public bool IsThickSliced { get; }
 
     /// <summary>
     /// Показывать ли на всех видах разбор решения вместо маски. Общий

@@ -345,7 +345,8 @@ public sealed class AnalyzeStudyUseCase
     /// лежала 3D T1. Порядок взвешенностей — порядок, в котором сегментация
     /// проверена: T1 на публичном наборе, T2 — ярким ликвором без отдельной
     /// проверки, FLAIR — последним. Из равных берётся серия с большим числом
-    /// срезов: прицельный блок охватывает желудочки не целиком.
+    /// срезов: прицельный блок охватывает желудочки не целиком. Среди серий
+    /// базового уровня аксиальная идёт впереди взвешенности.
     ///
     /// Открыт наружу, потому что этот же выбор нужен экрану: показывать одну
     /// серию, а измерять другую нельзя, а вторая копия правила разошлась бы
@@ -389,6 +390,12 @@ public sealed class AnalyzeStudyUseCase
         series
             .Where(item => !item.IsContrastEnhanced && item.Tier != AcquisitionTier.Unusable)
             .OrderByDescending(item => item.Tier)
+
+            // Толстосрезовая серия читается только в своей плоскости, а линейные
+            // измерения базового уровня (индекс Эванса) делаются на аксиальном
+            // срезе. Корональная T1 через 7 мм, выбранная впереди аксиальной T2,
+            // оставляла врача с нечитаемыми реконструкциями.
+            .ThenByDescending(item => item.Tier == AcquisitionTier.Baseline && item.Geometry.Plane == ImagingPlane.Axial)
             .ThenByDescending(item => WeightingPreference(item.Weighting))
             .ThenByDescending(item => item.Geometry.Dimensions.Slices);
 

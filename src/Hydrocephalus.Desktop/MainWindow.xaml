@@ -56,7 +56,10 @@
                         Click="OnAdministrationClick" />
             </StackPanel>
 
-            <StackPanel Orientation="Horizontal">
+            <!-- Перенос строк, а не одна строка: органов управления больше,
+                 чем помещается рядом с экспортом, и не поместившиеся иначе
+                 уходили за край окна вместе со списком серий и окном/уровнем. -->
+            <WrapPanel Orientation="Horizontal">
                 <Button x:Name="OpenButton"
                         Content="_Открыть исследование…"
                         Padding="12,4"
@@ -119,7 +122,7 @@
 
                 <TextBlock x:Name="WindowReadout" Foreground="#9A9AA6"
                            Margin="16,0,0,0" VerticalAlignment="Center" />
-            </StackPanel>
+            </WrapPanel>
 
             </DockPanel>
         </Border>

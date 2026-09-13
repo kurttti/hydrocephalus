@@ -397,11 +397,16 @@ public partial class MainWindow : Window
         this.surfaces.Clear();
         this.PlaneGrid.Children.Clear();
 
-        for (var index = 0; index < view.Planes.Count; index++)
+        // По толстым срезам показывается только плоскость получения, во всю
+        // ширину: реконструкции из полос в сантиметр только мешают читать.
+        var shown = view.IsThickSliced ? 1 : view.Planes.Count;
+
+        for (var index = 0; index < shown; index++)
         {
             var surface = new PlaneSurface(view.Planes[index]);
 
             Grid.SetColumn(surface.Root, index);
+            Grid.SetColumnSpan(surface.Root, view.IsThickSliced ? 3 : 1);
             this.PlaneGrid.Children.Add(surface.Root);
             this.surfaces.Add(surface);
         }

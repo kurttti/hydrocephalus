@@ -19,6 +19,9 @@ public sealed class PlaneView : INotifyPropertyChanged
     private readonly IVoxelVolume volume;
     private readonly VoxelMask? mask;
     private readonly VoxelMask? review;
+    private readonly PlaneTransform transform;
+    private readonly int rawWidth;
+    private readonly int rawHeight;
 
     private int index;
     private WindowLevel window;
@@ -64,6 +67,14 @@ public sealed class PlaneView : INotifyPropertyChanged
         this.window = window;
 
         this.Count = VolumeSlicer.CountAlong(volume, axis);
+
+        // Ориентация вывода не зависит от номера среза: оси у всех срезов
+        // вида одни. Поэтому она вычисляется один раз, по первому срезу.
+        var sample = VolumeSlicer.Extract(volume, axis, 0, window);
+
+        this.rawWidth = sample.Width;
+        this.rawHeight = sample.Height;
+        this.transform = DisplayOrientation.For(sample.Labels, sample.Plane);
 
         // Начинается с середины: срединные структуры интереснее краёв,
         // и открывать вид на пустом первом срезе незачем.
@@ -164,16 +175,29 @@ public sealed class PlaneView : INotifyPropertyChanged
     }
 
     /// <summary>Текущий срез изображения.</summary>
-    public PlaneImage Image => VolumeSlicer.Extract(this.volume, this.Axis, this.index, this.window);
+    public PlaneImage Image => DisplayOrientation.Apply(
+        VolumeSlicer.Extract(this.volume, this.Axis, this.index, this.window),
+        this.transform);
 
     /// <summary>
     /// Текущий срез маски — или разбора решения, если он включён, — либо
     /// <see langword="null"/>, если показывать нечего или оверлей выключен.
     /// </summary>
-    public byte[]? Overlay =>
-        !this.showOverlay ? null
-        : this.showReview && this.review is not null ? this.review.ExtractPlane(this.Axis, this.index)
-        : this.mask?.ExtractPlane(this.Axis, this.index);
+    public byte[]? Overlay
+    {
+        get
+        {
+            var plane = !this.showOverlay ? null
+                : this.showReview && this.review is not null ? this.review.ExtractPlane(this.Axis, this.index)
+                : this.mask?.ExtractPlane(this.Axis, this.index);
+
+            // Маска поворачивается тем же преобразованием, что и изображение:
+            // иначе оверлей лёг бы зеркально к анатомии.
+            return plane is null
+                ? null
+                : DisplayOrientation.Apply(plane, this.rawWidth, this.rawHeight, this.transform);
+        }
+    }
 
     /// <summary>Анатомическая плоскость этого вида.</summary>
     public ImagingPlane Plane => this.Image.Plane;

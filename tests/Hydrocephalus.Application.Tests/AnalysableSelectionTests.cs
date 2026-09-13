@@ -58,6 +58,17 @@ public sealed class AnalysableSelectionTests
     }
 
     [Fact]
+    public void Among_thick_series_the_axial_one_is_taken_before_weighting()
+    {
+        // Корональная T1 через 7 мм шла впереди аксиальной T2, и врач получал
+        // нечитаемые реконструкции; индекс Эванса к тому же меряют на аксиальном.
+        var coronalT1 = Series("coronal", SeriesWeighting.T1, slices: 22, sliceMillimetres: 7, plane: ImagingPlane.Coronal);
+        var axialT2 = Series("axial", SeriesWeighting.T2, slices: 20, sliceMillimetres: 7);
+
+        Assert.Same(axialT2, AnalyzeStudyUseCase.SelectAnalysableSeries(Study("s", coronalT1, axialT2)));
+    }
+
+    [Fact]
     public void A_contrast_enhanced_series_is_never_chosen()
     {
         var enhanced = Series("enhanced", SeriesWeighting.T1, slices: 176, contrast: true);
@@ -100,7 +111,8 @@ public sealed class AnalysableSelectionTests
         SeriesWeighting weighting,
         int slices,
         double sliceMillimetres = 1.0,
-        bool contrast = false) => new()
+        bool contrast = false,
+        ImagingPlane plane = ImagingPlane.Axial) => new()
         {
             PseudonymousSeriesId = id,
             Weighting = weighting,
@@ -115,7 +127,11 @@ public sealed class AnalysableSelectionTests
                 PixelSpacing = new InPlaneSpacing(1.0, 1.0),
                 Dimensions = new VolumeDimensions(256, 256, slices),
                 RowDirection = new SpatialVector(1, 0, 0),
-                ColumnDirection = new SpatialVector(0, 1, 0),
+
+                // Корональная: столбцы идут сверху вниз, нормаль — вперёд-назад.
+                ColumnDirection = plane == ImagingPlane.Coronal
+                    ? new SpatialVector(0, 0, -1)
+                    : new SpatialVector(0, 1, 0),
                 Origin = default,
             },
         };
