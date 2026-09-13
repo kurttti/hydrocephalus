@@ -92,7 +92,7 @@ internal static class DeidentificationAudit
 
         foreach (var secret in sourceSecrets)
         {
-            if (relativePath.Contains(secret, StringComparison.OrdinalIgnoreCase))
+            if (PathContains(relativePath, secret))
             {
                 violations.Add(new DeidentificationViolation(
                     DeidentificationViolationCode.ResidualSourceValueInPath,
@@ -206,6 +206,32 @@ internal static class DeidentificationAudit
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Встречается ли исходное значение в пути рабочей копии.
+    ///
+    /// Путь собирается из шестнадцатеричных псевдонимов, и короткое число
+    /// находится в них подстрокой случайно — повторный прогон по выборке дал
+    /// ровно такой отказ. Поэтому короткое число сравнивается с целым сегментом
+    /// пути без расширения: путь, по ошибке построенный из исходного значения
+    /// («12345.dcm»), по-прежнему даёт нарушение. Текст и длинные числа ищутся
+    /// подстрокой, как раньше.
+    /// </summary>
+    /// <param name="relativePath">Путь файла внутри рабочей копии.</param>
+    /// <param name="secret">Исходное значение.</param>
+    /// <returns><see langword="true"/>, если исходное значение найдено.</returns>
+    internal static bool PathContains(string relativePath, string secret)
+    {
+        if (!IsShortNumber(secret))
+        {
+            return relativePath.Contains(secret, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return relativePath
+            .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+            .Select(Path.GetFileNameWithoutExtension)
+            .Any(segment => string.Equals(segment, secret, StringComparison.Ordinal));
     }
 
     private static bool IsShortNumber(string secret) =>

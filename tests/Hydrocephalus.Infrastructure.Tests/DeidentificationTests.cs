@@ -180,6 +180,22 @@ public sealed class DeidentificationTests
         Assert.Equal(expected, DeidentificationAudit.Contains(value, secret));
     }
 
+    [Theory]
+    [InlineData("a1f3/4f24681e9c.dcm", "24681", false)]
+    [InlineData("a1f3/24681.dcm", "24681", true)]
+    [InlineData("24681/instance.dcm", "24681", true)]
+    [InlineData("series/Ivanov.dcm", "Ivanov", true)]
+    public void A_short_number_in_the_path_counts_only_as_a_whole_segment(
+        string relativePath,
+        string secret,
+        bool expected)
+    {
+        // Путь собирается из шестнадцатеричных псевдонимов, и короткое число
+        // находится в них случайно — повторный прогон по выборке дал такой
+        // отказ. Путь, построенный из исходного значения, по-прежнему ловится.
+        Assert.Equal(expected, DeidentificationAudit.PathContains(relativePath, secret));
+    }
+
     [Fact]
     public void Audit_reports_a_source_value_left_in_the_path()
     {
