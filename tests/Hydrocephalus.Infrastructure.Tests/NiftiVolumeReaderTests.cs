@@ -36,6 +36,22 @@ public sealed class NiftiVolumeReaderTests : IDisposable
     }
 
     [Fact]
+    public void Slices_of_a_left_handed_file_are_stored_in_reverse()
+    {
+        // Отрицательный qfac: третья ось файла против произведения первых двух.
+        // Без разворота срез с нормалью «влево» лёг бы справа.
+        var content = Build(2, 2, 3, (_, _, k) => k);
+        BinaryPrimitives.WriteInt16LittleEndian(content.AsSpan(252, 2), 1);
+        BinaryPrimitives.WriteSingleLittleEndian(content.AsSpan(76, 4), -1f);
+
+        var volume = NiftiVolumeReader.Parse(content);
+
+        Assert.Equal(2f, volume[0, 0, 0]);
+        Assert.Equal(1f, volume[1, 1, 1]);
+        Assert.Equal(0f, volume[1, 0, 2]);
+    }
+
+    [Fact]
     public void The_scale_from_the_header_is_applied()
     {
         var volume = NiftiVolumeReader.Parse(Build(2, 2, 2, (_, _, _) => 10, slope: 2.5f, intercept: -1));

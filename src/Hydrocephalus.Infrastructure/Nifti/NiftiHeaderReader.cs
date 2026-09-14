@@ -25,7 +25,20 @@ public static class NiftiHeaderReader
     /// Если заголовок короче требуемого, не является NIfTI-1 либо содержит
     /// недопустимое число измерений.
     /// </exception>
-    public static SeriesGeometry Read(ReadOnlySpan<byte> header)
+    public static SeriesGeometry Read(ReadOnlySpan<byte> header) => ReadWithSliceOrder(header).Geometry;
+
+    /// <summary>
+    /// Разбирает заголовок и сообщает, нужно ли развернуть порядок срезов.
+    ///
+    /// Геометрия домена задаёт ось срезов как векторное произведение строки
+    /// и столбца — так устроен DICOM. В NIfTI третья ось файла независима,
+    /// и у «левой» тройки осей (так записаны сагиттальные T1 IXI) она
+    /// направлена против произведения. Без разворота срезы легли бы
+    /// зеркально: сагиттальная серия меняла бы местами левое и правое.
+    /// </summary>
+    /// <param name="header">Первые 348 байт файла.</param>
+    /// <returns>Геометрия и признак обратного порядка срезов в файле.</returns>
+    internal static (SeriesGeometry Geometry, bool ReversesSlices) ReadWithSliceOrder(ReadOnlySpan<byte> header)
     {
         if (header.Length < HeaderSizeBytes)
         {
@@ -57,7 +70,10 @@ public static class NiftiHeaderReader
         var rows = rank >= 2 ? dimensions[2] : 0;
         var slices = rank >= 3 ? dimensions[3] : 0;
 
-        return new SeriesGeometry
+        var orientation = Orientation.Read(header, pixelDimensions, littleEndian);
+        var reverses = slices > 1 && orientation.ReversesSlices;
+
+        var geometry = new SeriesGeometry
         {
             // Объёмное получение выводится из наличия третьего измерения: тега
             // MRAcquisitionType в NIfTI нет, он остаётся принадлежностью DICOM.
@@ -73,10 +89,19 @@ public static class NiftiHeaderReader
                 rank >= 2 ? pixelDimensions[2] : 0,
                 rank >= 1 ? pixelDimensions[1] : 0),
             Dimensions = new VolumeDimensions(columns, rows, slices),
-            RowDirection = ReadRow(header, 280, littleEndian),
-            ColumnDirection = ReadRow(header, 296, littleEndian),
-            Origin = ReadOrigin(header, littleEndian),
+
+            // RowDirection в DICOM — куда ведёт рост номера столбца, то есть
+            // первого индекса файла.
+            RowDirection = orientation.FirstIndex,
+            ColumnDirection = orientation.SecondIndex,
+
+            // При развороте первым становится последний срез файла.
+            Origin = reverses
+                ? Advance(orientation.Origin, orientation.ThirdIndexStep, slices - 1)
+                : orientation.Origin,
         };
+
+        return (geometry, reverses);
     }
 
     /// <summary>
@@ -128,17 +153,120 @@ public static class NiftiHeaderReader
             ? BinaryPrimitives.ReadSingleLittleEndian(source)
             : BinaryPrimitives.ReadSingleBigEndian(source);
 
-    /// <summary>Читает первые три компоненты строки матрицы sform.</summary>
-    private static SpatialVector ReadRow(ReadOnlySpan<byte> header, int offset, bool littleEndian) =>
-        new(
-            ReadSingle(header.Slice(offset, sizeof(float)), littleEndian),
-            ReadSingle(header.Slice(offset + sizeof(float), sizeof(float)), littleEndian),
-            ReadSingle(header.Slice(offset + (2 * sizeof(float)), sizeof(float)), littleEndian));
+    private static short ReadInt16(ReadOnlySpan<byte> source, bool littleEndian) =>
+        littleEndian
+            ? BinaryPrimitives.ReadInt16LittleEndian(source)
+            : BinaryPrimitives.ReadInt16BigEndian(source);
 
-    /// <summary>Читает сдвиги трёх строк матрицы sform — положение начала координат.</summary>
-    private static SpatialVector ReadOrigin(ReadOnlySpan<byte> header, bool littleEndian) =>
-        new(
-            ReadSingle(header.Slice(280 + (3 * sizeof(float)), sizeof(float)), littleEndian),
-            ReadSingle(header.Slice(296 + (3 * sizeof(float)), sizeof(float)), littleEndian),
-            ReadSingle(header.Slice(312 + (3 * sizeof(float)), sizeof(float)), littleEndian));
+    private static SpatialVector Advance(SpatialVector origin, SpatialVector step, int count) =>
+        new(origin.X + (step.X * count), origin.Y + (step.Y * count), origin.Z + (step.Z * count));
+
+    /// <summary>
+    /// Оси файла в системе координат пациента DICOM (LPS).
+    ///
+    /// NIfTI задаёт мировые координаты в RAS: X растёт к правой стороне
+    /// пациента, Y — вперёд. Домен, как и DICOM, работает в LPS, поэтому X и Y
+    /// меняют знак. Матрица sform и кватернион qform хранят оси файла по
+    /// столбцам: первый столбец — куда ведёт рост первого индекса. Прежде
+    /// строки матрицы читались как направления, и сагиттальная T1 из IXI
+    /// выходила аксиальной с перепутанными сторонами.
+    /// </summary>
+    /// <param name="FirstIndex">Направление роста первого индекса, нормированное.</param>
+    /// <param name="SecondIndex">Направление роста второго индекса, нормированное.</param>
+    /// <param name="ThirdIndexStep">Шаг третьего индекса в миллиметрах, как записан в файле.</param>
+    /// <param name="Origin">Положение первого вокселя файла.</param>
+    /// <param name="ReversesSlices">Третья ось файла направлена против произведения первых двух.</param>
+    private readonly record struct Orientation(
+        SpatialVector FirstIndex,
+        SpatialVector SecondIndex,
+        SpatialVector ThirdIndexStep,
+        SpatialVector Origin,
+        bool ReversesSlices)
+    {
+        public static Orientation Read(ReadOnlySpan<byte> header, float[] pixelDimensions, bool littleEndian)
+        {
+            var qformCode = ReadInt16(header.Slice(252, 2), littleEndian);
+            var sformCode = ReadInt16(header.Slice(254, 2), littleEndian);
+
+            if (sformCode > 0)
+            {
+                var x = ReadSingleArray(header.Slice(280, 16), littleEndian);
+                var y = ReadSingleArray(header.Slice(296, 16), littleEndian);
+                var z = ReadSingleArray(header.Slice(312, 16), littleEndian);
+
+                return FromAxes(
+                    FromRas(x[0], y[0], z[0]),
+                    FromRas(x[1], y[1], z[1]),
+                    FromRas(x[2], y[2], z[2]),
+                    FromRas(x[3], y[3], z[3]));
+            }
+
+            if (qformCode > 0)
+            {
+                return FromQuaternion(header, pixelDimensions, littleEndian);
+            }
+
+            // Метод 1 спецификации: ориентации в файле нет, и о сторонах
+            // пациента заголовок ничего не утверждает. Оси берутся как есть.
+            return new Orientation(
+                new SpatialVector(1, 0, 0),
+                new SpatialVector(0, 1, 0),
+                new SpatialVector(0, 0, pixelDimensions[3]),
+                default,
+                ReversesSlices: false);
+        }
+
+        private static Orientation FromQuaternion(ReadOnlySpan<byte> header, float[] pixelDimensions, bool littleEndian)
+        {
+            double b = ReadSingle(header.Slice(256, 4), littleEndian);
+            double c = ReadSingle(header.Slice(260, 4), littleEndian);
+            double d = ReadSingle(header.Slice(264, 4), littleEndian);
+            var a = Math.Sqrt(Math.Max(0, 1 - ((b * b) + (c * c) + (d * d))));
+
+            // qfac хранится в pixdim[0]; всё, кроме -1, спецификация велит считать единицей.
+            var qfac = pixelDimensions[0] < 0 ? -1.0 : 1.0;
+
+            var r11 = (a * a) + (b * b) - (c * c) - (d * d);
+            var r12 = 2 * ((b * c) - (a * d));
+            var r13 = 2 * ((b * d) + (a * c));
+            var r21 = 2 * ((b * c) + (a * d));
+            var r22 = (a * a) + (c * c) - (b * b) - (d * d);
+            var r23 = 2 * ((c * d) - (a * b));
+            var r31 = 2 * ((b * d) - (a * c));
+            var r32 = 2 * ((c * d) + (a * b));
+            var r33 = (a * a) + (d * d) - (c * c) - (b * b);
+
+            double columnStep = pixelDimensions[1];
+            double rowStep = pixelDimensions[2];
+            var sliceStep = pixelDimensions[3] * qfac;
+
+            return FromAxes(
+                FromRas(r11 * columnStep, r21 * columnStep, r31 * columnStep),
+                FromRas(r12 * rowStep, r22 * rowStep, r32 * rowStep),
+                FromRas(r13 * sliceStep, r23 * sliceStep, r33 * sliceStep),
+                FromRas(
+                    ReadSingle(header.Slice(268, 4), littleEndian),
+                    ReadSingle(header.Slice(272, 4), littleEndian),
+                    ReadSingle(header.Slice(276, 4), littleEndian)));
+        }
+
+        private static Orientation FromAxes(
+            SpatialVector first,
+            SpatialVector second,
+            SpatialVector third,
+            SpatialVector origin)
+        {
+            var firstDirection = first.Normalized();
+            var secondDirection = second.Normalized();
+
+            return new Orientation(
+                firstDirection,
+                secondDirection,
+                third,
+                origin,
+                ReversesSlices: firstDirection.Cross(secondDirection).Dot(third) < 0);
+        }
+
+        private static SpatialVector FromRas(double x, double y, double z) => new(-x, -y, z);
+    }
 }

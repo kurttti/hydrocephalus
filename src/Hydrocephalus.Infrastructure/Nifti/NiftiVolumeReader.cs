@@ -65,7 +65,7 @@ public static class NiftiVolumeReader
     /// </exception>
     public static IVoxelVolume Parse(ReadOnlySpan<byte> content)
     {
-        var geometry = NiftiHeaderReader.Read(content);
+        var (geometry, reversesSlices) = NiftiHeaderReader.ReadWithSliceOrder(content);
 
         var littleEndian = BinaryPrimitives.ReadInt32LittleEndian(content) == NiftiHeaderReader.HeaderSizeBytes;
 
@@ -97,10 +97,20 @@ public static class NiftiVolumeReader
         var data = content.Slice((int)offset, (int)(count * size));
         var voxels = new float[count];
 
+        var planeSize = (long)dimensions.Columns * dimensions.Rows;
+        var sliceCount = Math.Max(dimensions.Slices, 1);
+
         for (var index = 0; index < voxels.Length; index++)
         {
             var raw = ReadValue(data.Slice(index * size, size), datatype, littleEndian);
-            voxels[index] = (float)((raw * slope) + intercept);
+
+            // Срезы файла кладутся в обратном порядке, если его третья ось
+            // направлена против оси срезов геометрии (NiftiHeaderReader).
+            var target = reversesSlices
+                ? (((sliceCount - 1 - (index / planeSize)) * planeSize) + (index % planeSize))
+                : index;
+
+            voxels[target] = (float)((raw * slope) + intercept);
         }
 
         return new VoxelVolume(geometry, voxels);
