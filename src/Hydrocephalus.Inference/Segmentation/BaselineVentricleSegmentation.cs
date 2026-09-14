@@ -78,6 +78,48 @@ public sealed record BaselineSegmentationOptions
     /// </summary>
     public double MinVentricleMillilitres { get; init; } = 5;
 
+    /// <summary>
+    /// Радиус закрытия головы для отбора по ядрам, мм. Закрывает тёмную полосу
+    /// ликвора и кости, по которой заливка фона затекала в борозды.
+    /// </summary>
+    public double CoreHeadClosingMillimetres { get; init; } = 10;
+
+    /// <summary>
+    /// Толщина ликвора, с которой начинается ядро, мм: расстояние до ближайшего
+    /// не-ликвора. Перемычки к бороздам и цистернам тоньше, тела расширенных
+    /// желудочков — толще.
+    /// </summary>
+    public double CoreThicknessMillimetres { get; init; } = 3;
+
+    /// <summary>Наименьшая глубина всех отсчётов желудочкового ядра, мм.</summary>
+    public double CoreMinDepthMillimetres { get; init; } = 25;
+
+    /// <summary>
+    /// Наименьшая средняя яркость ядра в долях порога фона. Воздух пазух
+    /// и сосцевидных отростков темнее ликвора: на клинике 0.13–0.16 против 0.40–0.43.
+    /// </summary>
+    public double CoreMinCsfToThreshold { get; init; } = 0.25;
+
+    /// <summary>
+    /// Наибольшее расстояние от центра ядра до свода черепа, мм. Желудочки
+    /// лежат в 35–75 мм от свода; глотка, пазухи и базальные цистерны — дальше 100.
+    /// </summary>
+    public double CoreMaxHeadroomMillimetres { get; init; } = 80;
+
+    /// <summary>
+    /// Наименьшая доля выбранных ядер по меньшую сторону средней линии.
+    /// </summary>
+    public double CoreMinSideFraction { get; init; } = 0.2;
+
+    /// <summary>Наименьший объём ядра, мл.</summary>
+    public double MinCoreMillilitres { get; init; } = 0.5;
+
+    /// <summary>Насколько ядру возвращается связанный с ним ликвор, мм.</summary>
+    public double CoreGrowthMillimetres { get; init; } = 6;
+
+    /// <summary>Насколько маска дорастает до полувысоты у стенки, мм.</summary>
+    public double CoreRimMillimetres { get; init; } = 2;
+
     /// <summary>Наименьший размер компоненты в отсчётах.</summary>
     public int MinComponentVoxels { get; init; } = 50;
 
@@ -130,7 +172,7 @@ public readonly record struct BaselineSegmentationResult(
 /// - он зависит от взвешенности серии. При неизвестной взвешенности направление
 ///   порога определить нельзя, и метод отказывается работать, а не угадывает.
 /// </summary>
-public static class BaselineVentricleSegmentation
+public static partial class BaselineVentricleSegmentation
 {
     /// <summary>Метка желудочковой системы.</summary>
     public static readonly AnatomicalLabel VentricularSystem = new("ventricular-system");
@@ -140,7 +182,7 @@ public static class BaselineVentricleSegmentation
     /// baseline-сегментацией, не должен сравниваться с результатом модели
     /// как одинаковый.
     /// </summary>
-    public const string LabelMapVersion = "baseline-1.1.0";
+    public const string LabelMapVersion = "baseline-1.2.0";
 
     /// <summary>
     /// Сегментирует желудочковую систему.
@@ -205,6 +247,11 @@ public static class BaselineVentricleSegmentation
         // глубина.
         var csfThreshold = darkCsf ? headThreshold : tissueThreshold;
 
+        if (darkCsf && SelectByCores(volume, headThreshold, options, cancellationToken) is { } cores)
+        {
+            return Finish(grid, cores.Labels, cores.Candidate, cores.HeadVoxels, cores.Rejected, options);
+        }
+
         var candidate = Candidate(volume, head, csfThreshold, darkCsf, cancellationToken);
         var candidateCount = candidate.Count(value => value != 0);
 
@@ -216,8 +263,6 @@ public static class BaselineVentricleSegmentation
         }
 
         var depth = DistanceToOutside(grid, head, cancellationToken);
-        var voxelMillilitres = grid.ColumnSpacingMillimetres * grid.RowSpacingMillimetres
-            * grid.SliceSpacingMillimetres / 1000.0;
 
         var labels = SelectVentricles(grid.Dimensions, candidate, depth, options, out var rejected);
 
@@ -226,6 +271,19 @@ public static class BaselineVentricleSegmentation
             labels = GrowIntoPartialVolume(volume, head, open, labels, tissueThreshold, csfThreshold, options, cancellationToken);
         }
 
+        return Finish(grid, labels, candidate, headCount, rejected, options);
+    }
+
+    private static BaselineSegmentationResult Finish(
+        VolumeGrid grid,
+        byte[] labels,
+        byte[] candidate,
+        long headCount,
+        int rejected,
+        BaselineSegmentationOptions options)
+    {
+        var voxelMillilitres = grid.ColumnSpacingMillimetres * grid.RowSpacingMillimetres
+            * grid.SliceSpacingMillimetres / 1000.0;
         var selected = labels.Count(value => value != 0);
 
         if (selected > headCount * options.MaxCsfFractionOfHead)

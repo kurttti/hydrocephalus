@@ -107,10 +107,12 @@ public sealed class BaselineSegmentationTests
 
         AssertRecovers(result.Mask, ventricleRadius: 6);
 
-        Assert.Contains(
-            result.Issues,
-            issue => issue.Parameters.TryGetValue("reason", out var reason)
-                && reason == "peripheralCsfDiscarded");
+        // Прослойка у поверхности — ликвор той же яркости, но в маску не входит,
+        // а в разборе показана отброшенной.
+        var centre = Size / 2;
+
+        Assert.Equal(0, result.Mask[centre + 19, centre, centre]);
+        Assert.Equal(2, Assert.IsType<VoxelMask>(result.Review)[centre + 19, centre, centre]);
     }
 
     [Fact]
@@ -224,6 +226,28 @@ public sealed class BaselineSegmentationTests
     }
 
     [Fact]
+    public void A_thick_ventricle_joined_to_the_surface_by_a_thin_bridge_is_still_found()
+    {
+        // Так на клинике выглядели все объёмные T1 пациентов с НТГ: ликвор
+        // отделён порогом хорошо, но желудочки связаны с бороздами, и прежнее
+        // правило отбрасывало всю систему, оставляя фрагменты по 1–3 мл.
+        // Отбор по толщине рвёт перемычку. На сетке 3 мм толщина ядра — два
+        // отсчёта: один отсчёт толщиной обладает любой ликвор.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, peripheralCsf: true, thinBridge: true);
+
+        var result = BaselineVentricleSegmentation.Segment(
+            volume,
+            SeriesWeighting.T1,
+            new BaselineSegmentationOptions { CoreThicknessMillimetres = 6 });
+
+        AssertRecovers(result.Mask, ventricleRadius: 6);
+
+        var centre = Size / 2;
+
+        Assert.Equal(0, result.Mask[centre + 19, centre, centre]);
+    }
+
+    [Fact]
     public void A_threshold_that_selects_most_of_the_head_is_reported_and_not_used()
     {
         // Внутри головы классов больше двух, и порог может встать между серым
@@ -284,12 +308,17 @@ public sealed class BaselineSegmentationTests
         // не должно уходить в ткань.
         var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, partialVolume: true);
 
+        // Проверяется прежний путь, где работает это дорастание: ядра отключены
+        // толщиной, которой в фантоме нет. У отбора по ядрам своя граница —
+        // полувысота, и ликвор частичного объёма под порогом он берёт сразу.
+        var withoutCores = new BaselineSegmentationOptions { CoreThicknessMillimetres = 1000 };
+
         var coreOnly = BaselineVentricleSegmentation.Segment(
             volume,
             SeriesWeighting.T1,
-            new BaselineSegmentationOptions { BoundaryGrowthMillimetres = 0 });
+            withoutCores with { BoundaryGrowthMillimetres = 0 });
 
-        var grown = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1);
+        var grown = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1, withoutCores);
 
         Assert.True(
             Count(grown.Mask) > Count(coreOnly.Mask),
@@ -395,6 +424,7 @@ public sealed class BaselineSegmentationTests
         int ventricleRadius,
         bool peripheralCsf = false,
         bool connectedPeripheralCsf = false,
+        bool thinBridge = false,
         bool neck = false,
         bool cutBySlab = false,
         bool partialVolume = false)
@@ -447,6 +477,13 @@ public sealed class BaselineSegmentationTests
             // Полость, дотянувшаяся до поверхности: канал от центра наружу,
             // из-за которого желудочек и наружный ликвор становятся одной областью.
             if (connectedPeripheralCsf && dc > 0 && Math.Abs(dr) < 3 && Math.Abs(ds) < 3)
+            {
+                return csf;
+            }
+
+            // Перемычка в один отсчёт — так расширенный желудочек связан
+            // с бороздами через частичный объём на клинических MPRAGE.
+            if (thinBridge && dc > 0 && dr == 0 && ds == 0)
             {
                 return csf;
             }
