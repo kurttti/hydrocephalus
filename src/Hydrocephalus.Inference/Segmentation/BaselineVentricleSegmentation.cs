@@ -724,43 +724,43 @@ public static partial class BaselineVentricleSegmentation
         var rows = dimensions.Rows;
         var slices = dimensions.Slices;
         var longest = Math.Max(columns, Math.Max(rows, slices));
-        var line = new double[longest];
-        var output = new double[longest];
-        var hull = new int[longest];
-        var bounds = new double[longest + 1];
+        var parallel = new ParallelOptions { CancellationToken = cancellationToken };
 
-        for (var slice = 0; slice < slices; slice++)
+        // Линии одного прохода не пересекаются, поэтому идут параллельно:
+        // результат тот же, что при последовательном обходе, а голова
+        // 256×256×150 обрабатывается за доли секунды, а не за секунду.
+        Parallel.For(0, slices, parallel, () => new LineBuffers(longest), (slice, _, buffers) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             for (var row = 0; row < rows; row++)
             {
                 var start = Offset(dimensions, 0, row, slice);
-                PassAlong(squared, start, 1, columns, grid.ColumnSpacingMillimetres, line, output, hull, bounds);
+                PassAlong(squared, start, 1, columns, grid.ColumnSpacingMillimetres, buffers);
             }
-        }
 
-        for (var slice = 0; slice < slices; slice++)
+            return buffers;
+        }, _ => { });
+
+        Parallel.For(0, slices, parallel, () => new LineBuffers(longest), (slice, _, buffers) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             for (var column = 0; column < columns; column++)
             {
                 var start = Offset(dimensions, column, 0, slice);
-                PassAlong(squared, start, columns, rows, grid.RowSpacingMillimetres, line, output, hull, bounds);
+                PassAlong(squared, start, columns, rows, grid.RowSpacingMillimetres, buffers);
             }
-        }
 
-        for (var row = 0; row < rows; row++)
+            return buffers;
+        }, _ => { });
+
+        Parallel.For(0, rows, parallel, () => new LineBuffers(longest), (row, _, buffers) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             for (var column = 0; column < columns; column++)
             {
                 var start = Offset(dimensions, column, row, 0);
-                PassAlong(squared, start, columns * rows, slices, grid.SliceSpacingMillimetres, line, output, hull, bounds);
+                PassAlong(squared, start, columns * rows, slices, grid.SliceSpacingMillimetres, buffers);
             }
-        }
+
+            return buffers;
+        }, _ => { });
 
         for (var offset = 0; offset < squared.Length; offset++)
         {
@@ -770,17 +770,30 @@ public static partial class BaselineVentricleSegmentation
         return squared;
     }
 
+    private sealed class LineBuffers(int length)
+    {
+        public double[] Line { get; } = new double[length];
+
+        public double[] Output { get; } = new double[length];
+
+        public int[] Hull { get; } = new int[length];
+
+        public double[] Bounds { get; } = new double[length + 1];
+    }
+
     private static void PassAlong(
         float[] squared,
         int start,
         int stride,
         int count,
         double spacing,
-        double[] line,
-        double[] output,
-        int[] hull,
-        double[] bounds)
+        LineBuffers buffers)
     {
+        var line = buffers.Line;
+        var output = buffers.Output;
+        var hull = buffers.Hull;
+        var bounds = buffers.Bounds;
+
         for (var index = 0; index < count; index++)
         {
             line[index] = squared[start + (index * stride)];
@@ -853,28 +866,61 @@ public static partial class BaselineVentricleSegmentation
         }
     }
 
-    private static IEnumerable<int> NeighboursOf(VolumeDimensions dimensions, int offset)
+    /// <summary>
+    /// Соседи отсчёта по граням. Перечислитель — структура: раздувание,
+    /// сжатие и заливки обходят каждый отсчёт объёма, и итератор с выделением
+    /// памяти на каждый отсчёт вместе с последовательным расстоянием вдвое
+    /// замедлял сегментацию.
+    /// </summary>
+    private static NeighbourOffsets NeighboursOf(VolumeDimensions dimensions, int offset) => new(dimensions, offset);
+
+    private struct NeighbourOffsets
     {
-        var slice = offset / (dimensions.Columns * dimensions.Rows);
-        var remainder = offset % (dimensions.Columns * dimensions.Rows);
-        var row = remainder / dimensions.Columns;
-        var column = remainder % dimensions.Columns;
+        private readonly VolumeDimensions dimensions;
+        private readonly int column;
+        private readonly int row;
+        private readonly int slice;
+        private int index;
 
-        foreach (var (dc, dr, ds) in Neighbours)
+        public NeighbourOffsets(VolumeDimensions dimensions, int offset)
         {
-            var nextColumn = column + dc;
-            var nextRow = row + dr;
-            var nextSlice = slice + ds;
+            var plane = dimensions.Columns * dimensions.Rows;
+            var remainder = offset % plane;
 
-            if (nextColumn < 0 || nextRow < 0 || nextSlice < 0
-                || nextColumn >= dimensions.Columns
-                || nextRow >= dimensions.Rows
-                || nextSlice >= dimensions.Slices)
+            this.dimensions = dimensions;
+            slice = offset / plane;
+            row = remainder / dimensions.Columns;
+            column = remainder % dimensions.Columns;
+            index = -1;
+            Current = -1;
+        }
+
+        public int Current { get; private set; }
+
+        public readonly NeighbourOffsets GetEnumerator() => this;
+
+        public bool MoveNext()
+        {
+            while (++index < Neighbours.Length)
             {
-                continue;
+                var (dc, dr, ds) = Neighbours[index];
+                var nextColumn = column + dc;
+                var nextRow = row + dr;
+                var nextSlice = slice + ds;
+
+                if (nextColumn < 0 || nextRow < 0 || nextSlice < 0
+                    || nextColumn >= dimensions.Columns
+                    || nextRow >= dimensions.Rows
+                    || nextSlice >= dimensions.Slices)
+                {
+                    continue;
+                }
+
+                Current = Offset(dimensions, nextColumn, nextRow, nextSlice);
+                return true;
             }
 
-            yield return Offset(dimensions, nextColumn, nextRow, nextSlice);
+            return false;
         }
     }
 
