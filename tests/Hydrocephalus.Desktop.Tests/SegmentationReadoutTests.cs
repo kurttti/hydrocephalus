@@ -3,6 +3,7 @@ using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Domain.Segmentation;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.Segmentation;
 
 namespace Hydrocephalus.Desktop.Tests;
@@ -89,6 +90,46 @@ public sealed class SegmentationReadoutTests
         var text = SegmentationReadout.Describe(Result(MeasurementQuality.Questionable, issue: null, filled: true));
 
         Assert.Contains("не является проверенной сегментацией", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_measured_evans_index_is_given_with_where_to_see_its_segments()
+    {
+        // Число без места измерения проверить нельзя.
+        var text = SegmentationReadout.Describe(
+            Result(MeasurementQuality.Questionable, issue: null, filled: true),
+            AcquisitionTier.Extended,
+            new AutomaticEvansResult
+            {
+                Biomarker = new Biomarker
+                {
+                    Method = new MeasurementMethod
+                    {
+                        Code = LinearBiomarkers.EvansIndexCode,
+                        DefinitionVersion = LinearBiomarkers.DefinitionVersion,
+                        RequiredTier = AcquisitionTier.Baseline,
+                    },
+                    Value = 0.264,
+                    Unit = MeasurementUnit.Ratio,
+                    Quality = MeasurementQuality.Questionable,
+                    AllowedRange = new MeasurementRange(0.10, 0.60),
+                },
+            });
+
+        Assert.Contains("Индекс Эванса 0,26 (сомнительно)", text, StringComparison.Ordinal);
+        Assert.Contains("Разборе метода", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_evans_index_not_derived_is_named_by_its_reason()
+    {
+        var text = SegmentationReadout.Describe(
+            Result(MeasurementQuality.Questionable, issue: null, filled: true),
+            AcquisitionTier.Extended,
+            new AutomaticEvansResult { Refusal = AutomaticEvansRefusal.FrontalHornsNotFound });
+
+        Assert.Contains("Индекс Эванса не посчитан", text, StringComparison.Ordinal);
+        Assert.Contains("обоих желудочков", text, StringComparison.Ordinal);
     }
 
     private static BaselineSegmentationResult Result(MeasurementQuality quality, QualityIssue? issue, bool filled)

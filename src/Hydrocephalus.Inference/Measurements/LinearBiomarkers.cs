@@ -68,8 +68,59 @@ public static class LinearBiomarkers
         // плоскость проверяется, а не подразумевается.
         RequirePlane(volume, ImagingPlane.Axial, EvansIndexCode);
 
-        RequireSameSlice(
+        return EvansIndex(
+            volume,
+            VolumeAxis.AcrossSlices,
+            frontalHornFirst,
+            frontalHornSecond,
+            innerSkullFirst,
+            innerSkullSecond,
+            quality);
+    }
+
+    /// <summary>
+    /// Вычисляет индекс Эванса на аксиальной плоскости, лежащей поперёк
+    /// заданной оси объёма.
+    ///
+    /// Объёмная серия не обязана быть получена аксиально: сагиттальная 3D T1
+    /// содержит аксиальные плоскости так же, как аксиальная, только поперёк
+    /// другой оси сетки. Проверяется, что ось действительно ведёт вверх-вниз
+    /// и что все четыре точки лежат на одной плоскости поперёк неё.
+    /// </summary>
+    /// <param name="volume">Объём.</param>
+    /// <param name="axialAcross">Ось объёма, поперёк которой лежит аксиальная плоскость.</param>
+    /// <param name="frontalHornFirst">Первая точка ширины передних рогов.</param>
+    /// <param name="frontalHornSecond">Вторая точка ширины передних рогов.</param>
+    /// <param name="innerSkullFirst">Первая точка внутреннего диаметра черепа.</param>
+    /// <param name="innerSkullSecond">Вторая точка внутреннего диаметра черепа.</param>
+    /// <param name="quality">Оценка достоверности измерения.</param>
+    /// <returns>Признак с отношением.</returns>
+    /// <exception cref="DomainRuleViolationException">
+    /// Если ось не ведёт вверх-вниз, точки лежат на разных плоскостях либо
+    /// диаметр черепа нулевой.
+    /// </exception>
+    public static Biomarker EvansIndex(
+        IVoxelVolume volume,
+        VolumeAxis axialAcross,
+        VoxelPosition frontalHornFirst,
+        VoxelPosition frontalHornSecond,
+        VoxelPosition innerSkullFirst,
+        VoxelPosition innerSkullSecond,
+        MeasurementQuality quality = MeasurementQuality.Reliable)
+    {
+        ArgumentNullException.ThrowIfNull(volume);
+
+        var direction = PatientOrientation.Of(DirectionAcross(volume.Geometry, axialAcross));
+
+        if (direction is not (AnatomicalDirection.Superior or AnatomicalDirection.Inferior))
+        {
+            throw new DomainRuleViolationException(
+                $"Biomarker '{EvansIndexCode}' is defined on the axial plane, but the planes across {axialAcross} are not axial.");
+        }
+
+        RequireSamePlane(
             EvansIndexCode,
+            axialAcross,
             frontalHornFirst,
             frontalHornSecond,
             innerSkullFirst,
@@ -155,13 +206,16 @@ public static class LinearBiomarkers
         }
     }
 
-    private static void RequireSameSlice(string code, params VoxelPosition[] positions)
+    private static void RequireSameSlice(string code, params VoxelPosition[] positions) =>
+        RequireSamePlane(code, VolumeAxis.AcrossSlices, positions);
+
+    private static void RequireSamePlane(string code, VolumeAxis axis, params VoxelPosition[] positions)
     {
-        var slice = positions[0].Slice;
+        var plane = CoordinateAlong(positions[0], axis);
 
         foreach (var position in positions)
         {
-            if (Math.Abs(position.Slice - slice) > double.Epsilon)
+            if (Math.Abs(CoordinateAlong(position, axis) - plane) > double.Epsilon)
             {
                 // Точки с разных срезов дают длину, включающую расстояние между
                 // ними по оси среза: измерение перестаёт быть тем, что называется.
@@ -170,4 +224,20 @@ public static class LinearBiomarkers
             }
         }
     }
+
+    private static double CoordinateAlong(VoxelPosition position, VolumeAxis axis) => axis switch
+    {
+        VolumeAxis.AcrossSlices => position.Slice,
+        VolumeAxis.AcrossRows => position.Row,
+        VolumeAxis.AcrossColumns => position.Column,
+        _ => throw new ArgumentOutOfRangeException(nameof(axis)),
+    };
+
+    private static SpatialVector DirectionAcross(SeriesGeometry geometry, VolumeAxis axis) => axis switch
+    {
+        VolumeAxis.AcrossSlices => geometry.SliceNormal,
+        VolumeAxis.AcrossRows => geometry.ColumnDirection,
+        VolumeAxis.AcrossColumns => geometry.RowDirection,
+        _ => throw new ArgumentOutOfRangeException(nameof(axis)),
+    };
 }

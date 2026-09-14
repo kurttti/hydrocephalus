@@ -1,6 +1,7 @@
 using Hydrocephalus.Desktop.Results;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Reporting;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.Segmentation;
 
 namespace Hydrocephalus.Desktop.Composition;
@@ -35,6 +36,12 @@ public sealed record OpenedStudy
     /// и без причины экран сказал бы только, что маски нет.
     /// </summary>
     public BaselineSegmentationResult? Segmentation { get; init; }
+
+    /// <summary>
+    /// Индекс Эванса, выведенный из маски, с отрезками; <see langword="null"/>,
+    /// если он не выводился (толстые срезы, неизвестная взвешенность).
+    /// </summary>
+    public AutomaticEvansResult? Evans { get; init; }
 
     /// <summary>
     /// Все исследования открытой папки, включая показанное. Показанное —

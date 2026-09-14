@@ -5,6 +5,7 @@ using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Domain.Reporting;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.QualityControl;
 using Hydrocephalus.Inference.Segmentation;
 
@@ -27,11 +28,12 @@ namespace Hydrocephalus.Inference;
 ///
 /// Чего конвейер намеренно не делает:
 ///
-/// - **не считает индекс Эванса.** Формула реализована и проверена, но ей
-///   нужны четыре точки на срезе, а выводить их из маски конвейер не умеет:
-///   выбор аксиального среза для измерения — клиническое соглашение, а не
-///   геометрия. Число, похожее на индекс Эванса и полученное иначе, хуже
-///   отсутствующего числа;
+/// - **не считает индекс Эванса мимо маски.** Индекс выводится из той же
+///   маски, что и объём (<see cref="Measurements.AutomaticEvansIndex"/>),
+///   и только когда сегментация не отказала: точки, поставленные по
+///   фрагменту желудочка, дали бы число правдоподобного вида из неверной
+///   анатомии. Если передние рога обоих желудочков в маске не найдены,
+///   индекса нет;
 /// - **не сохраняет маску.** <see cref="Domain.Segmentation.SegmentationResult"/>
 ///   требует ссылки на маски в рабочей копии, а записывать их туда пока некуда:
 ///   для этого нужны шифрованное хранение масок и срок их жизни (ADR 0006).
@@ -187,6 +189,8 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
                 series.Tier,
                 segmentation.Quality);
 
+            var evans = AutomaticEvansIndex.Measure(volume, segmentation, series.Weighting, cancellationToken);
+
             progress?.Report(new AnalysisProgress(AnalysisStage.FeatureExtraction, 1.0));
 
             // Пустая маска — отказ метода, а не нулевой объём. Желудочковой
@@ -196,7 +200,11 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
             // реальных сериях T1 — отчёт получал «0 мл, недостоверно», и число
             // выглядело как измерение. Пометка «недостоверно» этого не исправляет:
             // её читают после числа, а копируют вместе с числом не всегда.
-            return [.. biomarkers.Where(biomarker => biomarker.Value > 0)];
+            return
+            [
+                .. biomarkers.Where(biomarker => biomarker.Value > 0),
+                .. evans.Biomarker is { } index ? [index] : Array.Empty<Biomarker>(),
+            ];
         }
         catch (Exception exception)
             when (exception is InvalidDataException

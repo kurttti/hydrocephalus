@@ -1,6 +1,7 @@
 using System.Globalization;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Quality;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.Segmentation;
 
 namespace Hydrocephalus.Desktop.Viewing;
@@ -25,8 +26,12 @@ public static class SegmentationReadout
     /// </summary>
     /// <param name="result">Результат либо <see langword="null"/>, если сегментация не запускалась.</param>
     /// <param name="tier">Уровень получения показанной серии.</param>
+    /// <param name="evans">Индекс Эванса, выведенный из маски; <see langword="null"/>, если не выводился.</param>
     /// <returns>Строка состояния.</returns>
-    public static string Describe(BaselineSegmentationResult? result, AcquisitionTier tier = AcquisitionTier.Extended)
+    public static string Describe(
+        BaselineSegmentationResult? result,
+        AcquisitionTier tier = AcquisitionTier.Extended,
+        AutomaticEvansResult? evans = null)
     {
         if (tier != AcquisitionTier.Extended)
         {
@@ -56,8 +61,31 @@ public static class SegmentationReadout
                 + ReviewHint;
         }
 
-        return "Открыто. Маска получена baseline-методом и не является проверенной сегментацией.";
+        return "Открыто. Маска получена baseline-методом и не является проверенной сегментацией."
+            + DescribeEvans(evans);
     }
+
+    private static string DescribeEvans(AutomaticEvansResult? evans) => evans switch
+    {
+        null => string.Empty,
+
+        // Число без места измерения проверить нельзя: рядом с ним сказано,
+        // где увидеть концы отрезков.
+        { Biomarker: { } index } =>
+            " Индекс Эванса " + index.Value.ToString("0.00", Russian)
+            + " (сомнительно): отрезки — в «Разборе метода» на аксиальном срезе,"
+            + " синим ширина передних рогов, малиновым внутренний диаметр черепа.",
+
+        { Refusal: AutomaticEvansRefusal.FrontalHornsNotFound } =>
+            " Индекс Эванса не посчитан: в маске нет передних рогов обоих желудочков.",
+        { Refusal: AutomaticEvansRefusal.InnerSkullNotFound } =>
+            " Индекс Эванса не посчитан: на срезе рогов не найдена граница черепа.",
+        { Refusal: AutomaticEvansRefusal.AxesNotAligned } =>
+            " Индекс Эванса не посчитан: серия слишком наклонена к осям головы.",
+        { Refusal: AutomaticEvansRefusal.WeightingNotSupported } =>
+            " Индекс Эванса по этой взвешенности автоматически не считается.",
+        _ => string.Empty,
+    };
 
     private static string ReasonOf(QualityIssue refusal) =>
         refusal.Parameters.GetValueOrDefault("reason") switch

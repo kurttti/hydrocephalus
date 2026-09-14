@@ -131,6 +131,53 @@ public sealed class LinearBiomarkerTests
     }
 
     [Fact]
+    public void Evans_index_is_measured_on_the_axial_planes_of_a_sagittal_volume()
+    {
+        // Сагиттальная 3D T1: столбцы изображения идут сверху вниз, и аксиальные
+        // плоскости лежат поперёк строк. Ширина измеряется вдоль оси срезов.
+        var volume = Sagittal();
+
+        var biomarker = LinearBiomarkers.EvansIndex(
+            volume,
+            VolumeAxis.AcrossRows,
+            new VoxelPosition(60, 50, 0),
+            new VoxelPosition(60, 50, 40),
+            new VoxelPosition(60, 50, -50),
+            new VoxelPosition(60, 50, 90));
+
+        Assert.Equal(40.0 / 140.0, biomarker.Value, precision: 9);
+    }
+
+    [Fact]
+    public void Evans_index_refuses_planes_that_are_not_axial()
+    {
+        // Поперёк срезов сагиттальной серии лежат сагиттальные плоскости.
+        var volume = Sagittal();
+
+        Assert.Throws<DomainRuleViolationException>(() => LinearBiomarkers.EvansIndex(
+            volume,
+            VolumeAxis.AcrossSlices,
+            new VoxelPosition(60, 50, 10),
+            new VoxelPosition(60, 90, 10),
+            new VoxelPosition(60, 10, 10),
+            new VoxelPosition(60, 150, 10)));
+    }
+
+    [Fact]
+    public void Evans_index_across_another_axis_still_needs_a_single_plane()
+    {
+        var volume = Sagittal();
+
+        Assert.Throws<DomainRuleViolationException>(() => LinearBiomarkers.EvansIndex(
+            volume,
+            VolumeAxis.AcrossRows,
+            new VoxelPosition(60, 50, 0),
+            new VoxelPosition(60, 51, 40),
+            new VoxelPosition(60, 50, -50),
+            new VoxelPosition(60, 50, 90)));
+    }
+
+    [Fact]
     public void Points_from_different_slices_are_refused()
     {
         // Иначе в длину войдёт расстояние между срезами, и измерение перестанет
@@ -262,6 +309,15 @@ public sealed class LinearBiomarkerTests
     private static TestVolume Coronal() =>
         Build(
             new SpatialVector(1, 0, 0),
+            new SpatialVector(0, 0, -1),
+            1.0,
+            1.0,
+            MrAcquisitionType.ThreeDimensional,
+            1.0);
+
+    private static TestVolume Sagittal() =>
+        Build(
+            new SpatialVector(0, 1, 0),
             new SpatialVector(0, 0, -1),
             1.0,
             1.0,

@@ -416,7 +416,7 @@ public partial class MainWindow : Window
         this.ConfigureSeriesSelector(opened.Analysed);
         this.ShowResult(ResultReadout.Describe(opened.Report, opened.Analysed));
 
-        this.StatusText.Text = SegmentationReadout.Describe(opened.Segmentation, opened.Analysed.Analysed.Tier);
+        this.StatusText.Text = SegmentationReadout.Describe(opened.Segmentation, opened.Analysed.Analysed.Tier, opened.Evans);
 
         foreach (var surface in this.surfaces)
         {

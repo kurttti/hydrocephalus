@@ -7,6 +7,7 @@ using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Inference;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.QualityControl;
 using Hydrocephalus.Inference.Segmentation;
 using Hydrocephalus.Infrastructure.Configuration;
@@ -364,10 +365,27 @@ public sealed class CompositionRoot : IDisposable
         // не показать изображение.
         BaselineSegmentationResult? segmentation = null;
 
+        AutomaticEvansResult? evans = null;
+        var review = (VoxelMask?)null;
+
         if (series.Weighting != SeriesWeighting.Unknown)
         {
             segmentation = BaselineVentricleSegmentation
                 .Segment(volume, series.Weighting, cancellationToken: cancellationToken);
+            review = segmentation.Value.Review;
+
+            // Индекс считается и конвейером для отчёта; здесь он нужен ради
+            // отрезков, которые врач должен видеть на снимке. Метод
+            // детерминирован, и оба вызова дают одно и то же.
+            if (series.Tier == AcquisitionTier.Extended)
+            {
+                evans = AutomaticEvansIndex.Measure(volume, segmentation.Value, series.Weighting, cancellationToken);
+
+                if (evans.Segments is { } segments && review is not null)
+                {
+                    review = EvansOverlay.Draw(review, segments);
+                }
+            }
         }
 
         // Анализ идёт по той же рабочей копии, что и просмотр. Отдельный вызов
@@ -390,10 +408,19 @@ public sealed class CompositionRoot : IDisposable
                     cancellationToken)
                 .ConfigureAwait(false);
 
+        var view = new StudyView(volume, segmentation?.Mask, review);
+
+        if (evans?.Segments is { } measured)
+        {
+            // Аксиальный вид открывается на срезе, где измерен индекс.
+            view.Planes.First(plane => plane.Axis == measured.AxialAcross).Index = measured.PlaneIndex;
+        }
+
         return new OpenedStudy
         {
-            View = new StudyView(volume, segmentation?.Mask, segmentation?.Review),
+            View = view,
             Segmentation = segmentation,
+            Evans = evans,
             Studies = this.scanned?.Studies ?? [workingCopy.Study],
             Report = this.report,
             Analysed = new Results.AnalysedStudy
