@@ -247,11 +247,46 @@ public static partial class BaselineVentricleSegmentation
         // глубина.
         var csfThreshold = darkCsf ? headThreshold : tissueThreshold;
 
-        if (darkCsf && SelectByCores(volume, headThreshold, options, cancellationToken) is { } cores)
+        var (byDepth, selectedByDepth) = SelectByDepth(volume, head, open, headCount, tissueThreshold, csfThreshold, darkCsf, options, cancellationToken);
+
+        // Отбор по ядрам включается только там, где прежний отбор отказал.
+        // Порядок важен: на IXI ядра иногда находятся и у обычных желудочков,
+        // но растут они от ядра не дальше нескольких миллиметров, и маска
+        // выходила меньше прежней — на IXI175 вдвое (80.8 против 38.6 мл).
+        // Прежний отбор на таких сериях проверен глазами, а ядра нужны там,
+        // где он не даёт ничего: на клинических объёмных T1 он отказывал всегда.
+        // Пустая маска без отказа — тоже «ничего не найдено»: отказ об этом
+        // не объявляется только потому, что отбрасывать было нечего.
+        if (!darkCsf || (byDepth.Quality != MeasurementQuality.Unreliable && selectedByDepth != 0))
         {
-            return Finish(grid, cores.Labels, cores.Candidate, cores.HeadVoxels, cores.Rejected, options);
+            return byDepth;
         }
 
+        if (SelectByCores(volume, headThreshold, options, cancellationToken) is not { } cores)
+        {
+            return byDepth;
+        }
+
+        var byCores = Finish(grid, cores.Labels, cores.Candidate, cores.HeadVoxels, cores.Rejected, options);
+
+        // Отказ прежнего отбора на отказ по ядрам меняется только тогда, когда
+        // прежний отбор не нашёл вообще ничего: причина отказа — часть разбора,
+        // и разбор по ядрам в этом случае единственный, где что-то видно.
+        return byCores.Quality != MeasurementQuality.Unreliable || selectedByDepth == 0 ? byCores : byDepth;
+    }
+
+    private static (BaselineSegmentationResult Result, long Selected) SelectByDepth(
+        IVoxelVolume volume,
+        bool[] head,
+        bool[] open,
+        long headCount,
+        double tissueThreshold,
+        double csfThreshold,
+        bool darkCsf,
+        BaselineSegmentationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var grid = volume.Grid;
         var candidate = Candidate(volume, head, csfThreshold, darkCsf, cancellationToken);
         var candidateCount = candidate.Count(value => value != 0);
 
@@ -259,7 +294,7 @@ public static partial class BaselineVentricleSegmentation
         {
             // Порог встал не там, где предполагалось. Отдать половину мозга
             // как объём желудочков хуже, чем не отдать ничего.
-            return Refused(grid, ThresholdFailed(candidateCount, headCount), selected: null, candidate);
+            return (Refused(grid, ThresholdFailed(candidateCount, headCount), selected: null, candidate), 0);
         }
 
         var depth = DistanceToOutside(grid, head, cancellationToken);
@@ -271,7 +306,7 @@ public static partial class BaselineVentricleSegmentation
             labels = GrowIntoPartialVolume(volume, head, open, labels, tissueThreshold, csfThreshold, options, cancellationToken);
         }
 
-        return Finish(grid, labels, candidate, headCount, rejected, options);
+        return (Finish(grid, labels, candidate, headCount, rejected, options), labels.LongCount(value => value != 0));
     }
 
     private static BaselineSegmentationResult Finish(
