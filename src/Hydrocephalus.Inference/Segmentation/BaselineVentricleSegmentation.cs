@@ -120,6 +120,20 @@ public sealed record BaselineSegmentationOptions
     /// <summary>Насколько маска дорастает до полувысоты у стенки, мм.</summary>
     public double CoreRimMillimetres { get; init; } = 2;
 
+    /// <summary>
+    /// Ширина сглаживания на полувысоте для последней ступени отбора по ядрам, мм.
+    /// Шум шумных и низкоконтрастных серий дробит ликвор желудочков; сглаживание
+    /// до этой ширины собирает его обратно и не стирает стенку.
+    /// </summary>
+    public double CoreSmoothingMillimetres { get; init; } = 1.5;
+
+    /// <summary>
+    /// Наименьший запас от маски сглаженной ступени до края кадра, мм. У верных
+    /// клинических масок он 38–57 мм; маска прицельного блока, обрезанная
+    /// кадром, после сглаживания лежала в 2 мм от края, не касаясь его.
+    /// </summary>
+    public double SmoothedCoreFrameMarginMillimetres { get; init; } = 10;
+
     /// <summary>Наименьший размер компоненты в отсчётах.</summary>
     public int MinComponentVoxels { get; init; } = 50;
 
@@ -182,7 +196,7 @@ public static partial class BaselineVentricleSegmentation
     /// baseline-сегментацией, не должен сравниваться с результатом модели
     /// как одинаковый.
     /// </summary>
-    public const string LabelMapVersion = "baseline-1.2.0";
+    public const string LabelMapVersion = "baseline-1.3.0";
 
     /// <summary>
     /// Сегментирует желудочковую систему.
@@ -262,17 +276,29 @@ public static partial class BaselineVentricleSegmentation
             return byDepth;
         }
 
-        if (SelectByCores(volume, headThreshold, options, cancellationToken) is not { } cores)
+        var refusal = byDepth;
+
+        if (SelectByCores(volume, headThreshold, options, cancellationToken) is { } cores)
         {
-            return byDepth;
+            var byCores = Finish(grid, cores.Labels, cores.Candidate, cores.HeadVoxels, cores.Rejected, options);
+
+            if (byCores.Quality != MeasurementQuality.Unreliable)
+            {
+                return byCores;
+            }
+
+            // Отказ прежнего отбора на отказ по ядрам меняется только тогда, когда
+            // прежний отбор не нашёл вообще ничего: причина отказа — часть разбора,
+            // и разбор по ядрам в этом случае единственный, где что-то видно.
+            if (selectedByDepth == 0)
+            {
+                refusal = byCores;
+            }
         }
 
-        var byCores = Finish(grid, cores.Labels, cores.Candidate, cores.HeadVoxels, cores.Rejected, options);
-
-        // Отказ прежнего отбора на отказ по ядрам меняется только тогда, когда
-        // прежний отбор не нашёл вообще ничего: причина отказа — часть разбора,
-        // и разбор по ядрам в этом случае единственный, где что-то видно.
-        return byCores.Quality != MeasurementQuality.Unreliable || selectedByDepth == 0 ? byCores : byDepth;
+        return SelectBySmoothedCores(volume, options, cancellationToken) is { Quality: not MeasurementQuality.Unreliable } bySmoothedCores
+            ? bySmoothedCores
+            : refusal;
     }
 
     private static (BaselineSegmentationResult Result, long Selected) SelectByDepth(

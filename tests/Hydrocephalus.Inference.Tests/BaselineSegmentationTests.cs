@@ -200,6 +200,57 @@ public sealed class BaselineSegmentationTests
     }
 
     [Fact]
+    public void A_speckled_ventricle_is_found_after_smoothing()
+    {
+        // Так выглядели шумные и низкоконтрастные клинические T1: ликвор
+        // желудочков близко к порогу, и шум разбрасывает по нему светлые
+        // отсчёты. Толстого ядра из такого ликвора не собрать, пока шум
+        // не сглажен, а прежний отбор находит лишь обрывок в середине
+        // желудочка — на фантоме около 7 мл, поэтому нижняя граница объёма
+        // здесь выше обычной. На сетке 3 мм сглаживание нужно шире клинического.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, peripheralCsf: true, thinBridge: true, speckledVentricle: true);
+        var options = new BaselineSegmentationOptions
+        {
+            CoreThicknessMillimetres = 6,
+            CoreSmoothingMillimetres = 6,
+            MinVentricleMillilitres = 10,
+        };
+
+        var withoutSmoothing = BaselineVentricleSegmentation.Segment(
+            volume,
+            SeriesWeighting.T1,
+            options with { CoreSmoothingMillimetres = 0 });
+
+        Assert.Equal(MeasurementQuality.Unreliable, withoutSmoothing.Quality);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1, options);
+
+        Assert.Equal(MeasurementQuality.Questionable, result.Quality);
+        AssertRecovers(result.Mask, ventricleRadius: 6);
+    }
+
+    [Fact]
+    public void A_smoothed_mask_close_to_the_frame_is_refused()
+    {
+        // Сглаживание размывает край кадра: маска обрезанного блока ложится
+        // в отсчёте-двух от края, не касаясь его, и проверка касания её
+        // пропускает. Запас от края ловит такую маску; здесь он задан больше,
+        // чем есть у маски фантома (около 54 мм).
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, peripheralCsf: true, thinBridge: true, speckledVentricle: true);
+        var options = new BaselineSegmentationOptions
+        {
+            CoreThicknessMillimetres = 6,
+            CoreSmoothingMillimetres = 6,
+            MinVentricleMillilitres = 10,
+            SmoothedCoreFrameMarginMillimetres = 60,
+        };
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1, options);
+
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+    }
+
+    [Fact]
     public void A_cavity_that_reaches_the_cortex_is_lost_rather_than_overstated()
     {
         // Граница метода, а не дефект. Когда полость дотягивается до поверхности,
@@ -427,7 +478,8 @@ public sealed class BaselineSegmentationTests
         bool thinBridge = false,
         bool neck = false,
         bool cutBySlab = false,
-        bool partialVolume = false)
+        bool partialVolume = false,
+        bool speckledVentricle = false)
     {
         const int Centre = Size / 2;
         const int HeadRadius = 20;
@@ -449,7 +501,8 @@ public sealed class BaselineSegmentationTests
 
             if (distance <= ventricleRadius)
             {
-                return csf;
+                // Шум шумной серии: каждый третий отсчёт ликвора светлее порога.
+                return speckledVentricle && (column + row + slice + 1) % 3 == 0 ? GreyMatter : csf;
             }
 
             // Частичный объём: интенсивность плавно переходит от ликвора
