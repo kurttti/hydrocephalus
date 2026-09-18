@@ -49,7 +49,11 @@ public sealed class ArchitectureBoundaryTests
     private static string[] ProjectReferencesOf(string projectDirectory)
     {
         var directory = Path.Combine(RepositoryRoot(), projectDirectory);
-        var projectFile = Directory.GetFiles(directory, "*.csproj").Single();
+        // Сборка WPF на время разметки кладёт рядом временный проект
+        // «*_wpftmp.csproj»; если тесты идут параллельно с ней, файлов
+        // оказывается два.
+        var projectFile = Directory.GetFiles(directory, "*.csproj")
+            .Single(path => !Path.GetFileNameWithoutExtension(path).EndsWith("_wpftmp", StringComparison.Ordinal));
 
         return XDocument.Load(projectFile)
             .Descendants("ProjectReference")
