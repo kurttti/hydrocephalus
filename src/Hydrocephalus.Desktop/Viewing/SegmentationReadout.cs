@@ -96,6 +96,8 @@ public static class SegmentationReadout
                 $"найденная область — {Millilitres(refusal.Parameters.GetValueOrDefault("millilitres"))} мл, это фрагмент, а не желудочковая система.",
             "ventricularSystemTruncatedByFrame" =>
                 "найденная область упирается в край кадра — желудочки обрезаны или выбрано не то.",
+            "ventricularSystemOneSided" =>
+                $"найденная область лежит по одну сторону средней линии (на другой — {Percent(refusal.Parameters.GetValueOrDefault("smallerSideFraction"))}) — это один желудочек, а не система.",
             _ => "сегментация отказала.",
         };
 

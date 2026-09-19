@@ -197,7 +197,18 @@ public static partial class BaselineVentricleSegmentation
         VolumeDimensions dimensions,
         bool[] head,
         bool[] chosen,
-        BaselineSegmentationOptions options)
+        BaselineSegmentationOptions options) =>
+        SmallerSideFraction(geometry, dimensions, head, chosen) >= options.CoreMinSideFraction;
+
+    /// <summary>
+    /// Доля маски по меньшую сторону средней линии головы; ось «право — лево» —
+    /// ось сетки, ближайшая к X пациента.
+    /// </summary>
+    private static double SmallerSideFraction(
+        SeriesGeometry geometry,
+        VolumeDimensions dimensions,
+        bool[] head,
+        bool[] chosen)
     {
         SpatialVector[] directions =
         [
@@ -248,7 +259,7 @@ public static partial class BaselineVentricleSegmentation
             }
         }
 
-        return Math.Min(first, second) >= (first + second) * options.CoreMinSideFraction;
+        return first + second == 0 ? 0 : (double)Math.Min(first, second) / (first + second);
     }
 
     private static int CoordinateOf(VolumeDimensions dimensions, int offset, int axis)

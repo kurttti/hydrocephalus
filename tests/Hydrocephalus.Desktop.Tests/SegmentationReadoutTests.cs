@@ -27,6 +27,7 @@ public sealed class SegmentationReadoutTests
     [InlineData("thresholdDidNotIsolateCsf", "selectedFraction", "0.61", "61")]
     [InlineData("ventricularSystemImplausiblySmall", "millilitres", "3.2", "3,2 мл")]
     [InlineData("ventricularSystemTruncatedByFrame", null, null, "край кадра")]
+    [InlineData("ventricularSystemOneSided", "smallerSideFraction", "0.08", "один желудочек")]
     public void A_refusal_is_named_by_its_reason_and_points_to_the_review(
         string reason,
         string? parameter,

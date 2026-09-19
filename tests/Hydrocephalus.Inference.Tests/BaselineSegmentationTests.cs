@@ -251,6 +251,22 @@ public sealed class BaselineSegmentationTests
     }
 
     [Fact]
+    public void A_mask_on_one_side_of_the_midline_is_refused_rather_than_measured()
+    {
+        // Желудочки парные: маска целиком по одну сторону средней линии — это
+        // один желудочек, второй отброшен. Так было на IXI161: 9 мл одного
+        // желудочка вместо 30 мл системы. Такой объём занижен, а не мал.
+        // Голова остаётся в центре, смещён только желудочек.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, ventricleShift: 9);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1);
+
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+        Assert.Contains(result.Issues, issue => issue.Parameters.GetValueOrDefault("reason") == "ventricularSystemOneSided");
+        Assert.Equal(0, Count(result.Mask));
+    }
+
+    [Fact]
     public void A_cavity_that_reaches_the_cortex_is_lost_rather_than_overstated()
     {
         // Граница метода, а не дефект. Когда полость дотягивается до поверхности,
@@ -479,7 +495,8 @@ public sealed class BaselineSegmentationTests
         bool neck = false,
         bool cutBySlab = false,
         bool partialVolume = false,
-        bool speckledVentricle = false)
+        bool speckledVentricle = false,
+        int ventricleShift = 0)
     {
         const int Centre = Size / 2;
         const int HeadRadius = 20;
@@ -492,6 +509,8 @@ public sealed class BaselineSegmentationTests
             var ds = cutBySlab ? slice - 3 : slice - Centre;
 
             var distance = Math.Sqrt((dc * dc) + (dr * dr) + (ds * ds));
+            var shifted = column - Centre - ventricleShift;
+            var fromVentricle = Math.Sqrt((shifted * shifted) + (dr * dr) + (ds * ds));
 
             if (distance > HeadRadius)
             {
@@ -499,7 +518,7 @@ public sealed class BaselineSegmentationTests
                 return neck && ds < 0 && ((dc * dc) + (dr * dr)) <= 10 * 10 ? Tissue : Background;
             }
 
-            if (distance <= ventricleRadius)
+            if (fromVentricle <= ventricleRadius)
             {
                 // Шум шумной серии: каждый третий отсчёт ликвора светлее порога.
                 return speckledVentricle && (column + row + slice + 1) % 3 == 0 ? GreyMatter : csf;

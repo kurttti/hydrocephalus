@@ -196,7 +196,7 @@ public static partial class BaselineVentricleSegmentation
     /// baseline-сегментацией, не должен сравниваться с результатом модели
     /// как одинаковый.
     /// </summary>
-    public const string LabelMapVersion = "baseline-1.3.0";
+    public const string LabelMapVersion = "baseline-1.4.0";
 
     /// <summary>
     /// Сегментирует желудочковую систему.
@@ -261,7 +261,28 @@ public static partial class BaselineVentricleSegmentation
         // глубина.
         var csfThreshold = darkCsf ? headThreshold : tissueThreshold;
 
-        var (byDepth, selectedByDepth) = SelectByDepth(volume, head, open, headCount, tissueThreshold, csfThreshold, darkCsf, options, cancellationToken);
+        var byDepthSelection = SelectByDepth(volume, head, open, headCount, tissueThreshold, csfThreshold, darkCsf, options, cancellationToken);
+        var byDepth = byDepthSelection.Result;
+        var selectedByDepth = byDepthSelection.Labels?.LongCount(value => value != 0) ?? 0;
+
+        // Желудочки парные, и маска, почти целиком лежащая по одну сторону
+        // средней линии, — это один желудочек, а не система: второй отбор по
+        // глубине отбросил, если тот дотянулся до поверхности. На IXI так было
+        // у 24 из 414 масок `baseline-1.3.0`, и на сверенных с обученной моделью
+        // объём занижался в 1,7–3,5 раза.
+        if (byDepth.Quality != MeasurementQuality.Unreliable && selectedByDepth != 0)
+        {
+            var smallerSide = SmallerSideFraction(
+                volume.Geometry,
+                grid.Dimensions,
+                head,
+                [.. byDepthSelection.Labels!.Select(value => value != 0)]);
+
+            if (smallerSide < options.CoreMinSideFraction)
+            {
+                byDepth = Refused(grid, OneSided(smallerSide), byDepthSelection.Labels, byDepthSelection.Candidate);
+            }
+        }
 
         // Отбор по ядрам включается только там, где прежний отбор отказал.
         // Порядок важен: на IXI ядра иногда находятся и у обычных желудочков,
@@ -301,7 +322,7 @@ public static partial class BaselineVentricleSegmentation
             : refusal;
     }
 
-    private static (BaselineSegmentationResult Result, long Selected) SelectByDepth(
+    private static DepthSelection SelectByDepth(
         IVoxelVolume volume,
         bool[] head,
         bool[] open,
@@ -320,7 +341,7 @@ public static partial class BaselineVentricleSegmentation
         {
             // Порог встал не там, где предполагалось. Отдать половину мозга
             // как объём желудочков хуже, чем не отдать ничего.
-            return (Refused(grid, ThresholdFailed(candidateCount, headCount), selected: null, candidate), 0);
+            return new DepthSelection(Refused(grid, ThresholdFailed(candidateCount, headCount), selected: null, candidate), null, candidate);
         }
 
         var depth = DistanceToOutside(grid, head, cancellationToken);
@@ -332,8 +353,10 @@ public static partial class BaselineVentricleSegmentation
             labels = GrowIntoPartialVolume(volume, head, open, labels, tissueThreshold, csfThreshold, options, cancellationToken);
         }
 
-        return (Finish(grid, labels, candidate, headCount, rejected, options), labels.LongCount(value => value != 0));
+        return new DepthSelection(Finish(grid, labels, candidate, headCount, rejected, options), labels, candidate);
     }
+
+    private sealed record DepthSelection(BaselineSegmentationResult Result, byte[]? Labels, byte[] Candidate);
 
     private static BaselineSegmentationResult Finish(
         VolumeGrid grid,
@@ -467,6 +490,17 @@ public static partial class BaselineVentricleSegmentation
 
         return false;
     }
+
+    private static QualityIssue OneSided(double smallerSide) => new()
+    {
+        Code = QualityIssueCode.InconsistentGeometry,
+        Severity = QualityIssueSeverity.Blocking,
+        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = "ventricularSystemOneSided",
+            ["smallerSideFraction"] = smallerSide.ToString("0.###", CultureInfo.InvariantCulture),
+        },
+    };
 
     private static QualityIssue TooSmall(double millilitres) => new()
     {
