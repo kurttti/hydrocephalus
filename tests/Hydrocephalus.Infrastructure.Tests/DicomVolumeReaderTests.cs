@@ -204,6 +204,60 @@ public sealed class DicomVolumeReaderTests : IDisposable
         Assert.Throws<ArgumentOutOfRangeException>(() => volume[0, 0, Slices]);
     }
 
+    [Fact]
+    public async Task A_jpeg_lossless_series_is_read_like_an_uncompressed_one()
+    {
+        // Так записана одна из папок клинической выборки: процесс 14, первый
+        // предиктор. Объём обязан совпасть с тем же несжатым до отсчёта.
+        for (var slice = 0; slice < Slices; slice++)
+        {
+            var values = SyntheticVolume.AsymmetricSlice(Columns, Rows, slice);
+
+            SyntheticVolume.WriteSlice(
+                Path.Combine(this.root.FullName, $"{slice:D2}.dcm"),
+                Columns,
+                Rows,
+                positionMillimetres: slice,
+                values,
+                transferSyntax: FellowOakDicom.DicomTransferSyntax.JPEGProcess14SV1,
+                compressedFrame: JpegLosslessEncoder.Encode(
+                    [.. values.Select(value => (int)(ushort)value)], Columns, Rows, precision: 16));
+        }
+
+        var volume = await DicomVolumeReader.LoadAsync(this.root.FullName, CancellationToken.None);
+
+        for (var slice = 0; slice < Slices; slice++)
+        {
+            for (var row = 0; row < Rows; row++)
+            {
+                for (var column = 0; column < Columns; column++)
+                {
+                    Assert.Equal((slice * 10000) + (row * 100) + column, volume[column, row, slice]);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Other_compressed_syntaxes_are_still_refused_by_name()
+    {
+        var values = SyntheticVolume.AsymmetricSlice(Columns, Rows, 0);
+
+        SyntheticVolume.WriteSlice(
+            Path.Combine(this.root.FullName, "00.dcm"),
+            Columns,
+            Rows,
+            positionMillimetres: 0,
+            values,
+            transferSyntax: FellowOakDicom.DicomTransferSyntax.JPEGLSLossless,
+            compressedFrame: [0xFF, 0xD8, 0xFF, 0xD9]);
+
+        var error = await Assert.ThrowsAsync<NotSupportedException>(
+            () => DicomVolumeReader.LoadAsync(this.root.FullName, CancellationToken.None));
+
+        Assert.Contains(FellowOakDicom.DicomTransferSyntax.JPEGLSLossless.UID.UID, error.Message, StringComparison.Ordinal);
+    }
+
     private void WriteVolume()
     {
         for (var slice = 0; slice < Slices; slice++)

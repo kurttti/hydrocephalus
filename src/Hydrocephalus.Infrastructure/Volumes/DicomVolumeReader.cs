@@ -131,10 +131,12 @@ public static class DicomVolumeReader
         var dataset = file.Dataset;
         var syntax = dataset.InternalTransferSyntax;
 
-        if (syntax.IsEncapsulated)
+        var isJpegLossless = syntax.IsEncapsulated && JpegLosslessDecoder.Handles(syntax.UID.UID);
+
+        if (syntax.IsEncapsulated && !isJpegLossless)
         {
-            // Сжатые синтаксисы требуют кодеков, которых в офлайн-поставке нет.
-            // Отказ с названием синтаксиса полезнее молчаливой порчи значений.
+            // Остальные сжатые синтаксисы требуют кодеков, которых в офлайн-поставке
+            // нет. Отказ с названием синтаксиса полезнее молчаливой порчи значений.
             throw new NotSupportedException(
                 $"Compressed transfer syntax {syntax.UID.UID} is not supported by the volume reader.");
         }
@@ -157,21 +159,29 @@ public static class DicomVolumeReader
         }
 
         var pixelData = DicomPixelData.Create(dataset);
+        var columns = dataset.GetSingleValueOrDefault<ushort>(DicomTag.Columns, 0);
+        var rows = dataset.GetSingleValueOrDefault<ushort>(DicomTag.Rows, 0);
+
+        // Кадр JPEG Lossless собирается из фрагментов инкапсулированных данных
+        // и распаковывается в те же отсчёты little-endian, что у несжатой серии.
+        var frame = isJpegLossless
+            ? JpegLosslessDecoder.Decode(pixelData.GetFrame(0).Data, rows, columns, bitsAllocated)
+            : pixelData.GetFrame(0).Data;
 
         return new LoadedSlice
         {
-            Columns = dataset.GetSingleValueOrDefault<ushort>(DicomTag.Columns, 0),
-            Rows = dataset.GetSingleValueOrDefault<ushort>(DicomTag.Rows, 0),
+            Columns = columns,
+            Rows = rows,
             BitsAllocated = bitsAllocated,
             IsSigned = dataset.GetSingleValueOrDefault<ushort>(DicomTag.PixelRepresentation, 0) == 1,
-            IsBigEndian = syntax.Endian == FellowOakDicom.IO.Endian.Big,
+            IsBigEndian = !isJpegLossless && syntax.Endian == FellowOakDicom.IO.Endian.Big,
             RescaleSlope = ReadDouble(dataset, DicomTag.RescaleSlope, 1.0),
             RescaleIntercept = ReadDouble(dataset, DicomTag.RescaleIntercept, 0.0),
             Position = DicomGeometryReader.ReadPosition(dataset),
             RowDirection = ReadDirection(dataset, 0),
             ColumnDirection = ReadDirection(dataset, 3),
             Dataset = dataset,
-            Frame = pixelData.GetFrame(0).Data,
+            Frame = frame,
         };
     }
 

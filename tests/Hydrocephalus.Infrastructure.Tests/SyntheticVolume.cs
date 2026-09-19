@@ -26,6 +26,8 @@ internal static class SyntheticVolume
     /// <param name="bitsAllocated">BitsAllocated.</param>
     /// <param name="seriesUid">SeriesInstanceUID.</param>
     /// <param name="customize">Дополнительная правка набора тегов до записи.</param>
+    /// <param name="transferSyntax">Синтаксис передачи; по умолчанию несжатый.</param>
+    /// <param name="compressedFrame">Уже сжатый кадр для инкапсулированного синтаксиса.</param>
     internal static void WriteSlice(
         string path,
         int columns,
@@ -37,9 +39,11 @@ internal static class SyntheticVolume
         bool signed = false,
         ushort bitsAllocated = 16,
         string seriesUid = "1.2.3.11",
-        Action<DicomDataset>? customize = null)
+        Action<DicomDataset>? customize = null,
+        DicomTransferSyntax? transferSyntax = null,
+        byte[]? compressedFrame = null)
     {
-        var dataset = new DicomDataset
+        var dataset = new DicomDataset(transferSyntax ?? DicomTransferSyntax.ExplicitVRLittleEndian)
         {
             { DicomTag.SOPClassUID, MrSopClassUid },
             { DicomTag.SOPInstanceUID, DicomUIDGenerator.GenerateDerivedFromUUID().UID },
@@ -66,7 +70,8 @@ internal static class SyntheticVolume
         customize?.Invoke(dataset);
 
         var pixelData = DicomPixelData.Create(dataset, newPixelData: true);
-        pixelData.AddFrame(new MemoryByteBuffer(Encode(values, bitsAllocated)));
+        pixelData.AddFrame(new MemoryByteBuffer(
+            compressedFrame ?? Encode(values, bitsAllocated)));
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         new DicomFile(dataset).Save(path);
