@@ -231,6 +231,23 @@ Console.WriteLine($"пациентов с неконтрастной 3D-сери
 Console.WriteLine($"пациентов с любой 3D-серией: {withAnyExtended}");
 Console.WriteLine($"постконтрастных серий: {allSeries.Count(series => series.IsContrastEnhanced)}");
 
+// Разбивка по взвешенности: объёмные признаки считаются по T1, и число
+// пациентов именно с объёмной T1 — потолок для всего объёмного конвейера.
+// Без разбивки «38 пациентов с 3D-серией» читается как размер выборки,
+// хотя часть этих серий T2 или FLAIR и объёмному пути сейчас недоступна.
+int EligibleWith(SeriesWeighting weighting) => allStudies
+    .Where(study => study.Series.Any(series =>
+        !series.IsContrastEnhanced && series.Tier == AcquisitionTier.Extended
+        && series.Weighting == weighting))
+    .Select(study => study.PseudonymousSubjectId)
+    .Distinct(StringComparer.Ordinal)
+    .Count();
+
+foreach (var weighting in new[] { SeriesWeighting.T1, SeriesWeighting.T2, SeriesWeighting.Flair, SeriesWeighting.Unknown })
+{
+    Console.WriteLine($"  из них с неконтрастной 3D-{weighting}: {EligibleWith(weighting)}");
+}
+
 Console.WriteLine();
 Console.WriteLine("=== Отклонённые файлы ===");
 

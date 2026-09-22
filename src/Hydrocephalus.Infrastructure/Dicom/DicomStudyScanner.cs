@@ -197,6 +197,27 @@ public sealed class DicomStudyScanner
             this.files.Add(path);
         }
 
+        /// <summary>
+        /// Параметры импульсной последовательности первого файла серии.
+        /// Многозначные теги читаются через <c>TryGetValues</c>: у части серий
+        /// выборки их нет вовсе, а <c>GetValues</c> на отсутствующем теге бросает.
+        /// </summary>
+        private SeriesClassification.AcquisitionParameters AcquisitionParameters()
+        {
+            string Joined(DicomTag tag) =>
+                this.first.TryGetValues<string>(tag, out var values) && values.Length > 0
+                    ? string.Join(' ', values)
+                    : string.Empty;
+
+            return new SeriesClassification.AcquisitionParameters(
+                Joined(DicomTag.ScanningSequence),
+                Joined(DicomTag.SequenceVariant),
+                this.first.GetSingleValueOrDefault(DicomTag.MRAcquisitionType, string.Empty),
+                this.first.GetSingleValueOrDefault(DicomTag.RepetitionTime, 0.0),
+                this.first.GetSingleValueOrDefault(DicomTag.EchoTime, 0.0),
+                this.first.GetSingleValueOrDefault(DicomTag.InversionTime, 0.0));
+        }
+
         internal ImagingSeries Build(List<SeriesFinding> findings)
         {
             var seriesId = Pseudonyms.Derive(
@@ -217,7 +238,7 @@ public sealed class DicomStudyScanner
             {
                 PseudonymousSeriesId = seriesId,
                 Geometry = geometry,
-                Weighting = SeriesClassification.DetectWeighting(description),
+                Weighting = SeriesClassification.DetectWeighting(description, this.AcquisitionParameters()),
                 IsContrastEnhanced = SeriesClassification.LooksContrastEnhanced(description),
             };
         }
