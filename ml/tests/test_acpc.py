@@ -14,6 +14,8 @@ import pytest
 from hydrocephalus_ml.acpc import (
     ICBM152_2009C_AC,
     ICBM152_2009C_PC,
+    MEASURED_CORRECTION_DEGREES,
+    MEASURED_RESIDUAL_DEGREES,
     Point,
     commissural_pitch,
     level_commissures,
@@ -79,6 +81,23 @@ def test_coincident_commissures_are_refused() -> None:
 
     with pytest.raises(ValueError, match="совпадать"):
         commissural_pitch(point, point)
+
+
+def test_the_measured_correction_differs_from_the_template_one() -> None:
+    # Ради этой разницы и мерили на субъектах: наклон шаблона (5,49°) не равен
+    # наклону снимка, выровненного к шаблону (4,58°). Регистрация подгоняет
+    # форму мозга, а не спайки. Поправка на величину шаблона оставила бы
+    # систематический хвост около градуса.
+    from_template = level_commissures(ICBM152_2009C_AC, ICBM152_2009C_PC)
+
+    assert from_template - MEASURED_CORRECTION_DEGREES == pytest.approx(0.91, abs=0.02)
+
+
+def test_the_accuracy_is_bounded_by_the_landmark_itself() -> None:
+    # Остаток 1,2° не случайно близок к разбросу между экспертами при
+    # постановке спаек (0,5–1 мм на линии 28 мм, то есть около 2°). Требовать
+    # от метода большего, чем даёт эталон, бессмысленно.
+    assert MEASURED_RESIDUAL_DEGREES < 2.0
 
 
 def test_rotation_leaves_the_midline_coordinate_alone() -> None:
