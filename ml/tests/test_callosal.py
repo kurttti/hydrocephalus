@@ -8,13 +8,16 @@
 from __future__ import annotations
 
 import math
+import pathlib
 
 import pytest
 
 from hydrocephalus_ml.callosal import (
     MAXIMUM_VERTEX_OFFSET_MILLIMETRES,
+    PLAUSIBLE_RANGE_DEGREES,
     Point2D,
     crosses_midline,
+    is_plausible,
     measure_callosal_angle,
     roof_profile,
     slice_spread,
@@ -218,3 +221,34 @@ def test_components_are_traced_through_rows() -> None:
     columns = [-9.0, 0.0, 9.0]
 
     assert crosses_midline(mask, columns)
+
+
+@pytest.mark.parametrize(
+    ("degrees", "plausible"),
+    [
+        (66.0, True),    # иНТГ, среднее по литературе
+        (112.0, True),   # контроли, среднее по литературе
+        (140.1, True),   # самый широкий измеренный у нас
+        (163.7, False),  # клиническая серия с плоской крышей
+        (170.2, False),  # она же в другом прогоне
+        (29.9, False),
+        (150.0, True),   # граница включительно
+    ],
+)
+def test_the_plausible_range_matches_the_published_spread(
+    degrees: float, plausible: bool
+) -> None:
+    assert is_plausible(degrees) is plausible
+
+
+def test_the_range_matches_the_one_declared_in_the_measuring_code() -> None:
+    # Числа продублированы: измеритель приложения написан на C#, а
+    # исследовательский путь — здесь. Расхождение должно ломать тест, а не
+    # обнаруживаться сличением отчётов.
+    source = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "src" / "Hydrocephalus.Inference" / "Measurements" / "LinearBiomarkers.cs"
+    ).read_text(encoding="utf-8")
+
+    assert "CallosalAnglePlausibleRange = new(30.0, 150.0)" in source
+    assert PLAUSIBLE_RANGE_DEGREES == (30.0, 150.0)

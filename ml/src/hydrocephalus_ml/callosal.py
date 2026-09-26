@@ -28,9 +28,11 @@ from typing import NamedTuple
 __all__ = [
     "DEFAULT_ROOF_SPAN_MILLIMETRES",
     "MAXIMUM_VERTEX_OFFSET_MILLIMETRES",
+    "PLAUSIBLE_RANGE_DEGREES",
     "CallosalMeasurement",
     "Point2D",
     "crosses_midline",
+    "is_plausible",
     "measure_callosal_angle",
     "roof_profile",
     "slice_spread",
@@ -261,3 +263,24 @@ def crosses_midline(
                 return True
 
     return False
+
+
+# Правдоподобный диапазон угла, в градусах. Повторяет
+# `LinearBiomarkers.CallosalAnglePlausibleRange`: измеритель в приложении
+# написан на C#, исследовательский путь — здесь, и границы должны совпадать.
+# Тест ниже закрепляет оба числа, чтобы расхождение было видно сразу.
+#
+# Верхняя граница взята по опубликованным данным, а не по геометрии: у
+# контролей 112 ± 11°, по упрощённой методике 138,5 ± 5,2°, при иНТГ 66 ± 14°.
+# Развёрнутый угол геометрически возможен, анатомически нет.
+PLAUSIBLE_RANGE_DEGREES = (30.0, 150.0)
+
+
+def is_plausible(degrees: float) -> bool:
+    """Попадает ли угол в правдоподобный диапазон.
+
+    Это проверка измерения, а не признак болезни: диагностический порог 90°
+    принадлежит модели и протоколу валидации, а не измерителю.
+    """
+    low, high = PLAUSIBLE_RANGE_DEGREES
+    return low <= degrees <= high
