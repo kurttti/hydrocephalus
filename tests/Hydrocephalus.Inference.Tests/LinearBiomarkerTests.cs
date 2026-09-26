@@ -239,6 +239,41 @@ public sealed class LinearBiomarkerTests
     }
 
     [Fact]
+    public void A_nearly_straight_callosal_angle_is_marked_implausible()
+    {
+        // Автоматическое измерение дало на клинической серии 163,7° и 170,2°:
+        // крыши желудочков оказались плоскими. Геометрически такой угол
+        // возможен, анатомически нет — у контролей 112 ± 11°, по упрощённой
+        // методике 138,5 ± 5,2°, при иНТГ 66 ± 14°.
+        var volume = Coronal();
+
+        var biomarker = LinearBiomarkers.CallosalAngle(
+            volume,
+            new VoxelPosition(80, 40, 20),
+            new VoxelPosition(60, 41, 20),
+            new VoxelPosition(100, 41, 20));
+
+        Assert.True(biomarker.Value > 150.0);
+        Assert.True(biomarker.IsOutOfRange);
+    }
+
+    [Fact]
+    public void A_callosal_angle_of_a_healthy_brain_is_plausible()
+    {
+        // Измеренное на 12 субъектах AFIDs: 109,5–140,1°. Граница не должна
+        // задевать норму.
+        var volume = Coronal();
+
+        var biomarker = LinearBiomarkers.CallosalAngle(
+            volume,
+            new VoxelPosition(80, 60, 20),
+            new VoxelPosition(60, 40, 20),
+            new VoxelPosition(100, 40, 20));
+
+        Assert.False(biomarker.IsOutOfRange);
+    }
+
+    [Fact]
     public void Callosal_angle_refuses_an_axial_plane()
     {
         var volume = Axial(columnSpacing: 1.0, rowSpacing: 1.0);
