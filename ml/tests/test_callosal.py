@@ -16,6 +16,7 @@ from hydrocephalus_ml.callosal import (
     Point2D,
     measure_callosal_angle,
     roof_profile,
+    slice_spread,
 )
 
 
@@ -158,3 +159,27 @@ def test_a_vertex_just_off_the_midline_is_accepted() -> None:
 
     assert measurement.vertex is not None
     assert abs(measurement.vertex.x) < MAXIMUM_VERTEX_OFFSET_MILLIMETRES
+
+
+@pytest.mark.parametrize(
+    ("angles", "expected"),
+    [
+        # Измерено на публичных снимках AFIDs, шаг в миллиметр от плоскости
+        # задней спайки. Третий случай — тот, ради которого размах и выводится.
+        ([140.9, 142.5, 140.1, 140.7, 137.6], 4.9),
+        ([129.0, 126.6, 123.8, 123.6, 122.1], 6.9),
+        ([90.9, 88.0, 86.7, 98.2, 102.1], 15.4),
+    ],
+)
+def test_the_measured_spreads_are_reproduced(angles: list[float], expected: float) -> None:
+    assert slice_spread(angles) == pytest.approx(expected, abs=0.05)
+
+
+def test_planes_without_a_measurement_are_skipped() -> None:
+    # Отказ на крайней плоскости говорит о покрытии, а не об устойчивости.
+    assert slice_spread([None, 120.0, 124.0, None]) == pytest.approx(4.0)
+
+
+def test_a_single_plane_gives_no_spread() -> None:
+    with pytest.raises(ValueError, match="двум плоскостям"):
+        slice_spread([120.0, None])
