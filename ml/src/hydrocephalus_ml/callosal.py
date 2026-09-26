@@ -30,6 +30,7 @@ __all__ = [
     "MAXIMUM_VERTEX_OFFSET_MILLIMETRES",
     "CallosalMeasurement",
     "Point2D",
+    "crosses_midline",
     "measure_callosal_angle",
     "roof_profile",
     "slice_spread",
@@ -204,3 +205,59 @@ def slice_spread(angles: Sequence[float | None]) -> float:
         )
 
     return max(measured) - min(measured)
+
+
+def crosses_midline(
+    mask: Sequence[Sequence[bool]],
+    column_positions: Sequence[float],
+    reach_millimetres: float = 5.0,
+) -> bool:
+    """Слиты ли желудочки в одну область, пересекающую среднюю линию.
+
+    На корональном срезе через заднюю спайку левый и правый боковые желудочки
+    разделены прозрачной перегородкой и образуют две отдельные области. Если
+    маска оказывается одним целым, дотягивающимся до обеих сторон, то это не
+    два желудочка, и угол между их крышами не определён: крыша выходит одной
+    пологой дугой, а две прямые по её половинам — почти параллельными.
+
+    Так выглядела клиническая серия, давшая 163,7° и 170,2° в двух прогонах.
+    Проверка вершины её пропускает — вершина остаётся у средней линии, — и
+    отличить такое измерение от настоящего больше нечем.
+
+    При тяжёлой гидроцефалии перегородка разрушается и желудочки сливаются
+    по-настоящему. Отказ тогда верен по существу: угол мозолистого тела в его
+    обычном смысле на таком срезе не измеряется.
+    """
+    if not mask:
+        return False
+
+    width = len(column_positions)
+    height = len(mask)
+    seen = [[False] * width for _ in range(height)]
+
+    for row in range(height):
+        for column in range(width):
+            if not mask[row][column] or seen[row][column]:
+                continue
+
+            stack = [(row, column)]
+            seen[row][column] = True
+            left = right = False
+
+            while stack:
+                y, x = stack.pop()
+                position = column_positions[x]
+                left = left or position <= -reach_millimetres
+                right = right or position >= reach_millimetres
+
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < height and 0 <= nx < width \
+                            and mask[ny][nx] and not seen[ny][nx]:
+                        seen[ny][nx] = True
+                        stack.append((ny, nx))
+
+            if left and right:
+                return True
+
+    return False

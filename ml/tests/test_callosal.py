@@ -14,6 +14,7 @@ import pytest
 from hydrocephalus_ml.callosal import (
     MAXIMUM_VERTEX_OFFSET_MILLIMETRES,
     Point2D,
+    crosses_midline,
     measure_callosal_angle,
     roof_profile,
     slice_spread,
@@ -183,3 +184,37 @@ def test_planes_without_a_measurement_are_skipped() -> None:
 def test_a_single_plane_gives_no_spread() -> None:
     with pytest.raises(ValueError, match="двум плоскостям"):
         slice_spread([120.0, None])
+
+
+def test_two_separate_ventricles_do_not_cross_the_midline() -> None:
+    #  X X . . . X X      два желудочка, между ними перегородка
+    mask = [[True, True, False, False, False, True, True]]
+    columns = [-9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0]
+
+    assert not crosses_midline(mask, columns)
+
+
+def test_merged_ventricles_are_detected() -> None:
+    # Та же маска, но перегородки нет: одна область дотягивается до обеих
+    # сторон. Так выглядела клиническая серия, давшая 163,7°.
+    mask = [[True, True, True, True, True, True, True]]
+    columns = [-9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0]
+
+    assert crosses_midline(mask, columns)
+
+
+def test_touching_the_midline_from_one_side_is_not_crossing() -> None:
+    # Желудочек, подходящий к средней линии, но не переходящий её, — норма.
+    mask = [[True, True, True, True, False, False, False]]
+    columns = [-9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0]
+
+    assert not crosses_midline(mask, columns)
+
+
+def test_components_are_traced_through_rows() -> None:
+    #  X . X      сверху две отдельные области,
+    #  X X X      снизу они соединены — значит это одна область
+    mask = [[True, False, True], [True, True, True]]
+    columns = [-9.0, 0.0, 9.0]
+
+    assert crosses_midline(mask, columns)
