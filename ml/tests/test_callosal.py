@@ -12,6 +12,7 @@ import math
 import pytest
 
 from hydrocephalus_ml.callosal import (
+    MAXIMUM_VERTEX_OFFSET_MILLIMETRES,
     Point2D,
     measure_callosal_angle,
     roof_profile,
@@ -133,3 +134,27 @@ def test_empty_columns_are_skipped_rather_than_guessed() -> None:
 def test_a_mask_that_does_not_match_its_grid_is_refused() -> None:
     with pytest.raises(ValueError, match="строк"):
         roof_profile([[True]], column_positions=[0.0], row_positions=[0.0, 1.0])
+
+
+def test_a_vertex_away_from_the_midline_is_refused() -> None:
+    # Крыши разной высоты и наклона пересекаются в стороне: подогнанные прямые
+    # описывают не две симметричные крыши. Так выглядела клиническая серия, где
+    # желудочки слились в одну массу, — угол вышел 170 градусов, что лежит
+    # внутри правдоподобного диапазона и ничем иным не отличимо от настоящего.
+    roof = [Point2D(x, -0.05 * abs(x)) for x in (-18.0, -14.0, -10.0, -6.0)]
+    roof += [Point2D(x, -1.2 * x + 8.0) for x in (6.0, 10.0, 14.0, 18.0)]
+
+    with pytest.raises(ValueError, match="средней линии"):
+        measure_callosal_angle(roof)
+
+
+def test_a_vertex_just_off_the_midline_is_accepted() -> None:
+    # Порог не должен браковать норму: у 27 субъектов AFIDs вершина уложилась
+    # в ±2,2 мм, и эти случаи обязаны проходить.
+    roof = roof_of(30.0)
+    shifted = [Point2D(point.x + 2.0, point.y) for point in roof]
+
+    measurement = measure_callosal_angle(shifted)
+
+    assert measurement.vertex is not None
+    assert abs(measurement.vertex.x) < MAXIMUM_VERTEX_OFFSET_MILLIMETRES

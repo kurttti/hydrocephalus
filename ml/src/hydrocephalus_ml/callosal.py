@@ -27,6 +27,7 @@ from typing import NamedTuple
 
 __all__ = [
     "DEFAULT_ROOF_SPAN_MILLIMETRES",
+    "MAXIMUM_VERTEX_OFFSET_MILLIMETRES",
     "CallosalMeasurement",
     "Point2D",
     "measure_callosal_angle",
@@ -41,6 +42,14 @@ DEFAULT_ROOF_SPAN_MILLIMETRES = 20.0
 # Меньше трёх точек прямую не задают устойчиво: две дают её ровно, и любая
 # ошибка сегментации в одном столбце уходит в результат целиком.
 MINIMUM_ROOF_POINTS = 3
+
+# Насколько вершина может отстоять от средней линии. По определению она лежит
+# на ней: там сходятся крыши под мозолистым телом. У 27 субъектов AFIDs
+# вершина уложилась в ±2,2 мм; клиническая серия, где желудочки слились в одну
+# массу с плоской крышей, дала вершину в десятке миллиметров и угол 170° —
+# число, лежащее внутри правдоподобного диапазона 30–180° и потому не
+# отличимое от настоящего ничем, кроме этой проверки.
+MAXIMUM_VERTEX_OFFSET_MILLIMETRES = 5.0
 
 
 class Point2D(NamedTuple):
@@ -146,6 +155,16 @@ def measure_callosal_angle(
     else:
         vertex_x = (right_intercept - left_intercept) / (left_slope - right_slope)
         vertex = Point2D(vertex_x, left_slope * vertex_x + left_intercept)
+
+        # Уехавшая вершина означает, что прямые описывают не две симметричные
+        # крыши. Угол при этом остаётся правдоподобным на вид, и отличить его
+        # от настоящего больше нечем.
+        if abs(vertex.x) > MAXIMUM_VERTEX_OFFSET_MILLIMETRES:
+            raise ValueError(
+                f"Вершина отстоит от средней линии на {vertex.x:+.1f} мм при "
+                f"допустимых {MAXIMUM_VERTEX_OFFSET_MILLIMETRES:.0f}: крыши "
+                f"не сходятся под мозолистым телом."
+            )
 
     # Лучи направлены от вершины наружу: угол между ними и есть измеряемый.
     left_ray = (-1.0, -left_slope)
