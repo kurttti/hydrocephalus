@@ -105,6 +105,10 @@ internal static class DeidentificationProfile
         new(0x0038, 0x0400), // PatientInstitutionResidence
         new(0x0038, 0x0500), // PatientState
         new(0x0038, 0x4000), // VisitComments
+        // Имя врача, назначенного на исследование. Пропуск найден пакетным
+        // замером 2026-09-25: профиль удалял четыре других поля с именами
+        // людей, а это — нет, и имя оставалось в рабочей копии.
+        new(0x0040, 0x0006), // ScheduledPerformingPhysicianName
         new(0x0040, 0x0241), // PerformedStationAETitle
         new(0x0040, 0x0242), // PerformedStationName
         new(0x0040, 0x0243), // PerformedLocation
@@ -219,6 +223,37 @@ internal static class DeidentificationProfile
     /// <param name="tag">Проверяемый тег.</param>
     /// <returns><see langword="true"/>, если тег технический.</returns>
     internal static bool IsTechnical(DicomTag tag) => TechnicalTags.Contains(tag);
+
+    /// <summary>
+    /// Опознаёт тег, значение которого указывает на человека или на место
+    /// лечения. Это правило, а не список: имя любого человека (VR = PN), всё,
+    /// что относится к пациенту (группа 0010), и поля учреждения.
+    ///
+    /// Правило заменяет два перечня, которые пришлось бы вести руками и
+    /// дополнять под каждую новую выборку. Совпадение значений двух
+    /// неидентифицирующих полей — повтор параметра аппарата, а не утечка:
+    /// томограф сам вписывает модель в имя станции. Совпадение с
+    /// идентифицирующим полем не прощается никогда и ниоткуда.
+    /// </summary>
+    /// <param name="tag">Проверяемый тег.</param>
+    /// <param name="valueRepresentation">Представление значения тега.</param>
+    /// <returns><see langword="true"/>, если тег идентифицирует человека или учреждение.</returns>
+    internal static bool IsIdentifying(DicomTag tag, DicomVR valueRepresentation) =>
+        valueRepresentation == DicomVR.PN
+        || tag.Group == 0x0010
+        || InstitutionTags.Contains(tag);
+
+    /// <summary>
+    /// Поля учреждения. Названия больницы и отделения указывают на место
+    /// лечения, а через него — на человека, поэтому их повторы не прощаются
+    /// наравне с параметрами аппарата.
+    /// </summary>
+    private static readonly HashSet<DicomTag> InstitutionTags =
+    [
+        new(0x0008, 0x0080), // InstitutionName
+        new(0x0008, 0x0081), // InstitutionAddress
+        new(0x0008, 0x1040), // InstitutionalDepartmentName
+    ];
 
     /// <summary>
     /// Проверяет, относится ли тег к группам, удаляемым целиком: приватным,

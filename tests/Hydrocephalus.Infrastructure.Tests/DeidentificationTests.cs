@@ -213,16 +213,66 @@ public sealed class DeidentificationTests
                 && violation.Location == "(0018,1250)");
     }
 
+    [Fact]
+    public void A_violation_names_the_tag_the_value_came_from()
+    {
+        // Без источника отчёт называет только место находки, и повтор параметра
+        // аппарата неотличим от утечки имени: пакетный замер выборки дал
+        // двадцать одно нарушение, по которым нельзя было решить, что из них
+        // чинить, а что прощать, не открывая сами снимки.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientName: "Sidorov",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.ReceiveCoilName, "Sidorov"));
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        var violations = DeidentificationAudit.Inspect(
+            result.Dataset,
+            fileMetaInfo: null,
+            result.SourceSecrets,
+            "series/instance.dcm",
+            result.DescriptiveOnlySecrets,
+            result.SecretSources);
+
+        Assert.Contains(
+            violations,
+            violation => violation.Location == "(0018,1250)"
+                && violation.Source == "(0010,0010)");
+    }
+
+    [Fact]
+    public void Without_the_map_the_violation_simply_has_no_source()
+    {
+        // Источник не обязателен: проверка вызывается и без него, и молчание
+        // здесь честнее выдуманного тега.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientName: "Sidorov",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.ReceiveCoilName, "Sidorov"));
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.All(
+            DeidentificationAudit.Inspect(
+                result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm"),
+            violation => Assert.Equal(string.Empty, violation.Source));
+    }
+
     [Theory]
     [InlineData(0x0008, 0x1090, "Skyra MR-ROOM-2")]
-    [InlineData(0x0018, 0x0024, "MR-ROOM-2")]
-    public void A_description_is_forgiven_only_as_a_whole_value_of_a_device_field(
+    [InlineData(0x0018, 0x0024, "seq MR-ROOM-2 v3")]
+    public void A_description_found_only_inside_another_value_is_not_a_leak(
         ushort group,
         ushort element,
         string retained)
     {
-        // Подстрока в техническом поле и дословный повтор в нетехническом
-        // сохраняемом поле (SequenceName) по-прежнему нарушение.
+        // Описательное значение засчитывается только целиком. Пакетный замер
+        // 2026-09-25 дал шестнадцать отказов из двадцати именно на таких
+        // вхождениях — «HEAD» внутри «HEAD_32CH», — и ни одно не было утечкой.
+        // Это то же решение, которое уже принято для коротких чисел.
         var tag = new DicomTag(group, element);
 
         var source = SyntheticDicom.BuildSlice(
@@ -236,9 +286,102 @@ public sealed class DeidentificationTests
 
         var result = Deidentifier().Deidentify(source, Subject);
 
+        Assert.DoesNotContain(
+            DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm", result.DescriptiveOnlySecrets),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
+    [Fact]
+    public void A_name_found_inside_another_value_is_still_a_leak()
+    {
+        // Покрытие не падает: значение из идентифицирующего поля по-прежнему
+        // ищется подстрокой. Ради этого случая проверка и существует — фамилия,
+        // вписанная оператором внутрь описания, целиком со значением не совпадёт
+        // никогда.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            patientName: "Sidorov",
+            customize: dataset => dataset.AddOrUpdate(
+                DicomTag.ReceiveCoilName, "HEAD Sidorov"));
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Contains(
+            DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm", result.DescriptiveOnlySecrets),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue
+                && !violation.Verbatim);
+    }
+
+    [Theory]
+    [InlineData(0x0018, 0x0024)]  // SequenceName
+    [InlineData(0x0018, 0x0022)]  // ScanOptions
+    [InlineData(0x0018, 0x1250)]  // ReceiveCoilName
+    public void A_device_field_repeating_another_device_field_verbatim_is_not_a_leak(
+        ushort group,
+        ushort element)
+    {
+        // Ни источник, ни место находки не указывают на человека: томограф сам
+        // вписывает одно и то же значение в несколько своих полей. Прежде это
+        // решалось списком технических тегов, и пакетный замер 2026-09-25
+        // отверг серии из-за полей, которых в списке не оказалось. Список
+        // пришлось бы дополнять под каждую новую выборку, поэтому его заменило
+        // правило.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                // Значение без дефиса: тип CS у ScanOptions допускает только
+                // прописные буквы, цифры, пробел и подчёркивание.
+                dataset.AddOrUpdate(DicomTag.StationName, "MR_ROOM_2");
+                dataset.AddOrUpdate(new DicomTag(group, element), "MR_ROOM_2");
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.DoesNotContain(
+            DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm", result.DescriptiveOnlySecrets),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
+    [Fact]
+    public void An_institution_name_repeated_verbatim_is_still_a_leak()
+    {
+        // Название больницы указывает на место лечения, а через него — на
+        // человека. Дословность здесь не оправдание, в отличие от параметров
+        // аппарата.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.InstitutionName, "CITY-HOSPITAL-3");
+                dataset.AddOrUpdate(DicomTag.ReceiveCoilName, "CITY-HOSPITAL-3");
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
         Assert.Contains(
             DeidentificationAudit.Inspect(result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm", result.DescriptiveOnlySecrets),
             violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
+    [Fact]
+    public void The_profile_removes_the_scheduled_physician_name()
+    {
+        // Профиль удалял четыре поля с именами людей и пропускал пятое.
+        // Найдено пакетным замером 2026-09-25: имя врача оставалось в рабочей
+        // копии, и проверка справедливо отвергала исследование.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset => dataset.AddOrUpdate(
+                new DicomTag(0x0040, 0x0006), "Ivanov^Ivan"));
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.False(result.Dataset.Contains(new DicomTag(0x0040, 0x0006)));
     }
 
     [Theory]

@@ -399,7 +399,8 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
             metaInfo,
             instance.SourceSecrets,
             relativePath,
-            instance.DescriptiveOnlySecrets);
+            instance.DescriptiveOnlySecrets,
+            instance.SecretSources);
 
         if (violations.Count == 0)
         {
@@ -408,9 +409,12 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
 
         throw new DomainRuleViolationException(string.Format(
             CultureInfo.InvariantCulture,
-            "Deidentification audit rejected the working copy: {0} violation(s); first {1} at {2}.",
+            "Deidentification audit rejected the working copy: {0} violation(s); first {1} at {2}{3}.",
             violations.Count,
             violations[0].Code,
-            violations[0].Location));
+            violations[0].Location,
+            violations[0].Source.Length == 0
+                ? string.Empty
+                : $" from {violations[0].Source} ({(violations[0].Verbatim ? "whole value" : "substring")})"));
     }
 }

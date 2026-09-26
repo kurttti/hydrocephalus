@@ -32,9 +32,22 @@ internal enum DeidentificationViolationCode
 /// </summary>
 /// <param name="Code">Код нарушения.</param>
 /// <param name="Location">Тег в виде (gggg,eeee) либо условное имя места.</param>
+/// <param name="Source">
+/// Тег, из которого пришло уцелевшее значение, либо пустая строка, если
+/// происхождение неизвестно. Без него отчёт называет только место находки, и
+/// по нему нельзя отличить безобидный повтор параметра аппарата от настоящей
+/// утечки: разбираться приходится, открывая сами снимки.
+/// </param>
+/// <param name="Verbatim">
+/// Совпало ли значение целиком. Подстрока и дословный повтор требуют разных
+/// решений: значение, окружённое другим текстом, вписал человек, а повтор
+/// целиком проставил аппарат — а в отчёте они выглядели одинаково.
+/// </param>
 internal readonly record struct DeidentificationViolation(
     DeidentificationViolationCode Code,
-    string Location);
+    string Location,
+    string Source = "",
+    bool Verbatim = false);
 
 /// <summary>
 /// Проверка результата деидентификации — та самая утилита из плана проверки ADR 0003.
@@ -76,13 +89,18 @@ internal static class DeidentificationAudit
     /// с техническим полем нарушением не считается. <see langword="null"/> —
     /// не прощать ничего.
     /// </param>
+    /// <param name="secretSources">
+    /// Откуда пришло каждое значение, для отчёта: тег в виде (gggg,eeee).
+    /// <see langword="null"/> — источник не называть.
+    /// </param>
     /// <returns>Список нарушений; пустой список означает успех.</returns>
     internal static IReadOnlyList<DeidentificationViolation> Inspect(
         DicomDataset dataset,
         DicomDataset? fileMetaInfo,
         IReadOnlySet<string> sourceSecrets,
         string relativePath,
-        IReadOnlySet<string>? descriptiveOnlySecrets = null)
+        IReadOnlySet<string>? descriptiveOnlySecrets = null,
+        IReadOnlyDictionary<string, string>? secretSources = null)
     {
         ArgumentNullException.ThrowIfNull(dataset);
         ArgumentNullException.ThrowIfNull(sourceSecrets);
@@ -90,11 +108,11 @@ internal static class DeidentificationAudit
         var violations = new List<DeidentificationViolation>();
         var excusable = descriptiveOnlySecrets ?? new HashSet<string>(StringComparer.Ordinal);
 
-        Inspect(dataset, sourceSecrets, excusable, violations);
+        Inspect(dataset, sourceSecrets, excusable, violations, secretSources);
 
         if (fileMetaInfo is not null)
         {
-            Inspect(fileMetaInfo, sourceSecrets, excusable, violations);
+            Inspect(fileMetaInfo, sourceSecrets, excusable, violations, secretSources);
         }
 
         foreach (var secret in sourceSecrets)
@@ -115,7 +133,8 @@ internal static class DeidentificationAudit
         DicomDataset dataset,
         IReadOnlySet<string> secrets,
         IReadOnlySet<string> excusable,
-        List<DeidentificationViolation> violations)
+        List<DeidentificationViolation> violations,
+        IReadOnlyDictionary<string, string>? sources)
     {
         foreach (var item in dataset)
         {
@@ -139,7 +158,7 @@ internal static class DeidentificationAudit
             {
                 foreach (var child in sequence.Items)
                 {
-                    Inspect(child, secrets, excusable, violations);
+                    Inspect(child, secrets, excusable, violations, sources);
                 }
 
                 continue;
@@ -165,19 +184,60 @@ internal static class DeidentificationAudit
                     continue;
                 }
 
-                var technical = DeidentificationProfile.IsTechnical(item.Tag);
+                // Прощается повтор между двумя неидентифицирующими полями —
+                // и только дословный, целым значением. Раньше место находки
+                // сверялось со списком технических тегов; список отвергал
+                // серии из-за полей, которых в нём просто не оказалось, и
+                // дополнять его пришлось бы под каждую новую выборку.
+                var neutral = !DeidentificationProfile.IsIdentifying(
+                    item.Tag, item.ValueRepresentation);
 
-                if (secrets.Any(secret => Contains(value, secret)
-                    && !(technical && IsExcusedRepetition(value, secret, excusable))))
+                var offending = secrets.FirstOrDefault(secret => Matches(value, secret, excusable)
+                    && !(neutral && IsExcusedRepetition(value, secret, excusable)));
+
+                if (offending is not null)
                 {
+                    // Называется и место находки, и тег, откуда значение пришло:
+                    // повтор параметра аппарата и утечка имени выглядят в отчёте
+                    // одинаково, пока не назван источник.
                     violations.Add(new DeidentificationViolation(
                         DeidentificationViolationCode.ResidualSourceValue,
-                        Describe(item.Tag)));
+                        Describe(item.Tag),
+                        sources is not null && sources.TryGetValue(offending, out var source)
+                            ? source
+                            : string.Empty,
+                        string.Equals(value.Trim(), offending, StringComparison.OrdinalIgnoreCase)));
                     break;
                 }
             }
         }
     }
+
+    /// <summary>
+    /// Ищет исходное значение в результате, выбирая способ поиска по источнику.
+    ///
+    /// Значение из идентифицирующего поля ищется подстрокой: имя, вписанное
+    /// внутрь другого текста, — именно та утечка, ради которой проверка и
+    /// ведётся. Значение из прочих полей засчитывается только целиком.
+    ///
+    /// Это то же решение, которое уже принято для коротких чисел, перенесённое
+    /// на текст: описание исследования «HEAD» находится внутри имени катушки
+    /// «HEAD_32CH» у любого второго снимка. Пакетный замер 2026-09-25 дал
+    /// шестнадцать таких отказов из двадцати, и ни один не был утечкой.
+    ///
+    /// Покрытие при этом не падает. Если фамилия пациента попала в описание
+    /// исследования, она всё равно находится подстрокой — по своему
+    /// собственному источнику, полю имени, которое идентифицирующее.
+    /// Описательное значение само по себе опасно только целиком.
+    /// </summary>
+    /// <param name="value">Значение результата.</param>
+    /// <param name="secret">Исходное значение.</param>
+    /// <param name="neutralSecrets">Значения, пришедшие не из идентифицирующих полей.</param>
+    /// <returns><see langword="true"/>, если исходное значение найдено.</returns>
+    internal static bool Matches(string value, string secret, IReadOnlySet<string> neutralSecrets) =>
+        neutralSecrets.Contains(secret)
+            ? string.Equals(value.Trim(), secret, StringComparison.OrdinalIgnoreCase)
+            : Contains(value, secret);
 
     /// <summary>
     /// Встречается ли исходное значение в значении результата.
