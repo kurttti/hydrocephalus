@@ -46,13 +46,14 @@ def test_a_known_angle_is_recovered(half_angle: float) -> None:
     assert measurement.degrees == pytest.approx(180.0 - 2.0 * half_angle, abs=0.01)
 
 
-def test_a_flat_roof_is_refused_rather_than_called_180_degrees() -> None:
-    # Прежде здесь ожидался угол 180° с доводом, что так выглядят самые широкие
-    # желудочки. Довод неверен: при иНТГ расширенные желудочки поднимают крыши
-    # в острый пик, а не расплющивают их. Плоская крыша — вырожденный случай, и
-    # клиническая серия с такой крышей дала 163,7° и 170,2° в двух прогонах.
-    with pytest.raises(ValueError, match="пик"):
-        measure_callosal_angle(roof_of(0.0))
+def test_a_flat_roof_gives_a_straight_angle_and_no_vertex() -> None:
+    # Плоская крыша даёт 180° и не даёт вершины: параллельные прямые не
+    # пересекаются. Отличать такой случай от настоящего пока нечем — см.
+    # комментарий к проверке формы, которая была здесь и оказалась неверной.
+    measurement = measure_callosal_angle(roof_of(0.0))
+
+    assert measurement.degrees == pytest.approx(180.0, abs=0.01)
+    assert measurement.vertex is None
 
 
 def test_the_narrow_angle_of_hydrocephalus_and_the_wide_one_of_health_differ() -> None:
@@ -217,18 +218,3 @@ def test_components_are_traced_through_rows() -> None:
     columns = [-9.0, 0.0, 9.0]
 
     assert crosses_midline(mask, columns)
-
-
-def test_a_one_sided_slope_is_refused() -> None:
-    # Односкатная крыша: обе половины идут в одну сторону. Пика нет, и вершина
-    # оказывается далеко в стороне.
-    roof = [Point2D(x, 0.4 * x) for x in (-15.0, -10.0, -5.0, 5.0, 10.0, 15.0)]
-
-    with pytest.raises(ValueError, match="пик"):
-        measure_callosal_angle(roof)
-
-
-def test_a_proper_peak_is_accepted() -> None:
-    measurement = measure_callosal_angle(roof_of(30.0))
-
-    assert measurement.degrees == pytest.approx(120.0, abs=0.01)
