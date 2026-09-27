@@ -83,6 +83,14 @@ public sealed class DicomStudyScanner
                 continue;
             }
 
+            if (!CarriesPixels(dataset))
+            {
+                rejections.Add(new ImportRejection(
+                    ImportRejectionCode.NotAnImage,
+                    walk.OpaqueReference(file.FullName)));
+                continue;
+            }
+
             var sopInstanceUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
 
             if (!string.IsNullOrWhiteSpace(sopInstanceUid) && !acceptedInstances.Add(sopInstanceUid))
@@ -115,6 +123,22 @@ public sealed class DicomStudyScanner
                 StringComparer.Ordinal),
         };
     }
+
+    /// <summary>
+    /// Несёт ли файл снимок.
+    ///
+    /// Класс объекта намеренно не проверяется: перечень пришлось бы вести руками,
+    /// и каждый незнакомый класс молча становился бы срезом. Признак структурный —
+    /// либо пиксели в файле есть, либо размеры кадра объявлены. Правило нарочно
+    /// снисходительно: снимок со странностями в тегах лучше принять и разобрать
+    /// проверками геометрии, чем потерять на входе.
+    /// </summary>
+    /// <param name="dataset">Набор тегов файла.</param>
+    /// <returns><c>true</c>, если файл похож на срез.</returns>
+    private static bool CarriesPixels(DicomDataset dataset) =>
+        dataset.Contains(DicomTag.PixelData)
+        || dataset.Contains(DicomTag.Rows)
+        || dataset.Contains(DicomTag.Columns);
 
     private static List<ImagingStudy> BuildStudies(
         IEnumerable<SeriesBuilder> builders,

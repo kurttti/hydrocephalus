@@ -10,6 +10,9 @@ internal static class SyntheticDicom
 {
     internal const string MrSopClassUid = "1.2.840.10008.5.1.4.1.1.4";
 
+    /// <summary>Grayscale Softcopy Presentation State: настройки просмотра, не снимок.</summary>
+    internal const string PresentationStateSopClassUid = "1.2.840.10008.5.1.4.1.1.11.1";
+
     /// <summary>Создаёт временный каталог, удаляемый вызывающей стороной.</summary>
     internal static DirectoryInfo CreateTempDirectory() =>
         Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "hydro-" + Guid.NewGuid().ToString("N")));
@@ -123,6 +126,45 @@ internal static class SyntheticDicom
             slicePosition,
             sopInstanceUid,
             customize);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        new DicomFile(dataset).Save(path);
+
+        return dataset.GetSingleValue<string>(DicomTag.SOPInstanceUID);
+    }
+
+    /// <summary>
+    /// Записывает объект настроек просмотра — Grayscale Softcopy Presentation State.
+    ///
+    /// Такие объекты найдены в двух папках выборки, 7 и 3 файла, каждый в своей
+    /// серии. Пикселей в них нет по определению: они описывают, как показывать
+    /// чужие срезы. Идентифицирующее поле ContentCreatorName здесь есть — в
+    /// реальных файлах оно заполнено, и обезличивание обязано его вычистить.
+    /// </summary>
+    /// <param name="path">Полный путь файла.</param>
+    /// <param name="studyUid">StudyInstanceUID.</param>
+    /// <param name="seriesUid">SeriesInstanceUID.</param>
+    /// <param name="patientId">PatientID, может быть пустым.</param>
+    /// <param name="contentCreatorName">ContentCreatorName, может быть пустым.</param>
+    /// <returns>SOPInstanceUID записанного объекта.</returns>
+    internal static string WritePresentationState(
+        string path,
+        string studyUid,
+        string seriesUid,
+        string patientId = "",
+        string contentCreatorName = "")
+    {
+        var dataset = new DicomDataset
+        {
+            { DicomTag.SOPClassUID, PresentationStateSopClassUid },
+            { DicomTag.SOPInstanceUID, DicomUIDGenerator.GenerateDerivedFromUUID().UID },
+            { DicomTag.StudyInstanceUID, studyUid },
+            { DicomTag.SeriesInstanceUID, seriesUid },
+            { DicomTag.Modality, "PR" },
+            { DicomTag.PatientID, patientId },
+            { DicomTag.ContentCreatorName, contentCreatorName },
+            { DicomTag.ContentLabel, "WINDOW" },
+        };
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         new DicomFile(dataset).Save(path);

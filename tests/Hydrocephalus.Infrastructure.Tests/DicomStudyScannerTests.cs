@@ -177,6 +177,75 @@ public sealed class DicomStudyScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task Presentation_states_are_rejected_and_never_become_a_series()
+    {
+        // Найдено на реальных данных: в двух папках выборки рядом со срезами лежат
+        // объекты Grayscale Softcopy Presentation State — настройки просмотра, без
+        // пикселей. Каждый в своей серии, поэтому без проверки они пополняли
+        // исследование сериями размером 0 на 0.
+        const string StudyUid = "1.2.3.300";
+
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "IM0.dcm"),
+            StudyUid,
+            seriesUid: "1.2.3.301",
+            patientId: "P-1");
+
+        SyntheticDicom.WritePresentationState(
+            Path.Combine(this.root.FullName, "PR0.dcm"),
+            StudyUid,
+            seriesUid: "1.2.3.302",
+            patientId: "P-1");
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        Assert.Equal(ImportRejectionCode.NotAnImage, Assert.Single(result.Rejections).Code);
+
+        var series = Assert.Single(Assert.Single(result.Studies).Series);
+
+        Assert.Equal(256, series.Geometry.Dimensions.Columns);
+        Assert.Equal(1, series.Geometry.Dimensions.Slices);
+    }
+
+    [Fact]
+    public async Task A_presentation_state_inside_an_image_series_does_not_replace_its_geometry()
+    {
+        // В выборке служебные объекты лежат в отдельных сериях, но опираться на это
+        // нельзя: стандарт не запрещает общий SeriesInstanceUID. Геометрия и
+        // взвешенность серии берутся из первого отданного обходом файла, поэтому
+        // служебный объект, пришедший первым, обнулил бы объёмную T1 без следа.
+        // Имя PR0.dcm встаёт перед IM1.dcm при сортировке по имени.
+        const string StudyUid = "1.2.3.400";
+        const string SeriesUid = "1.2.3.401";
+
+        SyntheticDicom.WritePresentationState(
+            Path.Combine(this.root.FullName, "PR0.dcm"),
+            StudyUid,
+            SeriesUid,
+            patientId: "P-1");
+
+        for (var index = 1; index <= 3; index++)
+        {
+            SyntheticDicom.WriteSlice(
+                Path.Combine(this.root.FullName, $"IM{index}.dcm"),
+                StudyUid,
+                SeriesUid,
+                patientId: "P-1",
+                slicePosition: index);
+        }
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        var series = Assert.Single(Assert.Single(result.Studies).Series);
+
+        Assert.Equal(SeriesWeighting.T1, series.Weighting);
+        Assert.Equal(256, series.Geometry.Dimensions.Columns);
+        Assert.Equal(256, series.Geometry.Dimensions.Rows);
+        Assert.Equal(3, series.Geometry.Dimensions.Slices);
+        Assert.Equal(1.0, series.Geometry.PixelSpacing.RowMillimetres);
+    }
+
+    [Fact]
     public async Task Rejection_does_not_expose_the_file_path()
     {
         // Имена файлов в исходном сборе содержат фамилии пациентов, поэтому путь
