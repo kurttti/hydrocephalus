@@ -214,12 +214,17 @@ public sealed class DicomStudyScannerTests : IDisposable
         // нельзя: стандарт не запрещает общий SeriesInstanceUID. Геометрия и
         // взвешенность серии берутся из первого отданного обходом файла, поэтому
         // служебный объект, пришедший первым, обнулил бы объёмную T1 без следа.
-        // Имя PR0.dcm встаёт перед IM1.dcm при сортировке по имени.
+        //
+        // Служебный объект обязан прийти первым, иначе случай не проверяется, а
+        // порядок имён такой гарантии не даёт: обход зовёт DirectoryInfo.GetFiles,
+        // и её порядок зависит от файловой системы. Гарантия берётся из устройства
+        // обхода: он идёт в ширину, поэтому файлы корня выдаются раньше файлов
+        // подкаталога. Служебный объект — в корне, срезы — уровнем ниже.
         const string StudyUid = "1.2.3.400";
         const string SeriesUid = "1.2.3.401";
 
         SyntheticDicom.WritePresentationState(
-            Path.Combine(this.root.FullName, "PR0.dcm"),
+            Path.Combine(this.root.FullName, "state.dcm"),
             StudyUid,
             SeriesUid,
             patientId: "P-1");
@@ -227,7 +232,7 @@ public sealed class DicomStudyScannerTests : IDisposable
         for (var index = 1; index <= 3; index++)
         {
             SyntheticDicom.WriteSlice(
-                Path.Combine(this.root.FullName, $"IM{index}.dcm"),
+                Path.Combine(this.root.FullName, "slices", $"IM{index}.dcm"),
                 StudyUid,
                 SeriesUid,
                 patientId: "P-1",
