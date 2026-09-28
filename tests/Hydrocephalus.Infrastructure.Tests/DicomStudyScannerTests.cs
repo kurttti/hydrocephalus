@@ -1,3 +1,4 @@
+using FellowOakDicom;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Quality;
 using Hydrocephalus.Infrastructure.Dicom;
@@ -248,6 +249,94 @@ public sealed class DicomStudyScannerTests : IDisposable
         Assert.Equal(256, series.Geometry.Dimensions.Rows);
         Assert.Equal(3, series.Geometry.Dimensions.Slices);
         Assert.Equal(1.0, series.Geometry.PixelSpacing.RowMillimetres);
+    }
+
+    [Fact]
+    public async Task Computed_tomography_is_refused_with_a_named_reason()
+    {
+        // Решение владельца данных от 2026-09-28: ориентир только на МРТ. Прежде
+        // КТ проходила молча — распознавание взвешенности читает теги импульсной
+        // последовательности, которых у КТ нет, серия получала Unknown, и папка
+        // выглядела принятой при отсутствующем измерении.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "CT0.dcm"),
+            studyUid: "1.2.3.500",
+            seriesUid: "1.2.3.501",
+            patientId: "P-1",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.Modality, "CT"));
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        Assert.Empty(result.Studies);
+        Assert.Equal(ImportRejectionCode.NotMagneticResonance, Assert.Single(result.Rejections).Code);
+    }
+
+    [Fact]
+    public async Task A_slice_without_a_declared_modality_is_still_accepted()
+    {
+        // Снисходительность намеренная: пустой тег означает неполный экспорт, а не
+        // другой аппарат. КТ всегда объявляет себя, поэтому пропустить её это не
+        // даёт, а снимок МРТ с неполными тегами сохраняет.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "IM0.dcm"),
+            studyUid: "1.2.3.600",
+            seriesUid: "1.2.3.601",
+            patientId: "P-1",
+            customize: dataset => dataset.Remove(DicomTag.Modality));
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        Assert.Empty(result.Rejections);
+        Assert.Single(Assert.Single(result.Studies).Series);
+    }
+
+    [Fact]
+    public async Task A_folder_holding_both_modalities_keeps_only_the_magnetic_resonance()
+    {
+        // Смешанная папка не отвергается целиком: в выборке КТ и МРТ одного
+        // пациента встречаются рядом, и отказ по одной серии не повод терять другую.
+        const string StudyUid = "1.2.3.700";
+
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "IM0.dcm"),
+            StudyUid,
+            seriesUid: "1.2.3.701",
+            patientId: "P-1");
+
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "CT0.dcm"),
+            StudyUid,
+            seriesUid: "1.2.3.702",
+            patientId: "P-1",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.Modality, "CT"));
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        Assert.Equal(ImportRejectionCode.NotMagneticResonance, Assert.Single(result.Rejections).Code);
+
+        var series = Assert.Single(Assert.Single(result.Studies).Series);
+
+        Assert.Equal(SeriesWeighting.T1, series.Weighting);
+    }
+
+    [Fact]
+    public async Task The_refusal_names_why_the_folder_did_not_fit()
+    {
+        // Без причин папка компьютерной томографии отвергается теми же словами, что
+        // папка без снимков вообще, и «не тот аппарат» не отличить от «здесь ничего
+        // нет». Коды и числа — можно, пути — нет: в них фамилии.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "CT0.dcm"),
+            studyUid: "1.2.3.800",
+            seriesUid: "1.2.3.801",
+            patientId: "P-1",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.Modality, "CT"));
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+        var message = StudyImporter.NoReadableStudyMessage(result);
+
+        Assert.Contains("NotMagneticResonance 1", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("CT0", message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -49,6 +49,26 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
     }
 
     /// <summary>
+    /// Собирает отказ «в источнике нет читаемого исследования», называя причины.
+    ///
+    /// Общее для импорта и для просмотрщика: оба отвергают папку одними словами,
+    /// и оба обязаны сказать, чем она не подошла. Папка компьютерной томографии
+    /// и папка со снимками экрана — разные случаи, и врачу нужно их различать.
+    /// </summary>
+    /// <param name="scan">Результат обхода каталога.</param>
+    /// <returns>Текст отказа.</returns>
+    public static string NoReadableStudyMessage(DicomScanResult scan)
+    {
+        ArgumentNullException.ThrowIfNull(scan);
+
+        var reasons = scan.DescribeRejections();
+
+        return reasons.Length == 0
+            ? "The import source contains no readable imaging study."
+            : $"The import source contains no readable imaging study; refused files: {reasons}.";
+    }
+
+    /// <summary>
     /// Импортирует исследование из каталога и создаёт рабочую копию.
     /// </summary>
     /// <param name="sourceReference">Каталог источника.</param>
@@ -65,7 +85,7 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
         if (scan.Studies.Count == 0)
         {
             throw new DomainRuleViolationException(
-                "The import source contains no readable imaging study.");
+                NoReadableStudyMessage(scan));
         }
 
         if (scan.Studies.Count > 1)

@@ -91,6 +91,14 @@ public sealed class DicomStudyScanner
                 continue;
             }
 
+            if (!IsMagneticResonance(dataset))
+            {
+                rejections.Add(new ImportRejection(
+                    ImportRejectionCode.NotMagneticResonance,
+                    walk.OpaqueReference(file.FullName)));
+                continue;
+            }
+
             var sopInstanceUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
 
             if (!string.IsNullOrWhiteSpace(sopInstanceUid) && !acceptedInstances.Add(sopInstanceUid))
@@ -122,6 +130,26 @@ public sealed class DicomStudyScanner
                 builder => builder.Files,
                 StringComparer.Ordinal),
         };
+    }
+
+    /// <summary>
+    /// Сделан ли снимок магнитным резонансом.
+    ///
+    /// Пустая модальность принимается: тег отсутствует при неполном экспорте, и
+    /// отказ по нему терял бы снимки МРТ. КТ же всегда объявляет себя, поэтому
+    /// снисходительность её не пропускает.
+    ///
+    /// Значение сравнивается обрезанным: DICOM дополняет строки VR CS пробелом
+    /// до чётной длины, и «MR » — та же модальность, что «MR».
+    /// </summary>
+    /// <param name="dataset">Набор тегов файла.</param>
+    /// <returns><c>true</c>, если модальность МРТ или не объявлена.</returns>
+    private static bool IsMagneticResonance(DicomDataset dataset)
+    {
+        var modality = dataset.GetSingleValueOrDefault(DicomTag.Modality, string.Empty)?.Trim();
+
+        return string.IsNullOrEmpty(modality)
+            || string.Equals(modality, "MR", StringComparison.Ordinal);
     }
 
     /// <summary>

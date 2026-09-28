@@ -238,7 +238,7 @@ public sealed class CompositionRoot : IDisposable
         // предлагает выбрать. Правило то же, что у выбора серии.
         var study = Hydrocephalus.Application.AnalyzeStudyUseCase.SelectAnalysableStudy(scan.Studies)
             ?? throw new DomainRuleViolationException(
-                "The import source contains no readable imaging study.");
+                Hydrocephalus.Infrastructure.Dicom.StudyImporter.NoReadableStudyMessage(scan));
 
         this.scanned = scan;
 
