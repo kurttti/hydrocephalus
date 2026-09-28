@@ -39,6 +39,7 @@ public sealed class StudyView : INotifyPropertyChanged
             new PlaneView(volume, mask, VolumeAxis.AcrossColumns, this.window, review),
         ];
 
+        this.Volume = volume;
         this.HasMask = mask is not null;
 
         var grid = volume.Grid;
@@ -54,6 +55,12 @@ public sealed class StudyView : INotifyPropertyChanged
 
     /// <summary>Три вида объёма.</summary>
     public IReadOnlyList<PlaneView> Planes { get; }
+
+    /// <summary>
+    /// Объём исследования. Нужен ручному измерению: признак считается в сетке
+    /// объёма и в миллиметрах системы координат пациента, а не по показанному срезу.
+    /// </summary>
+    public IVoxelVolume Volume { get; }
 
     /// <summary>Признак наличия маски.</summary>
     public bool HasMask { get; }

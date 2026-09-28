@@ -112,6 +112,37 @@
                           Unchecked="OnReviewChanged"
                           ToolTip="Вместо маски показать, что метод выбрал (оранжевый) и какой ликвор отбросил (зелёный). В измерение не идёт." />
 
+                <!-- Ручная линейка индекса Эванса. Нужна потому, что
+                     автоматический индекс выводится из маски объёмной серии, а в
+                     контрольной группе ни одной пригодной объёмной серии нет:
+                     сравнение групп возможно только по толстосрезовым, руками. -->
+                <CheckBox x:Name="RulerToggle"
+                          Content="_Линейка Эванса"
+                          Margin="12,0,0,0"
+                          VerticalAlignment="Center"
+                          Foreground="#E6E6EA"
+                          IsChecked="False"
+                          IsEnabled="False"
+                          Checked="OnRulerChanged"
+                          Unchecked="OnRulerChanged"
+                          ToolTip="Отметить четыре точки на аксиальном срезе: два конца ширины передних рогов, затем два конца внутреннего диаметра черепа." />
+
+                <Button x:Name="RulerUndo"
+                        Content="Отменить точку"
+                        Margin="8,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center"
+                        IsEnabled="False"
+                        Click="OnRulerUndo" />
+
+                <Button x:Name="RulerReset"
+                        Content="Сбросить"
+                        Margin="6,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center"
+                        IsEnabled="False"
+                        Click="OnRulerReset" />
+
                 <TextBlock Text="Центр" Foreground="#9A9AA6" Margin="24,0,6,0" VerticalAlignment="Center" />
                 <Slider x:Name="CenterSlider" Width="150" VerticalAlignment="Center"
                         ValueChanged="OnWindowChanged" IsEnabled="False" />
@@ -134,6 +165,11 @@
             <!-- Сообщение отдельной строкой и с переносом: в одной строке со сведениями
                  об установке причина отказа обрезалась на полуслове. -->
             <TextBlock x:Name="StatusText" Foreground="#9A9AA6" TextWrapping="Wrap" Margin="0,0,0,4" Text="Исследование не открыто." />
+
+            <!-- Состояние ручной линейки: сколько точек отмечено и что вышло.
+                 Отдельной строкой, а не поверх состояния сегментации: обе нужны
+                 одновременно, когда автоматическое измерение отказало. -->
+            <TextBlock x:Name="RulerText" Foreground="#9A9AA6" TextWrapping="Wrap" Margin="0,0,0,4" Visibility="Collapsed" />
             <DockPanel>
                 <TextBlock DockPanel.Dock="Right"
                            Foreground="#7A7A88"

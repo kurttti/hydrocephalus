@@ -10,7 +10,9 @@ using Hydrocephalus.Desktop.Reporting;
 using Hydrocephalus.Desktop.Results;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Access;
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Reporting;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Infrastructure.Volumes;
 using Microsoft.Win32;
 
@@ -49,6 +51,10 @@ public partial class MainWindow : Window
     private string? displayedSeriesId;
 
     private string? displayedStudyId;
+
+    // Разметка ручного измерения: живёт, пока открыто исследование, и привязана
+    // к оси показанной аксиальной плоскости.
+    private ManualEvansMarking? marking;
 
     /// <summary>Создаёт главное окно.</summary>
     public MainWindow()
@@ -173,6 +179,12 @@ public partial class MainWindow : Window
     private void OfferOtherStudies(CompositionRoot composition)
     {
         this.study = null;
+        this.marking = null;
+        this.RulerToggle.IsChecked = false;
+        this.RulerToggle.IsEnabled = false;
+        this.RulerText.Visibility = Visibility.Collapsed;
+        this.RulerUndo.IsEnabled = false;
+        this.RulerReset.IsEnabled = false;
         this.surfaces.Clear();
         this.PlaneGrid.Children.Clear();
         this.SeriesSelector.ItemsSource = null;
@@ -405,11 +417,22 @@ public partial class MainWindow : Window
         {
             var surface = new PlaneSurface(view.Planes[index]);
 
+            surface.Pressed += this.OnSurfacePressed;
+
             Grid.SetColumn(surface.Root, index);
             Grid.SetColumnSpan(surface.Root, view.IsThickSliced ? 3 : 1);
             this.PlaneGrid.Children.Add(surface.Root);
             this.surfaces.Add(surface);
         }
+
+        // Разметка от прошлого исследования не переносится: её точки — отсчёты
+        // другой сетки, и молча пережившая показ линейка мерила бы не то.
+        this.marking = null;
+        this.RulerToggle.IsChecked = false;
+        this.RulerToggle.IsEnabled = this.AxialSurface() is not null;
+        this.RulerText.Visibility = Visibility.Collapsed;
+        this.RulerUndo.IsEnabled = false;
+        this.RulerReset.IsEnabled = false;
 
         this.ConfigureWindowSliders(view);
         this.ConfigureStudySelector(opened);
@@ -751,6 +774,141 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnRulerChanged(object sender, RoutedEventArgs e)
+    {
+        var axial = this.AxialSurface();
+
+        if (this.RulerToggle.IsChecked != true || axial is null)
+        {
+            this.marking = null;
+            this.RulerText.Visibility = Visibility.Collapsed;
+            this.RulerUndo.IsEnabled = false;
+            this.RulerReset.IsEnabled = false;
+
+            return;
+        }
+
+        this.marking = new ManualEvansMarking(axial.View.Axis);
+        this.RulerText.Visibility = Visibility.Visible;
+        this.ShowMarkingState("Отметьте два конца ширины передних рогов, затем два конца внутреннего диаметра черепа.");
+    }
+
+    private void OnRulerUndo(object sender, RoutedEventArgs e)
+    {
+        if (this.marking is null)
+        {
+            return;
+        }
+
+        this.ShowMarkingState(
+            this.marking.UndoLast() ? "Последняя точка снята." : "Снимать нечего.");
+    }
+
+    private void OnRulerReset(object sender, RoutedEventArgs e)
+    {
+        if (this.marking is null)
+        {
+            return;
+        }
+
+        this.marking.Reset();
+        this.ShowMarkingState("Разметка сброшена.");
+    }
+
+    /// <summary>
+    /// Принимает отмеченную точку.
+    ///
+    /// Нажатие приходит с любой поверхности, но мерить индекс Эванса можно только
+    /// на аксиальной: определение признака плоскостью не безразлично, и точка,
+    /// поставленная на корональном виде, дала бы число того же вида и другого смысла.
+    /// </summary>
+    private void OnSurfacePressed(PlaneSurface surface, int x, int y)
+    {
+        if (this.study is null || this.marking is null || surface.View.Plane != ImagingPlane.Axial)
+        {
+            return;
+        }
+
+        var voxel = surface.View.VoxelAt(x, y);
+
+        if (voxel is null)
+        {
+            return;
+        }
+
+        var outcome = this.marking.Add(voxel.Value);
+
+        this.ShowMarkingState(outcome switch
+        {
+            MarkingOutcome.RestartedOnAnotherPlane =>
+                "Срез сменился — разметка начата заново с этой точки.",
+            MarkingOutcome.AlreadyComplete =>
+                "Все четыре точки уже отмечены; снимите точку или сбросьте разметку.",
+            _ => null,
+        });
+    }
+
+    private PlaneSurface? AxialSurface() =>
+        this.surfaces.FirstOrDefault(surface => surface.View.Plane == ImagingPlane.Axial);
+
+    /// <summary>
+    /// Показывает, что отмечено и что из этого вышло.
+    /// </summary>
+    /// <param name="note">Пояснение к последнему действию либо <see langword="null"/>.</param>
+    private void ShowMarkingState(string? note)
+    {
+        if (this.study is null || this.marking is null)
+        {
+            return;
+        }
+
+        this.RulerUndo.IsEnabled = this.marking.Points.Count > 0;
+        this.RulerReset.IsEnabled = this.marking.Points.Count > 0;
+
+        var counted = string.Create(
+            CultureInfo.CurrentCulture,
+            $"Отмечено точек: {this.marking.Points.Count} из {ManualEvansMarking.RequiredPoints}.");
+
+        if (!this.marking.IsComplete)
+        {
+            this.RulerText.Foreground = NeutralBrush;
+            this.RulerText.Text = note is null ? counted : counted + " " + note;
+
+            return;
+        }
+
+        var result = this.marking.Measure(this.study.Volume);
+
+        if (result.Refusal is { } refusal)
+        {
+            this.RulerText.Foreground = BlockingBrush;
+            this.RulerText.Text = counted + " " + DescribeRefusal(refusal);
+
+            return;
+        }
+
+        var index = result.Biomarker!.Value;
+
+        // Вне диапазона правдоподобия число не скрывается, но и не выдаётся за
+        // измерение: так же, как у автоматического пути.
+        this.RulerText.Foreground = result.Biomarker.IsOutOfRange ? WarningBrush : NeutralBrush;
+
+        this.RulerText.Text = string.Create(
+            CultureInfo.CurrentCulture,
+            $"Индекс Эванса: {index:0.000}{(result.Biomarker.IsOutOfRange
+                ? " — вне правдоподобного диапазона, проверьте постановку точек"
+                : string.Empty)}");
+    }
+
+    private static string DescribeRefusal(ManualEvansRefusal refusal) => refusal switch
+    {
+        ManualEvansRefusal.PointsIncomplete => "Отмечены не все четыре точки.",
+        ManualEvansRefusal.PointsOnDifferentPlanes => "Точки лежат на разных срезах.",
+        ManualEvansRefusal.SkullDiameterIsZero => "Концы диаметра черепа совпали.",
+        ManualEvansRefusal.PlaneIsNotAxial => "Срез не аксиальный: индекс Эванса определён только на нём.",
+        _ => "Измерение не выполнено.",
+    };
+
     /// <summary>
     /// Один вид: заголовок, изображение, подписи сторон и ползунок среза.
     ///
@@ -802,6 +960,10 @@ public partial class MainWindow : Window
             // Колесо мыши листает срезы — привычный для станции жест.
             canvas.MouseWheel += this.OnMouseWheel;
 
+            // Нажатие отдаётся наружу уже пикселом изображения: перевод точки
+            // элемента в пиксел — дело вывода, а что с ним делать — дело окна.
+            this.image.MouseLeftButtonDown += this.OnImagePressed;
+
             var panel = new DockPanel { Margin = new Thickness(4) };
 
             DockPanel.SetDock(this.title, Dock.Top);
@@ -817,6 +979,12 @@ public partial class MainWindow : Window
         }
 
         internal FrameworkElement Root { get; }
+
+        /// <summary>Вид, показанный этой поверхностью.</summary>
+        internal PlaneView View => this.view;
+
+        /// <summary>Нажатие на изображении: столбец и строка показанного среза.</summary>
+        internal event Action<PlaneSurface, int, int>? Pressed;
 
         internal void Redraw()
         {
@@ -861,6 +1029,31 @@ public partial class MainWindow : Window
             this.position.Text = string.Create(
                 CultureInfo.CurrentCulture,
                 $"Срез {this.view.Index + 1} из {this.view.Count}");
+        }
+
+        private void OnImagePressed(object sender, MouseButtonEventArgs args)
+        {
+            if (this.Pressed is null || this.image.Source is not BitmapSource bitmap)
+            {
+                return;
+            }
+
+            var point = args.GetPosition(this.image);
+
+            var pixel = ImagePointing.PixelAt(
+                point.X,
+                point.Y,
+                this.image.ActualWidth,
+                this.image.ActualHeight,
+                bitmap.PixelWidth,
+                bitmap.PixelHeight);
+
+            if (pixel is null)
+            {
+                return;
+            }
+
+            this.Pressed(this, pixel.Value.X, pixel.Value.Y);
         }
 
         private static TextBlock Label(HorizontalAlignment horizontal, VerticalAlignment vertical) => new()
