@@ -1,6 +1,7 @@
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Segmentation;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.Segmentation;
 using Hydrocephalus.Infrastructure.Volumes;
 
@@ -245,6 +246,76 @@ public sealed class PlaneViewTests
 
         Assert.Throws<ArgumentException>(
             () => PlaneComposer.Compose(view.Image, new byte[3]));
+    }
+
+    [Theory]
+    [InlineData(VolumeAxis.AcrossSlices)]
+    [InlineData(VolumeAxis.AcrossRows)]
+    [InlineData(VolumeAxis.AcrossColumns)]
+    public void Each_point_of_a_shown_slice_names_a_different_voxel_of_that_slice(VolumeAxis axis)
+    {
+        // Ручное измерение стоит на этом отображении: если два разных места на
+        // экране дадут один воксел или одно место — соседний, точки сядут не
+        // туда, а число выйдет правдоподобным. Поэтому проверяется взаимная
+        // однозначность, а не отдельный удачный случай.
+        //
+        // Сетка 9 на 7 на 5 с разным шагом по осям: на кубической сетке
+        // перестановка осей не обнаруживается.
+        var view = View(axis);
+        var image = view.Image;
+
+        var found = new HashSet<VoxelPosition>();
+
+        for (var y = 0; y < image.Height; y++)
+        {
+            for (var x = 0; x < image.Width; x++)
+            {
+                var voxel = view.VoxelAt(x, y);
+
+                Assert.NotNull(voxel);
+                Assert.True(found.Add(voxel.Value), "две точки экрана указали на один воксел");
+
+                Assert.InRange(voxel.Value.Column, 0, Grid.Dimensions.Columns - 1);
+                Assert.InRange(voxel.Value.Row, 0, Grid.Dimensions.Rows - 1);
+                Assert.InRange(voxel.Value.Slice, 0, Grid.Dimensions.Slices - 1);
+            }
+        }
+
+        Assert.Equal(image.Width * image.Height, found.Count);
+    }
+
+    [Fact]
+    public void A_point_outside_the_shown_slice_names_no_voxel()
+    {
+        // Промах мимо изображения — не измерение. Ближайший воксел здесь был бы
+        // хуже отказа: точка, поставленная за краем черепа, дала бы диаметр
+        // меньше настоящего и индекс больше настоящего.
+        var view = View(VolumeAxis.AcrossSlices);
+        var image = view.Image;
+
+        Assert.Null(view.VoxelAt(-1, 0));
+        Assert.Null(view.VoxelAt(0, -1));
+        Assert.Null(view.VoxelAt(image.Width, 0));
+        Assert.Null(view.VoxelAt(0, image.Height));
+    }
+
+    [Fact]
+    public void A_shown_point_names_a_voxel_of_the_slice_in_view()
+    {
+        // Перелистывание меняет ответ: точка того же места экрана обязана
+        // указывать на воксел показанного среза, а не запомненного.
+        var view = View(VolumeAxis.AcrossSlices);
+
+        var first = view.VoxelAt(3, 2);
+        view.Step(1);
+        var second = view.VoxelAt(3, 2);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(2, first.Value.Slice);
+        Assert.Equal(3, second.Value.Slice);
+        Assert.Equal(first.Value.Column, second.Value.Column);
+        Assert.Equal(first.Value.Row, second.Value.Row);
     }
 
     private static PlaneView View(VolumeAxis axis) =>

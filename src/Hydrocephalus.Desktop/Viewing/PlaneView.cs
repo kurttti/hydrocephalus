@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.Segmentation;
 using Hydrocephalus.Infrastructure.Volumes;
 
@@ -204,6 +205,40 @@ public sealed class PlaneView : INotifyPropertyChanged
 
     /// <summary>Подписи сторон изображения.</summary>
     public EdgeLabels Labels => this.Image.Labels;
+
+    /// <summary>
+    /// Находит воксел объёма под точкой показанного среза.
+    ///
+    /// Нужно ручному измерению: врач указывает точку на изображении, приведённом
+    /// к радиологической ориентации, а мерить признак нужно в сетке объёма и в
+    /// миллиметрах системы координат пациента.
+    ///
+    /// Точки задаются целыми индексами пикселов — той же сеткой, в которой
+    /// рисуется оверлей. Дробная точность здесь не нужна, а половина пиксела
+    /// разницы в соглашении об округлении дала бы смещение, которое на экране
+    /// выглядит правдоподобно.
+    /// </summary>
+    /// <param name="x">Столбец точки на показанном срезе.</param>
+    /// <param name="y">Строка точки на показанном срезе.</param>
+    /// <returns>
+    /// Положение вокселя либо <see langword="null"/>, если точка вне среза.
+    /// </returns>
+    public VoxelPosition? VoxelAt(int x, int y)
+    {
+        var image = this.Image;
+
+        if (x < 0 || y < 0 || x >= image.Width || y >= image.Height)
+        {
+            return null;
+        }
+
+        var (sourceX, sourceY) = DisplayOrientation.ToSource(
+            x, y, image.Width, image.Height, this.transform);
+
+        var (column, row, slice) = PlaneAddressing.Locate(this.Axis, this.index, sourceX, sourceY);
+
+        return new VoxelPosition(column, row, slice);
+    }
 
     /// <summary>Перелистывает срез на заданное число позиций.</summary>
     /// <param name="delta">Смещение; отрицательное листает назад.</param>
