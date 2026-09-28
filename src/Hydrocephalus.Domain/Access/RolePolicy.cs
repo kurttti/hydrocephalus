@@ -43,6 +43,7 @@ public static class RolePolicy
                 Capability.AnalyseStudy,
                 Capability.ExportDeidentifiedReport,
                 Capability.ExportClinicalReport,
+                Capability.RecordMeasurement,
             },
 
             // Исследователь работает с обезличенными данными. Клинический

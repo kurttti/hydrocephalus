@@ -11,6 +11,7 @@ using Hydrocephalus.Desktop.Results;
 using Hydrocephalus.Desktop.Viewing;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Infrastructure.Volumes;
@@ -55,6 +56,14 @@ public partial class MainWindow : Window
     // Разметка ручного измерения: живёт, пока открыто исследование, и привязана
     // к оси показанной аксиальной плоскости.
     private ManualEvansMarking? marking;
+
+    // Измерение, готовое к записи: непустое только когда отмечены все четыре
+    // точки и значение правдоподобно.
+    private Biomarker? recorded;
+
+    // Состав показанного исследования: нужен, чтобы перерисовать экран результата
+    // после записи измерения, не открывая исследование заново.
+    private Results.AnalysedStudy? analysed;
 
     /// <summary>Создаёт главное окно.</summary>
     public MainWindow()
@@ -185,6 +194,7 @@ public partial class MainWindow : Window
         this.RulerText.Visibility = Visibility.Collapsed;
         this.RulerUndo.IsEnabled = false;
         this.RulerReset.IsEnabled = false;
+        this.RulerRecord.IsEnabled = false;
         this.surfaces.Clear();
         this.PlaneGrid.Children.Clear();
         this.SeriesSelector.ItemsSource = null;
@@ -433,10 +443,12 @@ public partial class MainWindow : Window
         this.RulerText.Visibility = Visibility.Collapsed;
         this.RulerUndo.IsEnabled = false;
         this.RulerReset.IsEnabled = false;
+        this.RulerRecord.IsEnabled = false;
 
         this.ConfigureWindowSliders(view);
         this.ConfigureStudySelector(opened);
         this.ConfigureSeriesSelector(opened.Analysed);
+        this.analysed = opened.Analysed;
         this.ShowResult(ResultReadout.Describe(opened.Report, opened.Analysed));
 
         this.StatusText.Text = SegmentationReadout.Describe(opened.Segmentation, opened.Analysed.Analysed.Tier, opened.Evans);
@@ -784,6 +796,7 @@ public partial class MainWindow : Window
             this.RulerText.Visibility = Visibility.Collapsed;
             this.RulerUndo.IsEnabled = false;
             this.RulerReset.IsEnabled = false;
+            this.RulerRecord.IsEnabled = false;
 
             return;
         }
@@ -848,6 +861,47 @@ public partial class MainWindow : Window
         });
     }
 
+    private async void OnRulerRecord(object sender, RoutedEventArgs e)
+    {
+        var composition = Current.Composition;
+
+        if (this.recorded is not { } measurement || composition is null || this.analysed is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var report = await composition
+                .RecordMeasurementAsync(measurement, CancellationToken.None)
+                .ConfigureAwait(true);
+
+            // Записанное больше не предлагается записать: повторное нажатие
+            // сделало бы вторую версию отчёта с тем же числом.
+            this.recorded = null;
+            this.RulerRecord.IsEnabled = false;
+
+            this.RulerText.Foreground = NeutralBrush;
+            this.RulerText.Text = string.Create(
+                CultureInfo.CurrentCulture,
+                $"Индекс Эванса {measurement.Value:0.000} записан в отчёт.");
+
+            // Экран результата показывает новую версию: иначе измерение было бы
+            // записано, а на экране его бы не было.
+            this.ShowResult(ResultReadout.Describe(report, this.analysed));
+        }
+        catch (Exception error) when (error is Hydrocephalus.Domain.DomainRuleViolationException
+            or AccessDeniedException
+            or System.IO.IOException
+            or InvalidOperationException)
+        {
+            this.RulerText.Foreground = BlockingBrush;
+            // Текст исключения интерфейсом не выводится: он может нести путь
+            // файла, а путь источника содержит фамилию. Перевод делает ErrorReadout.
+            this.RulerText.Text = "Записать не удалось. " + ErrorReadout.Describe(error);
+        }
+    }
+
     private PlaneSurface? AxialSurface() =>
         this.surfaces.FirstOrDefault(surface => surface.View.Plane == ImagingPlane.Axial);
 
@@ -864,6 +918,8 @@ public partial class MainWindow : Window
 
         this.RulerUndo.IsEnabled = this.marking.Points.Count > 0;
         this.RulerReset.IsEnabled = this.marking.Points.Count > 0;
+        this.RulerRecord.IsEnabled = false;
+        this.recorded = null;
 
         var counted = string.Create(
             CultureInfo.CurrentCulture,
@@ -897,7 +953,13 @@ public partial class MainWindow : Window
             CultureInfo.CurrentCulture,
             $"Индекс Эванса: {index:0.000}{(result.Biomarker.IsOutOfRange
                 ? " — вне правдоподобного диапазона, проверьте постановку точек"
-                : string.Empty)}");
+                : " — можно записать в отчёт")}");
+
+        // Записывается только правдоподобное. Автоматический путь заведомо
+        // неверное значение записывает, потому что исправить его некому; здесь
+        // есть кому, а хранилище отчётов неизменно — записанное останется.
+        this.recorded = result.Biomarker.IsOutOfRange ? null : result.Biomarker;
+        this.RulerRecord.IsEnabled = this.recorded is not null;
     }
 
     private static string DescribeRefusal(ManualEvansRefusal refusal) => refusal switch

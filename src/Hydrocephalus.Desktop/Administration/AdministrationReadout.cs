@@ -375,6 +375,7 @@ public static class AdministrationReadout
         AuditEventCode.ReportExported => "Отчёт экспортирован",
         AuditEventCode.WorkingCopiesSwept => "Уборка рабочих копий",
         AuditEventCode.ReportPreviewed => "Отчёт показан перед экспортом",
+        AuditEventCode.MeasurementRecordedByClinician => "Врач записал измерение в отчёт",
 
         // Код, которого нет в этой версии приложения, читается как неизвестный,
         // а не пропускается: запись, сделанная более новой версией, должна

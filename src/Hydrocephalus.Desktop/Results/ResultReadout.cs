@@ -92,6 +92,7 @@ public static class ResultReadout
     {
         ["volume.ventricular-system"] = "Объём желудочковой системы",
         ["evans-index"] = "Индекс Эванса",
+        ["evans-index-manual"] = "Индекс Эванса, измерен врачом",
         ["callosal-angle"] = "Каллозальный угол",
     };
 

@@ -46,6 +46,8 @@ public sealed class CompositionRoot : IDisposable
 
     private readonly Hydrocephalus.Application.ExportReportUseCase exportReport;
 
+    private readonly Hydrocephalus.Application.RecordManualMeasurementUseCase recordMeasurement;
+
     private readonly Hydrocephalus.Application.ReadAuditJournalUseCase readAuditJournal;
 
     private readonly ApplicationPaths paths;
@@ -66,6 +68,7 @@ public sealed class CompositionRoot : IDisposable
         Hydrocephalus.Application.AnalyzeStudyUseCase analyzeStudy,
         Hydrocephalus.Application.ExportDatasetManifestUseCase exportDatasetManifest,
         Hydrocephalus.Application.ExportReportUseCase exportReport,
+        Hydrocephalus.Application.RecordManualMeasurementUseCase recordMeasurement,
         Hydrocephalus.Application.ReadAuditJournalUseCase readAuditJournal,
         StudyImporter importer,
         HashChainAuditLog auditLog,
@@ -77,6 +80,7 @@ public sealed class CompositionRoot : IDisposable
         this.AnalyzeStudy = analyzeStudy;
         this.ExportDatasetManifest = exportDatasetManifest;
         this.exportReport = exportReport;
+        this.recordMeasurement = recordMeasurement;
         this.readAuditJournal = readAuditJournal;
         this.importer = importer;
         this.auditLog = auditLog;
@@ -174,6 +178,13 @@ public sealed class CompositionRoot : IDisposable
             auditLog,
             TimeProvider.System);
 
+        // Хранилище то же, что у анализа: ручное измерение ложится новой версией
+        // рядом с прошлыми отчётами того же исследования, а не в отдельное место.
+        var recordMeasurement = new Hydrocephalus.Application.RecordManualMeasurementUseCase(
+            new JsonReportStore(paths.ReportRoot),
+            auditLog,
+            TimeProvider.System);
+
         var exportReport = new Hydrocephalus.Application.ExportReportUseCase(
             // Оба слоя отчёта: JSON остаётся источником истины, PDF порождается
             // из записанного файла (ADR 0005).
@@ -198,6 +209,7 @@ public sealed class CompositionRoot : IDisposable
             useCase,
             exportDatasetManifest,
             exportReport,
+            recordMeasurement,
             readAuditJournal,
             importer,
             auditLog,
@@ -467,6 +479,34 @@ public sealed class CompositionRoot : IDisposable
             cancellationToken).ConfigureAwait(false);
 
         return DirectoryOf(reference);
+    }
+
+    /// <summary>
+    /// Записывает в отчёт измерение, выполненное врачом вручную.
+    ///
+    /// Записывается в отчёт открытой серии: <c>this.report</c> относится к той
+    /// серии, которую показывает экран, потому что смена серии заново запускает
+    /// анализ и заменяет обе величины сразу. Иначе отметка, сделанная на одной
+    /// серии, попала бы в отчёт другой и выглядела бы правильной.
+    /// </summary>
+    /// <param name="measurement">Измерение.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Новая версия отчёта.</returns>
+    /// <exception cref="InvalidOperationException">Если исследование не открыто.</exception>
+    public async Task<AnalysisReport> RecordMeasurementAsync(
+        Domain.Measurements.Biomarker measurement,
+        CancellationToken cancellationToken)
+    {
+        var current = this.report
+            ?? throw new InvalidOperationException(
+                "There is no current report to record a measurement into: no study is open, "
+                + "or the last analysis did not finish.");
+
+        this.report = await this.recordMeasurement
+            .ExecuteAsync(current, measurement, this.Actor, cancellationToken)
+            .ConfigureAwait(false);
+
+        return this.report;
     }
 
     /// <summary>

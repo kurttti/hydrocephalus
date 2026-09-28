@@ -143,6 +143,15 @@
                         IsEnabled="False"
                         Click="OnRulerReset" />
 
+                <Button x:Name="RulerRecord"
+                        Content="_Записать в отчёт"
+                        Margin="6,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center"
+                        IsEnabled="False"
+                        Click="OnRulerRecord"
+                        ToolTip="Сохранить измерение новой версией отчёта. Недоступно, пока значение вне правдоподобного диапазона: точки нужно поставить заново, а не записывать заведомо неверное число." />
+
                 <TextBlock Text="Центр" Foreground="#9A9AA6" Margin="24,0,6,0" VerticalAlignment="Center" />
                 <Slider x:Name="CenterSlider" Width="150" VerticalAlignment="Center"
                         ValueChanged="OnWindowChanged" IsEnabled="False" />
