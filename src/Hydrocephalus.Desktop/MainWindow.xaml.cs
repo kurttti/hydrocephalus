@@ -803,7 +803,7 @@ public partial class MainWindow : Window
 
         this.marking = new ManualEvansMarking(axial.View.Axis);
         this.RulerText.Visibility = Visibility.Visible;
-        this.ShowMarkingState("Отметьте два конца ширины передних рогов, затем два конца внутреннего диаметра черепа.");
+        this.ShowMarkingState("Отметьте два конца внутреннего диаметра черепа — они задают ось, — затем два конца ширины передних рогов.");
     }
 
     private void OnRulerUndo(object sender, RoutedEventArgs e)
@@ -949,9 +949,16 @@ public partial class MainWindow : Window
         // измерение: так же, как у автоматического пути.
         this.RulerText.Foreground = result.Biomarker.IsOutOfRange ? WarningBrush : NeutralBrush;
 
+        // Поворот показывается вместе с индексом: он объясняет, почему
+        // автоматическое измерение той же серии может разойтись с ручным —
+        // автомат меряет вдоль строк кадра и к повороту чувствителен.
+        var rotation = result.RotationDegrees is { } degrees
+            ? string.Create(CultureInfo.CurrentCulture, $"; поворот головы {degrees:0.#}°")
+            : string.Empty;
+
         this.RulerText.Text = string.Create(
             CultureInfo.CurrentCulture,
-            $"Индекс Эванса: {index:0.000}{(result.Biomarker.IsOutOfRange
+            $"Индекс Эванса: {index:0.000}{rotation}{(result.Biomarker.IsOutOfRange
                 ? " — вне правдоподобного диапазона, проверьте постановку точек"
                 : " — можно записать в отчёт")}");
 

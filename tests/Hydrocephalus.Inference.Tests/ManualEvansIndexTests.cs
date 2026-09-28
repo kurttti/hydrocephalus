@@ -24,10 +24,10 @@ public sealed class ManualEvansIndexTests
         var volume = ThickSlicedAxial();
         var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
 
-        Assert.Equal(MarkingOutcome.Added, marking.Add(new VoxelPosition(60, 100, 10)));
-        Assert.Equal(MarkingOutcome.Added, marking.Add(new VoxelPosition(100, 100, 10)));
         Assert.Equal(MarkingOutcome.Added, marking.Add(new VoxelPosition(20, 100, 10)));
         Assert.Equal(MarkingOutcome.Added, marking.Add(new VoxelPosition(180, 100, 10)));
+        Assert.Equal(MarkingOutcome.Added, marking.Add(new VoxelPosition(60, 100, 10)));
+        Assert.Equal(MarkingOutcome.Added, marking.Add(new VoxelPosition(100, 100, 10)));
 
         Assert.True(marking.IsComplete);
 
@@ -72,12 +72,12 @@ public sealed class ManualEvansIndexTests
         // выглядело бы как обычное.
         var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
 
-        marking.Add(new VoxelPosition(60, 100, 10));
-        marking.Add(new VoxelPosition(100, 100, 10));
+        marking.Add(new VoxelPosition(20, 100, 10));
+        marking.Add(new VoxelPosition(180, 100, 10));
 
         Assert.Equal(
             MarkingOutcome.RestartedOnAnotherPlane,
-            marking.Add(new VoxelPosition(20, 100, 11)));
+            marking.Add(new VoxelPosition(60, 100, 11)));
 
         Assert.Single(marking.Points);
         Assert.Equal(11, marking.PlaneIndex);
@@ -88,9 +88,9 @@ public sealed class ManualEvansIndexTests
     {
         var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
 
-        marking.Add(new VoxelPosition(60, 100, 10));
-        marking.Add(new VoxelPosition(100, 100, 10));
         marking.Add(new VoxelPosition(20, 100, 10));
+        marking.Add(new VoxelPosition(180, 100, 10));
+        marking.Add(new VoxelPosition(60, 100, 10));
 
         var result = marking.Measure(ThickSlicedAxial());
 
@@ -105,10 +105,10 @@ public sealed class ManualEvansIndexTests
         // на экране два совпавших нажатия ничем не отличаются от одного.
         var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
 
+        marking.Add(new VoxelPosition(20, 100, 10));
+        marking.Add(new VoxelPosition(20, 100, 10));
         marking.Add(new VoxelPosition(60, 100, 10));
         marking.Add(new VoxelPosition(100, 100, 10));
-        marking.Add(new VoxelPosition(20, 100, 10));
-        marking.Add(new VoxelPosition(20, 100, 10));
 
         var result = marking.Measure(ThickSlicedAxial());
 
@@ -121,8 +121,8 @@ public sealed class ManualEvansIndexTests
     {
         var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
 
-        marking.Add(new VoxelPosition(60, 100, 10));
-        marking.Add(new VoxelPosition(100, 100, 10));
+        marking.Add(new VoxelPosition(20, 100, 10));
+        marking.Add(new VoxelPosition(180, 100, 10));
 
         Assert.True(marking.UndoLast());
         Assert.Single(marking.Points);
@@ -153,9 +153,9 @@ public sealed class ManualEvansIndexTests
 
         // Рога шире, чем полчерепа: 150мм против 160мм, отношение 0,94.
         marking.Add(new VoxelPosition(20, 100, 10));
-        marking.Add(new VoxelPosition(170, 100, 10));
-        marking.Add(new VoxelPosition(20, 100, 10));
         marking.Add(new VoxelPosition(180, 100, 10));
+        marking.Add(new VoxelPosition(20, 100, 10));
+        marking.Add(new VoxelPosition(170, 100, 10));
 
         var result = marking.Measure(ThickSlicedAxial());
 
@@ -176,14 +176,86 @@ public sealed class ManualEvansIndexTests
         Assert.Equal(VolumeAxis.AcrossSlices, result.Segments.AxialAcross);
     }
 
+    [Fact]
+    public void A_tilted_horn_pair_is_measured_along_the_skull_axis()
+    {
+        // Ради этого и менялся порядок. Оси сетки опорой быть не могут: голова
+        // в аппарате лежит не строго. Ось задаёт врач парой точек черепа, и
+        // отрезок рогов ложится на неё — иначе наклон нажатия завышал бы ширину
+        // на 1/cos, причём в числителе и знаменателе независимо.
+        var volume = ThickSlicedAxial();
+        var straight = new ManualEvansMarking(VolumeAxis.AcrossSlices);
+
+        straight.Add(new VoxelPosition(20, 100, 10));
+        straight.Add(new VoxelPosition(180, 100, 10));
+        straight.Add(new VoxelPosition(60, 100, 10));
+        straight.Add(new VoxelPosition(100, 100, 10));
+
+        var tilted = new ManualEvansMarking(VolumeAxis.AcrossSlices);
+
+        // Та же ширина рогов, но вторая точка смещена на 30 строк: по прямой это
+        // 50мм вместо 40, то есть индекс 0,3125 вместо 0,25.
+        tilted.Add(new VoxelPosition(20, 100, 10));
+        tilted.Add(new VoxelPosition(180, 100, 10));
+        tilted.Add(new VoxelPosition(60, 100, 10));
+        tilted.Add(new VoxelPosition(100, 130, 10));
+
+        Assert.Equal(
+            straight.Measure(volume).Biomarker!.Value,
+            tilted.Measure(volume).Biomarker!.Value,
+            precision: 9);
+
+        Assert.Equal(0.25, tilted.Measure(volume).Biomarker!.Value, precision: 9);
+    }
+
+    [Fact]
+    public void The_axis_the_clinician_set_is_reported_as_the_head_rotation()
+    {
+        // Угол между осью врача и горизонталью кадра — это и есть поворот головы
+        // в аппарате. Он нужен при сверке с автоматическим индексом: тот меряет
+        // вдоль строк и к повороту чувствителен.
+        var volume = ThickSlicedAxial();
+
+        Assert.Equal(0.0, Complete().Measure(volume).RotationDegrees!.Value, precision: 9);
+
+        var turned = new ManualEvansMarking(VolumeAxis.AcrossSlices);
+
+        // Череп отмерен под 45 градусов: 160 шагов вправо и 160 вниз.
+        turned.Add(new VoxelPosition(20, 20, 10));
+        turned.Add(new VoxelPosition(180, 180, 10));
+        turned.Add(new VoxelPosition(60, 60, 10));
+        turned.Add(new VoxelPosition(100, 100, 10));
+
+        Assert.Equal(45.0, turned.Measure(volume).RotationDegrees!.Value, tolerance: 1e-9);
+    }
+
+    [Fact]
+    public void The_drawn_segments_show_what_was_measured_and_not_what_was_clicked()
+    {
+        // Отрезки рисуются поверх среза, и показывать они должны измеренное:
+        // конец, положенный на ось, а не исходное нажатие. Иначе картинка
+        // объясняла бы число, которого нет.
+        var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
+
+        marking.Add(new VoxelPosition(20, 100, 10));
+        marking.Add(new VoxelPosition(180, 100, 10));
+        marking.Add(new VoxelPosition(60, 100, 10));
+        marking.Add(new VoxelPosition(100, 130, 10));
+
+        var segments = marking.Measure(ThickSlicedAxial()).Segments!;
+
+        Assert.Equal(100.0, segments.FrontalHornSecond.Column, precision: 9);
+        Assert.Equal(100.0, segments.FrontalHornSecond.Row, precision: 9);
+    }
+
     private static ManualEvansMarking Complete()
     {
         var marking = new ManualEvansMarking(VolumeAxis.AcrossSlices);
 
-        marking.Add(new VoxelPosition(60, 100, 10));
-        marking.Add(new VoxelPosition(100, 100, 10));
         marking.Add(new VoxelPosition(20, 100, 10));
         marking.Add(new VoxelPosition(180, 100, 10));
+        marking.Add(new VoxelPosition(60, 100, 10));
+        marking.Add(new VoxelPosition(100, 100, 10));
 
         return marking;
     }

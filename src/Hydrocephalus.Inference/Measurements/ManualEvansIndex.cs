@@ -35,6 +35,12 @@ public sealed record ManualEvansResult
 
     /// <summary>Причина отказа; <see langword="null"/>, если индекс посчитан.</summary>
     public ManualEvansRefusal? Refusal { get; init; }
+
+    /// <summary>
+    /// Отклонение оси измерения от горизонтали кадра в градусах — измеренный
+    /// поворот головы в аппарате. <see langword="null"/> при отказе.
+    /// </summary>
+    public double? RotationDegrees { get; init; }
 }
 
 /// <summary>
@@ -72,10 +78,25 @@ public enum MarkingOutcome
 /// <see cref="LinearBiomarkers.EvansIndex(IVoxelVolume, VolumeAxis, VoxelPosition, VoxelPosition, VoxelPosition, VoxelPosition, MeasurementQuality)"/>.
 /// Отношение, миллиметры системы координат пациента и диапазон правдоподобия
 /// там уже есть, и второй путь вычисления рано или поздно разошёлся бы с первым.
+///
+/// **Порядок точек: сначала череп, потом рога, и это не косметика.**
+/// Обе величины определения поперечные, то есть отмеряются вдоль одной оси.
+/// Оси сетки для этого не годятся: голова в аппарате лежит не строго, и при
+/// повороте на угол горизонтальная хорда черепа длиннее поперечника, а
+/// латеральные углы рогов перестают попадать на одну строку. Череп завышается,
+/// рога занижаются, и ошибки складываются — при 15 градусах индекс уходит вниз
+/// почти на 5%, то есть 0,30 читается как 0,286.
+///
+/// Поэтому ось задаёт врач: пара точек черепа определяет направление, а отрезок
+/// рогов **проецируется** на него. Положение головы в аппарате после этого не
+/// значит ничего — выравнивание идёт по анатомии, которую видно.
+///
+/// Череп первым потому, что он длиннее: та же погрешность в один пиксел даёт
+/// на базе 145мм наклон оси около 0,2 градуса, а на базе 40мм — около 0,6.
 /// </summary>
 public sealed class ManualEvansMarking
 {
-    /// <summary>Сколько точек нужно: два конца рогов и два конца диаметра черепа.</summary>
+    /// <summary>Сколько точек нужно: два конца диаметра черепа и два конца рогов.</summary>
     public const int RequiredPoints = 4;
 
     private readonly List<VoxelPosition> points = [];
@@ -176,13 +197,37 @@ public sealed class ManualEvansMarking
             return Refused(ManualEvansRefusal.PointsOnDifferentPlanes);
         }
 
+        var skullStart = this.points[0];
+        var skullEnd = this.points[1];
+        var hornStart = this.points[2];
+
+        var axis = Displacement(volume, skullStart, skullEnd);
+
+        if (axis.Length <= 0)
+        {
+            return Refused(ManualEvansRefusal.SkullDiameterIsZero);
+        }
+
+        // Отрезок рогов кладётся на ось черепа: в определении обе величины
+        // поперечные, то есть отмеряются вдоль одного направления. Кратность
+        // считается в системе пациента, а прикладывается к смещению в сетке —
+        // поэтому обратное преобразование не нужно, а точка остаётся на той же
+        // плоскости, на которой была отмечена.
+        var along = Displacement(volume, hornStart, this.points[3]).Dot(axis)
+            / axis.Dot(axis);
+
+        var hornEnd = new VoxelPosition(
+            hornStart.Column + ((skullEnd.Column - skullStart.Column) * along),
+            hornStart.Row + ((skullEnd.Row - skullStart.Row) * along),
+            hornStart.Slice + ((skullEnd.Slice - skullStart.Slice) * along));
+
         var segments = new EvansSegments(
             this.AxialAcross,
             this.PlaneIndex!.Value,
-            this.points[0],
-            this.points[1],
-            this.points[2],
-            this.points[3]);
+            hornStart,
+            hornEnd,
+            skullStart,
+            skullEnd);
 
         try
         {
@@ -205,18 +250,47 @@ public sealed class ManualEvansMarking
                     Method = measured.Method with { Code = LinearBiomarkers.ManualEvansIndexCode },
                 },
                 Segments = segments,
+                RotationDegrees = RotationFromImageAxis(volume, this.AxialAcross, axis),
             };
         }
         catch (DomainRuleViolationException)
         {
-            // Домен отказывает по двум оставшимся причинам: ось не ведёт
-            // вверх-вниз либо концы диаметра черепа совпали. Первая — свойство
-            // серии, вторая — промах постановки; различаются они по самим точкам.
-            return Refused(
-                this.points[2] == this.points[3]
-                    ? ManualEvansRefusal.SkullDiameterIsZero
-                    : ManualEvansRefusal.PlaneIsNotAxial);
+            // Нулевой диаметр отсеян выше, поэтому домен отказывает здесь по
+            // единственной оставшейся причине: ось не ведёт вверх-вниз, то есть
+            // плоскость не аксиальная.
+            return Refused(ManualEvansRefusal.PlaneIsNotAxial);
         }
+    }
+
+    /// <summary>
+    /// Насколько ось измерения отклонена от горизонтали кадра.
+    ///
+    /// Это измеренный поворот головы в аппарате: врач выравнивается по анатомии,
+    /// а горизонталь задана сеткой. Число нужно при сверке с автоматическим
+    /// индексом — тот меряет вдоль строк и потому к повороту чувствителен.
+    /// Возвращается острый угол: сторона, с которой отмерено, значения не имеет.
+    /// </summary>
+    private static double RotationFromImageAxis(
+        IVoxelVolume volume,
+        VolumeAxis axialAcross,
+        SpatialVector axis)
+    {
+        var (horizontal, _) = PlaneAddressing.DirectionsOf(volume.Geometry, axialAcross);
+
+        var cosine = Math.Abs(axis.Dot(horizontal.Normalized())) / axis.Length;
+
+        return double.RadiansToDegrees(Math.Acos(Math.Clamp(cosine, -1.0, 1.0)));
+    }
+
+    private static SpatialVector Displacement(
+        IVoxelVolume volume,
+        VoxelPosition from,
+        VoxelPosition to)
+    {
+        var start = PatientSpace.ToPatient(volume, from);
+        var end = PatientSpace.ToPatient(volume, to);
+
+        return new SpatialVector(end.X - start.X, end.Y - start.Y, end.Z - start.Z);
     }
 
     private static ManualEvansResult Refused(ManualEvansRefusal refusal) =>
