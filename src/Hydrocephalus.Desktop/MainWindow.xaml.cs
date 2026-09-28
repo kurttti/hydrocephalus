@@ -58,8 +58,9 @@ public partial class MainWindow : Window
     private ManualEvansMarking? marking;
 
     // Измерение, готовое к записи: непустое только когда отмечены все четыре
-    // точки и значение правдоподобно.
-    private Biomarker? recorded;
+    // точки и значение индекса правдоподобно. Признаков два — индекс и поворот
+    // головы: он выводится из заданной врачом оси и больше нигде не сохраняется.
+    private IReadOnlyList<Biomarker>? recorded;
 
     // Состав показанного исследования: нужен, чтобы перерисовать экран результата
     // после записи измерения, не открывая исследование заново.
@@ -865,7 +866,7 @@ public partial class MainWindow : Window
     {
         var composition = Current.Composition;
 
-        if (this.recorded is not { } measurement || composition is null || this.analysed is null)
+        if (this.recorded is not { } measurements || composition is null || this.analysed is null)
         {
             return;
         }
@@ -873,7 +874,7 @@ public partial class MainWindow : Window
         try
         {
             var report = await composition
-                .RecordMeasurementAsync(measurement, CancellationToken.None)
+                .RecordMeasurementAsync(measurements, CancellationToken.None)
                 .ConfigureAwait(true);
 
             // Записанное больше не предлагается записать: повторное нажатие
@@ -884,7 +885,8 @@ public partial class MainWindow : Window
             this.RulerText.Foreground = NeutralBrush;
             this.RulerText.Text = string.Create(
                 CultureInfo.CurrentCulture,
-                $"Индекс Эванса {measurement.Value:0.000} записан в отчёт.");
+                $"Индекс Эванса {measurements[0].Value:0.000} и поворот головы "
+                + $"{measurements[1].Value:0.#}° записаны в отчёт.");
 
             // Экран результата показывает новую версию: иначе измерение было бы
             // записано, а на экране его бы не было.
@@ -965,7 +967,12 @@ public partial class MainWindow : Window
         // Записывается только правдоподобное. Автоматический путь заведомо
         // неверное значение записывает, потому что исправить его некому; здесь
         // есть кому, а хранилище отчётов неизменно — записанное останется.
-        this.recorded = result.Biomarker.IsOutOfRange ? null : result.Biomarker;
+        // Правило одно на оба признака и повторяет проверку сценария: в
+        // неизменном хранилище записанное остаётся навсегда.
+        this.recorded = result.Biomarker.IsOutOfRange || result.Rotation is not { IsOutOfRange: false }
+            ? null
+            : [result.Biomarker, result.Rotation];
+
         this.RulerRecord.IsEnabled = this.recorded is not null;
     }
 

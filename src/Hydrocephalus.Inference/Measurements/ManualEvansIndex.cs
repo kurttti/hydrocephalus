@@ -37,10 +37,13 @@ public sealed record ManualEvansResult
     public ManualEvansRefusal? Refusal { get; init; }
 
     /// <summary>
-    /// Отклонение оси измерения от горизонтали кадра в градусах — измеренный
-    /// поворот головы в аппарате. <see langword="null"/> при отказе.
+    /// Поворот головы в плоскости кадра, выведенный из оси измерения;
+    /// <see langword="null"/> при отказе.
     /// </summary>
-    public double? RotationDegrees { get; init; }
+    public Biomarker? Rotation { get; init; }
+
+    /// <summary>Тот же поворот в градусах, для показа на экране.</summary>
+    public double? RotationDegrees => this.Rotation?.Value;
 }
 
 /// <summary>
@@ -250,7 +253,7 @@ public sealed class ManualEvansMarking
                     Method = measured.Method with { Code = LinearBiomarkers.ManualEvansIndexCode },
                 },
                 Segments = segments,
-                RotationDegrees = RotationFromImageAxis(volume, this.AxialAcross, axis),
+                Rotation = HeadRotation(volume, this.AxialAcross, axis, measured.Method.RequiredTier),
             };
         }
         catch (DomainRuleViolationException)
@@ -263,23 +266,64 @@ public sealed class ManualEvansMarking
     }
 
     /// <summary>
-    /// Насколько ось измерения отклонена от горизонтали кадра.
+    /// Насколько ось измерения отклонена от направления влево-вправо пациента.
     ///
-    /// Это измеренный поворот головы в аппарате: врач выравнивается по анатомии,
-    /// а горизонталь задана сеткой. Число нужно при сверке с автоматическим
-    /// индексом — тот меряет вдоль строк и потому к повороту чувствителен.
-    /// Возвращается острый угол: сторона, с которой отмерено, значения не имеет.
+    /// Это и есть поворот головы: система координат пациента задана укладкой на
+    /// столе, её ось X идёт налево, и если голова повёрнута, анатомическая
+    /// поперечная ось с ней расходится. Число нужно при сверке с автоматическим
+    /// индексом — тот меряет вдоль линии сетки и потому к повороту чувствителен.
+    ///
+    /// Опора берётся анатомическая, а не сеточная, и это не придирка: у объёма,
+    /// полученного сагиттально, «горизонталь» плоскости по адресации сетки
+    /// оказывается передне-задней осью, и отсчёт от неё даёт 90° на ровно
+    /// лежащей голове. Такое и вышло на первом же прогоне по реальной серии.
+    ///
+    /// Ось X проецируется в плоскость измерения: при косой плоскости она из неё
+    /// выходит, и угол между вектором плоскости и вектором вне её мерил бы не
+    /// поворот, а наклон плоскости. Возвращается острый угол: сторона, с которой
+    /// отмерено, значения не имеет.
     /// </summary>
-    private static double RotationFromImageAxis(
+    private static Biomarker HeadRotation(
         IVoxelVolume volume,
         VolumeAxis axialAcross,
-        SpatialVector axis)
+        SpatialVector axis,
+        AcquisitionTier requiredTier)
     {
-        var (horizontal, _) = PlaneAddressing.DirectionsOf(volume.Geometry, axialAcross);
+        var (horizontal, vertical) = PlaneAddressing.DirectionsOf(volume.Geometry, axialAcross);
 
-        var cosine = Math.Abs(axis.Dot(horizontal.Normalized())) / axis.Length;
+        var first = horizontal.Normalized();
+        var second = vertical.Normalized();
 
-        return double.RadiansToDegrees(Math.Acos(Math.Clamp(cosine, -1.0, 1.0)));
+        // Налево по соглашению DICOM — это +X системы координат пациента.
+        var left = new SpatialVector(1, 0, 0);
+
+        var inPlane = new SpatialVector(
+            (first.X * left.Dot(first)) + (second.X * left.Dot(second)),
+            (first.Y * left.Dot(first)) + (second.Y * left.Dot(second)),
+            (first.Z * left.Dot(first)) + (second.Z * left.Dot(second)));
+
+        var cosine = inPlane.Length <= 0
+            ? 1.0
+            : Math.Abs(axis.Dot(inPlane)) / (axis.Length * inPlane.Length);
+
+        var degrees = double.RadiansToDegrees(Math.Acos(Math.Clamp(cosine, -1.0, 1.0)));
+
+        return Biomarker.Create(
+            new MeasurementMethod
+            {
+                Code = LinearBiomarkers.HeadRotationCode,
+                DefinitionVersion = LinearBiomarkers.DefinitionVersion,
+                RequiredTier = requiredTier,
+                Reference = "docs/data/README.md, раздел «Ось измерения задаёт врач, а не сетка»",
+            },
+            volume.Geometry.Tier,
+            degrees,
+            MeasurementUnit.Degree,
+
+            // Надёжность та же, что у самого измерения: угол выводится из оси,
+            // которую задал врач, и отдельного источника ошибки не имеет.
+            MeasurementQuality.Reliable,
+            LinearBiomarkers.HeadRotationPlausibleRange);
     }
 
     private static SpatialVector Displacement(

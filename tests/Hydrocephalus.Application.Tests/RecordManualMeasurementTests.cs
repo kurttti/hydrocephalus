@@ -31,7 +31,7 @@ public sealed class RecordManualMeasurementTests
         var store = new RecordingReportStore();
 
         var recorded = await UseCase(store).ExecuteAsync(
-            Report(), Measurement(0.34), Clinician, CancellationToken.None);
+            Report(), [Measurement(0.34)], Clinician, CancellationToken.None);
 
         var stored = Assert.Single(store.Stored);
 
@@ -57,7 +57,7 @@ public sealed class RecordManualMeasurementTests
         var store = new RecordingReportStore();
 
         var recorded = await UseCase(store).ExecuteAsync(
-            Report(withVolume: true), Measurement(0.34), Clinician, CancellationToken.None);
+            Report(withVolume: true), [Measurement(0.34)], Clinician, CancellationToken.None);
 
         Assert.Equal(2, recorded.Biomarkers.Count);
         Assert.Contains(recorded.Biomarkers, biomarker => biomarker.Method.Code == "volume.ventricular-system");
@@ -72,10 +72,10 @@ public sealed class RecordManualMeasurementTests
         var useCase = UseCase(store);
 
         var first = await useCase.ExecuteAsync(
-            Report(), Measurement(0.34), Clinician, CancellationToken.None);
+            Report(), [Measurement(0.34)], Clinician, CancellationToken.None);
 
         var second = await useCase.ExecuteAsync(
-            first, Measurement(0.29), Clinician, CancellationToken.None);
+            first, [Measurement(0.29)], Clinician, CancellationToken.None);
 
         var manual = Assert.Single(
             second.Biomarkers,
@@ -88,6 +88,107 @@ public sealed class RecordManualMeasurementTests
     }
 
     [Fact]
+    public async Task The_index_and_the_head_rotation_are_written_as_one_version()
+    {
+        // Оба признака получены одним действием врача, поэтому и версия отчёта
+        // одна: раздельная запись дала бы две версии и два следа в журнале на
+        // одно измерение, а история измерений читается по версиям.
+        var store = new RecordingReportStore();
+        var audit = new RecordingAudit();
+
+        var recorded = await UseCase(store, audit).ExecuteAsync(
+            Report(),
+            [Measurement(0.34), Rotation(7.5)],
+            Clinician,
+            CancellationToken.None);
+
+        Assert.Single(store.Stored);
+        Assert.Equal(2, recorded.Biomarkers.Count);
+
+        var rotation = Assert.Single(
+            recorded.Biomarkers,
+            biomarker => biomarker.Method.Code == "head-rotation-in-plane");
+
+        Assert.Equal(7.5, rotation.Value, precision: 9);
+
+        Assert.Single(
+            audit.Events,
+            item => item.Code == AuditEventCode.MeasurementRecordedByClinician);
+    }
+
+    [Fact]
+    public async Task Measuring_again_replaces_both_and_keeps_the_rest()
+    {
+        // Замена идёт по коду каждого признака: перемеряли — обновились оба, а
+        // объём желудочковой системы, измеренный не этим действием, остался.
+        var store = new RecordingReportStore();
+        var useCase = UseCase(store);
+
+        var first = await useCase.ExecuteAsync(
+            Report(withVolume: true),
+            [Measurement(0.34), Rotation(7.5)],
+            Clinician,
+            CancellationToken.None);
+
+        var second = await useCase.ExecuteAsync(
+            first, [Measurement(0.29), Rotation(2.0)], Clinician, CancellationToken.None);
+
+        Assert.Equal(3, second.Biomarkers.Count);
+        Assert.Contains(second.Biomarkers, item => item.Method.Code == "volume.ventricular-system");
+
+        Assert.Equal(
+            0.29,
+            Assert.Single(second.Biomarkers, item => item.Method.Code == "evans-index-manual").Value,
+            precision: 9);
+
+        Assert.Equal(
+            2.0,
+            Assert.Single(second.Biomarkers, item => item.Method.Code == "head-rotation-in-plane").Value,
+            precision: 9);
+    }
+
+    [Fact]
+    public async Task An_implausible_value_is_refused_rather_than_written_for_good()
+    {
+        // Хранилище неизменно: записанное остаётся навсегда, а окно — не
+        // единственный возможный вызывающий. Найдено на прогоне, где точки
+        // пришли в старом порядке: отношение перевернулось, индекс вышел 3,02
+        // вместо 0,33 и лёг на диск в обход интерфейса.
+        var store = new RecordingReportStore();
+
+        await Assert.ThrowsAsync<Hydrocephalus.Domain.DomainRuleViolationException>(
+            () => UseCase(store).ExecuteAsync(
+                Report(), [Measurement(3.02), Rotation(7.5)], Clinician, CancellationToken.None));
+
+        Assert.Empty(store.Stored);
+    }
+
+    [Fact]
+    public async Task An_implausible_rotation_is_refused_too()
+    {
+        // Правило одно на оба признака: угол свыше 45 градусов вероятнее означает
+        // перепутанный порядок точек, чем такую укладку.
+        var store = new RecordingReportStore();
+
+        await Assert.ThrowsAsync<Hydrocephalus.Domain.DomainRuleViolationException>(
+            () => UseCase(store).ExecuteAsync(
+                Report(), [Measurement(0.34), Rotation(88.0)], Clinician, CancellationToken.None));
+
+        Assert.Empty(store.Stored);
+    }
+
+    [Fact]
+    public async Task Recording_nothing_is_refused_rather_than_writing_an_empty_version()
+    {
+        var store = new RecordingReportStore();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => UseCase(store).ExecuteAsync(
+            Report(), [], Clinician, CancellationToken.None));
+
+        Assert.Empty(store.Stored);
+    }
+
+    [Fact]
     public async Task The_report_given_in_is_not_changed()
     {
         // Отчёт, уже показанный врачу, менять нельзя: запись порождает новый,
@@ -95,7 +196,7 @@ public sealed class RecordManualMeasurementTests
         var store = new RecordingReportStore();
         var given = Report();
 
-        await UseCase(store).ExecuteAsync(given, Measurement(0.34), Clinician, CancellationToken.None);
+        await UseCase(store).ExecuteAsync(given, [Measurement(0.34)], Clinician, CancellationToken.None);
 
         Assert.Empty(given.Biomarkers);
         Assert.Equal(Analysed, given.CreatedAt);
@@ -110,7 +211,7 @@ public sealed class RecordManualMeasurementTests
         var audit = new RecordingAudit();
 
         await UseCase(new RecordingReportStore(), audit).ExecuteAsync(
-            Report(), Measurement(0.34), Clinician, CancellationToken.None);
+            Report(), [Measurement(0.34)], Clinician, CancellationToken.None);
 
         var recorded = Assert.Single(
             audit.Events,
@@ -137,7 +238,7 @@ public sealed class RecordManualMeasurementTests
         var actor = role == ClinicalRole.Researcher ? Researcher : Administrator;
 
         await Assert.ThrowsAsync<AccessDeniedException>(() => UseCase(store, audit).ExecuteAsync(
-            Report(), Measurement(0.34), actor, CancellationToken.None));
+            Report(), [Measurement(0.34)], actor, CancellationToken.None));
 
         Assert.Empty(store.Stored);
         Assert.Equal(AuditEventCode.AccessDenied, Assert.Single(audit.Events).Code);
@@ -160,6 +261,20 @@ public sealed class RecordManualMeasurementTests
         Unit = MeasurementUnit.Ratio,
         Quality = MeasurementQuality.Reliable,
         AllowedRange = new MeasurementRange(0.10, 0.60),
+    };
+
+    private static Biomarker Rotation(double degrees) => new()
+    {
+        Method = new MeasurementMethod
+        {
+            Code = "head-rotation-in-plane",
+            DefinitionVersion = "1.0.0",
+            RequiredTier = AcquisitionTier.Baseline,
+        },
+        Value = degrees,
+        Unit = MeasurementUnit.Degree,
+        Quality = MeasurementQuality.Reliable,
+        AllowedRange = new MeasurementRange(0.0, 45.0),
     };
 
     private static AnalysisReport Report(bool withVolume = false) => new()

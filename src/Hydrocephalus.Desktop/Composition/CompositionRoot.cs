@@ -489,12 +489,12 @@ public sealed class CompositionRoot : IDisposable
     /// анализ и заменяет обе величины сразу. Иначе отметка, сделанная на одной
     /// серии, попала бы в отчёт другой и выглядела бы правильной.
     /// </summary>
-    /// <param name="measurement">Измерение.</param>
+    /// <param name="measurements">Признаки одного измерения.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Новая версия отчёта.</returns>
     /// <exception cref="InvalidOperationException">Если исследование не открыто.</exception>
     public async Task<AnalysisReport> RecordMeasurementAsync(
-        Domain.Measurements.Biomarker measurement,
+        IReadOnlyList<Domain.Measurements.Biomarker> measurements,
         CancellationToken cancellationToken)
     {
         var current = this.report
@@ -503,7 +503,7 @@ public sealed class CompositionRoot : IDisposable
                 + "or the last analysis did not finish.");
 
         this.report = await this.recordMeasurement
-            .ExecuteAsync(current, measurement, this.Actor, cancellationToken)
+            .ExecuteAsync(current, measurements, this.Actor, cancellationToken)
             .ConfigureAwait(false);
 
         return this.report;

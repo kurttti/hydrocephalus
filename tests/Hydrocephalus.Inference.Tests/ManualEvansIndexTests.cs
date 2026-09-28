@@ -230,6 +230,48 @@ public sealed class ManualEvansIndexTests
     }
 
     [Fact]
+    public void A_straight_head_in_a_sagittally_acquired_volume_reads_as_no_rotation()
+    {
+        // Случай, на котором это и вскрылось. У сагиттального объёма столбцы идут
+        // спереди назад, строки сверху вниз, срезы слева направо. «Горизонталь»
+        // плоскости по адресации сетки оказывается тогда передне-задней осью, и
+        // отсчёт от неё дал бы 90 градусов на ровно лежащей голове.
+        //
+        // Опора анатомическая: ось X системы координат пациента. Отрезок вдоль
+        // срезов — это поперечник, и поворот обязан выйти нулевым.
+        var dimensions = new VolumeDimensions(200, 200, 200);
+
+        var volume = new TestVolume(
+            new SeriesGeometry
+            {
+                AcquisitionType = MrAcquisitionType.ThreeDimensional,
+                SliceThicknessMillimetres = 1.0,
+                SliceSpacingMillimetres = 1.0,
+                PixelSpacing = new InPlaneSpacing(1.0, 1.0),
+                Dimensions = dimensions,
+
+                // Столбцы вперёд-назад, строки вверх-вниз: срезы идут налево.
+                RowDirection = new SpatialVector(0, 1, 0),
+                ColumnDirection = new SpatialVector(0, 0, -1),
+                Origin = default,
+            },
+            new VolumeGrid(dimensions, 1.0, 1.0, 1.0));
+
+        var marking = new ManualEvansMarking(VolumeAxis.AcrossRows);
+
+        marking.Add(new VoxelPosition(100, 100, 20));
+        marking.Add(new VoxelPosition(100, 100, 180));
+        marking.Add(new VoxelPosition(100, 100, 80));
+        marking.Add(new VoxelPosition(100, 100, 120));
+
+        var result = marking.Measure(volume);
+
+        Assert.Null(result.Refusal);
+        Assert.Equal(0.0, result.RotationDegrees!.Value, tolerance: 1e-9);
+        Assert.Equal(0.25, result.Biomarker!.Value, precision: 9);
+    }
+
+    [Fact]
     public void The_drawn_segments_show_what_was_measured_and_not_what_was_clicked()
     {
         // Отрезки рисуются поверх среза, и показывать они должны измеренное:

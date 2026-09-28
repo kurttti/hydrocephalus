@@ -1,3 +1,4 @@
+using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Access;
 using Hydrocephalus.Domain.Measurements;
@@ -52,32 +53,61 @@ public sealed class RecordManualMeasurementUseCase
     /// Дописывает измерение к отчёту и сохраняет новую версию.
     /// </summary>
     /// <param name="report">Отчёт открытого исследования.</param>
-    /// <param name="measurement">Измерение, выполненное вручную.</param>
+    /// <param name="measurements">
+    /// Признаки одного измерения. Их несколько: вместе с индексом Эванса
+    /// записывается поворот головы, выведенный из заданной врачом оси. Пишутся
+    /// они одной версией отчёта, потому что получены одним действием — раздельная
+    /// запись дала бы две версии и два следа в журнале на одно измерение.
+    /// </param>
     /// <param name="requestedBy">Кто записывает.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Новая версия отчёта.</returns>
     /// <exception cref="AccessDeniedException">Если у роли нет права на запись измерения.</exception>
     public async Task<AnalysisReport> ExecuteAsync(
         AnalysisReport report,
-        Biomarker measurement,
+        IReadOnlyList<Biomarker> measurements,
         Actor requestedBy,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(report);
-        ArgumentNullException.ThrowIfNull(measurement);
+        ArgumentNullException.ThrowIfNull(measurements);
         ArgumentNullException.ThrowIfNull(requestedBy);
+
+        if (measurements.Count == 0)
+        {
+            throw new ArgumentException("There is nothing to record.", nameof(measurements));
+        }
+
+        // Неправдоподобное значение не записывается. Проверка стоит здесь, а не
+        // только в окне, потому что хранилище неизменно: записанное останется
+        // навсегда, а окно — не единственный возможный вызывающий. Обнаружено
+        // на прогоне, где точки пришли в другом порядке: индекс вышел 3,02
+        // вместо 0,33 и лёг на диск, потому что интерфейс был обойдён.
+        //
+        // Автоматический путь такое значение записывает с пометкой, и это не
+        // противоречие: там исправить его некому, а здесь врач ставит точки
+        // заново.
+        var implausible = measurements.FirstOrDefault(item => item.IsOutOfRange);
+
+        if (implausible is not null)
+        {
+            throw new DomainRuleViolationException(
+                $"Measurement '{implausible.Method.Code}' lies outside its plausible range "
+                + "and is not recorded; the points have to be placed again.");
+        }
 
         await this.RequireAsync(requestedBy, cancellationToken).ConfigureAwait(false);
 
         // Измерение того же метода заменяется, а не добавляется вторым: две
         // записи одного кода в одном отчёте не сказали бы, какая из них верна.
         // Прежнее значение при этом не теряется — оно осталось в своей версии.
+        var replaced = measurements
+            .Select(item => item.Method.Code)
+            .ToHashSet(StringComparer.Ordinal);
+
         var biomarkers = report.Biomarkers
-            .Where(existing => !string.Equals(
-                existing.Method.Code,
-                measurement.Method.Code,
-                StringComparison.Ordinal))
-            .Append(measurement)
+            .Where(existing => !replaced.Contains(existing.Method.Code))
+            .Concat(measurements)
             .ToList();
 
         var recorded = report with
