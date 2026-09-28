@@ -105,6 +105,27 @@ public static class PlaneAddressing
         };
 
     /// <summary>
+    /// Возвращает номер плоскости, на которой лежит отсчёт объёма.
+    ///
+    /// Обратное к <see cref="Locate"/>. Нужно ручной разметке: точка, поставленная
+    /// врачом, приходит координатами отсчёта, а проверять надо, что все точки
+    /// измерения лежат на одной плоскости, — иначе измерение выйдет косым.
+    /// </summary>
+    /// <param name="axis">Ось перелистывания.</param>
+    /// <param name="column">Столбец отсчёта.</param>
+    /// <param name="row">Строка отсчёта.</param>
+    /// <param name="slice">Срез отсчёта.</param>
+    /// <returns>Номер плоскости вдоль оси.</returns>
+    public static int IndexOf(VolumeAxis axis, int column, int row, int slice) =>
+        axis switch
+        {
+            VolumeAxis.AcrossSlices => slice,
+            VolumeAxis.AcrossRows => row,
+            VolumeAxis.AcrossColumns => column,
+            _ => throw new ArgumentOutOfRangeException(nameof(axis)),
+        };
+
+    /// <summary>
     /// Возвращает направления, вдоль которых идут оси плоскости.
     /// </summary>
     /// <param name="geometry">Геометрия получения серии.</param>

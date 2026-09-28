@@ -21,6 +21,17 @@ public static class LinearBiomarkers
     /// <summary>Код метода для индекса Эванса.</summary>
     public const string EvansIndexCode = "evans-index";
 
+    /// <summary>
+    /// Код метода для индекса Эванса, отмеченного врачом вручную.
+    ///
+    /// Величина та же, а способ её получения другой, и <c>MeasurementMethod</c>
+    /// существует ровно для этого — назвать метод вычисления. Отдельный код нужен
+    /// не для порядка: на объёмных сериях автоматическое и ручное измерения
+    /// существуют одновременно, и без различия в коде они были бы двумя записями
+    /// одного признака, неотличимыми друг от друга.
+    /// </summary>
+    public const string ManualEvansIndexCode = "evans-index-manual";
+
     /// <summary>Код метода для угла мозолистого тела.</summary>
     public const string CallosalAngleCode = "callosal-angle";
 
