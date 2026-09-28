@@ -96,6 +96,52 @@ public sealed class DisplayOrientationTests
         Assert.Equal(1.0, shown.PixelHeightMillimetres);
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void Every_shown_pixel_points_back_to_the_source_pixel_it_came_from(
+        bool transpose,
+        bool flipHorizontal,
+        bool flipVertical)
+    {
+        // Ручное измерение идёт в обратную сторону: врач указывает точку на
+        // повёрнутом изображении, а мерить нужно в сетке объёма. Если прямое и
+        // обратное отображения разойдутся, точка сядет не туда, и на экране это
+        // будет выглядеть правдоподобно.
+        //
+        // Срез неквадратный намеренно: на квадратном перестановка ширины и
+        // высоты не обнаруживается. Значения пикселов различны, поэтому
+        // совпадение адреса проверяется по самому значению.
+        const int Width = 5;
+        const int Height = 3;
+
+        var transform = new PlaneTransform(transpose, flipHorizontal, flipVertical);
+        var source = Enumerable.Range(0, Width * Height).Select(index => (byte)index).ToArray();
+        var shown = DisplayOrientation.Apply(source, Width, Height, transform);
+
+        var outputWidth = transpose ? Height : Width;
+        var outputHeight = transpose ? Width : Height;
+
+        for (var y = 0; y < outputHeight; y++)
+        {
+            for (var x = 0; x < outputWidth; x++)
+            {
+                var (sourceX, sourceY) = DisplayOrientation.ToSource(
+                    x, y, outputWidth, outputHeight, transform);
+
+                Assert.InRange(sourceX, 0, Width - 1);
+                Assert.InRange(sourceY, 0, Height - 1);
+                Assert.Equal(shown[(y * outputWidth) + x], source[(sourceY * Width) + sourceX]);
+            }
+        }
+    }
+
     private static PlaneImage Image(
         int width,
         int height,

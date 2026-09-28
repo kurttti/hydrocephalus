@@ -16,6 +16,34 @@ namespace Hydrocephalus.Inference.Tests;
 public sealed class LinearBiomarkerTests
 {
     [Fact]
+    public void Evans_index_is_measurable_on_a_thick_sliced_two_dimensional_series()
+    {
+        // Ради этого случая линейка и делается. Объёмных серий в выборке мало —
+        // у контролей ни одной пригодной, — а индекс Эванса определён на одном
+        // аксиальном срезе и толщине среза безразличен. Метод требует уровня
+        // входа Baseline, и проверяется здесь именно то, что рутинная
+        // двумерная серия с шагом 5мм ему удовлетворяет, а не отвергается.
+        var volume = Axial(
+            columnSpacing: 1.0,
+            rowSpacing: 1.0,
+            acquisitionType: MrAcquisitionType.TwoDimensional,
+            sliceThickness: 5.0);
+
+        Assert.Equal(AcquisitionTier.Baseline, volume.Geometry.Tier);
+
+        // Рога 40мм, череп 160мм: отношение ровно 0,25.
+        var biomarker = LinearBiomarkers.EvansIndex(
+            volume,
+            frontalHornFirst: new VoxelPosition(60, 100, 10),
+            frontalHornSecond: new VoxelPosition(100, 100, 10),
+            innerSkullFirst: new VoxelPosition(20, 100, 10),
+            innerSkullSecond: new VoxelPosition(180, 100, 10));
+
+        Assert.Equal(0.25, biomarker.Value, precision: 9);
+        Assert.False(biomarker.IsOutOfRange);
+    }
+
+    [Fact]
     public void Distance_is_measured_in_millimetres_and_not_in_voxels()
     {
         // Шаг по столбцам 2мм: десять шагов сетки — это 20мм.

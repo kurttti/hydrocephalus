@@ -138,16 +138,44 @@ public static class DisplayOrientation
         {
             for (var x = 0; x < outputWidth; x++)
             {
-                var tx = transform.FlipHorizontal ? outputWidth - 1 - x : x;
-                var ty = transform.FlipVertical ? outputHeight - 1 - y : y;
-
-                var (sourceX, sourceY) = transform.Transpose ? (ty, tx) : (tx, ty);
+                var (sourceX, sourceY) = ToSource(x, y, outputWidth, outputHeight, transform);
 
                 output[(y * outputWidth) + x] = plane[(sourceY * width) + sourceX];
             }
         }
 
         return output;
+    }
+
+    /// <summary>
+    /// Переводит точку вывода в точку исходного среза.
+    ///
+    /// Это обратное отображение к <see cref="Apply(byte[], int, int, PlaneTransform)"/>,
+    /// и оно не выводится заново: тело цикла вывода уже отвечает на этот вопрос —
+    /// «какой пиксел источника попал сюда». Выведи его отдельно, и прямое с
+    /// обратным однажды разойдутся, а на экране это будет выглядеть как точка,
+    /// поставленная врачом чуть не туда.
+    ///
+    /// Нужно ручному измерению: врач указывает точку на повёрнутом и отражённом
+    /// изображении, а мерить нужно в сетке объёма.
+    /// </summary>
+    /// <param name="x">Столбец точки вывода.</param>
+    /// <param name="y">Строка точки вывода.</param>
+    /// <param name="outputWidth">Ширина среза после преобразования.</param>
+    /// <param name="outputHeight">Высота среза после преобразования.</param>
+    /// <param name="transform">Преобразование.</param>
+    /// <returns>Столбец и строка в исходном срезе.</returns>
+    public static (int X, int Y) ToSource(
+        int x,
+        int y,
+        int outputWidth,
+        int outputHeight,
+        PlaneTransform transform)
+    {
+        var tx = transform.FlipHorizontal ? outputWidth - 1 - x : x;
+        var ty = transform.FlipVertical ? outputHeight - 1 - y : y;
+
+        return transform.Transpose ? (ty, tx) : (tx, ty);
     }
 
     private static EdgeLabels Transposed(EdgeLabels labels) =>
