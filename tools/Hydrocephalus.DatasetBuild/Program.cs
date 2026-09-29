@@ -1,0 +1,345 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Hydrocephalus.Domain;
+using Hydrocephalus.Domain.Imaging;
+using Hydrocephalus.Infrastructure.Configuration;
+using Hydrocephalus.Infrastructure.Dicom;
+
+// Сборка замороженного обезличенного набора выборки.
+//
+// Зачем. Исходники лежат на внешнем диске в единственном экземпляре: он упадёт —
+// и материал кончится вместе с ним. Работать с него медленно, а отдать наружу
+// для внешней валидации (M5) нельзя — имена папок содержат фамилии. Рабочие
+// копии приложения для этого не годятся: их ключ защищён DPAPI и привязан к
+// учётной записи на этой машине, то есть копия не переносится и не
+// восстанавливается нигде больше.
+//
+// Открытыми файлами — решение владельца данных от 2026-09-29. Персональных
+// данных в наборе нет: остаточные идентификаторы ловит та же проверка, что и при
+// импорте, и при её срабатывании исследование в набор не попадает.
+//
+// Раскладка ведёт соответствие исходным псевдонимам, и это не удобство. Обезличивание
+// переписывает UID, поэтому разбор копии вывел бы псевдоним от псевдонима: другое
+// исследование, другой пациент. Измерения по набору тогда не совпали бы ни с
+// группами, ни с прежними отчётами. Поэтому группа и исходные псевдонимы записаны
+// в раскладке и в манифесте, а не выводятся заново.
+//
+// Утилита только читает источник. Ни имён файлов, ни имён папок она не печатает:
+// в них фамилии.
+if (args.Length == 0)
+{
+    Console.Error.WriteLine(
+        "Использование: Hydrocephalus.DatasetBuild <группа>=<каталог> [<группа>=<каталог>...]");
+
+    return 2;
+}
+
+var groups = new List<(string Group, string Root)>();
+
+foreach (var argument in args)
+{
+    var separator = argument.IndexOf('=', StringComparison.Ordinal);
+
+    if (separator <= 0 || separator == argument.Length - 1)
+    {
+        Console.Error.WriteLine("Каждый довод задаётся как <группа>=<каталог>.");
+
+        return 2;
+    }
+
+    var root = argument[(separator + 1)..];
+
+    if (!Directory.Exists(root))
+    {
+        // Путь не печатается: он называет папку с фамилиями.
+        Console.Error.WriteLine($"Каталог группы «{argument[..separator]}» не найден.");
+
+        return 2;
+    }
+
+    groups.Add((argument[..separator], root));
+}
+
+// Соль установочная, та же, что у приложения: с другой псевдонимы набора
+// не сойдутся с теми, что стоят в отчётах и в счёте групп.
+var saltPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "Hydrocephalus",
+    "secrets",
+    "pseudonym-salt.bin");
+
+var salt = await PseudonymSaltStore.GetOrCreateAsync(saltPath, CancellationToken.None);
+
+var datasetRoot = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "Hydrocephalus",
+    "dataset");
+
+var importOptions = new DicomImportOptions
+{
+    PseudonymSalt = salt,
+
+    // Выборка обходится целиком, а лимит по умолчанию рассчитан на одно исследование.
+    MaxFileCount = 1_000_000,
+};
+
+var importer = new StudyImporter(
+    importOptions,
+    new WorkingCopyOptions
+    {
+        // Рабочие копии здесь не создаются: набор пишется открытыми файлами.
+        // Корень всё же задаётся, потому что его требует конструктор.
+        RootDirectory = Path.Combine(datasetRoot, ".unused"),
+    },
+    TimeProvider.System);
+
+var entries = new List<ManifestEntry>();
+var refused = new List<string>();
+var subjects = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+foreach (var (group, root) in groups)
+{
+    var folders = Directory.EnumerateDirectories(root)
+        .OrderBy(path => path, StringComparer.Ordinal)
+        .ToList();
+
+    Console.WriteLine($"{group}: каталогов пациентов {folders.Count}");
+
+    // Не присваивание: группа иНТГ собрана из двух папок, и второй проход
+    // обнулил бы счёт пациентов первого.
+    if (!subjects.TryGetValue(group, out var counted))
+    {
+        counted = new HashSet<string>(StringComparer.Ordinal);
+        subjects[group] = counted;
+    }
+
+    for (var index = 0; index < folders.Count; index++)
+    {
+        var number = index + 1;
+
+        DicomScanResult scan;
+
+        try
+        {
+            scan = await new DicomStudyScanner(importOptions)
+                .ScanAsync(folders[index], CancellationToken.None);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            refused.Add($"{group}/{number}: разбор не удался ({error.GetType().Name})");
+            continue;
+        }
+
+        if (scan.Studies.Count == 0)
+        {
+            refused.Add($"{group}/{number}: читаемого исследования нет — {scan.DescribeRejections()}");
+            continue;
+        }
+
+        foreach (var study in scan.Studies)
+        {
+            var target = Path.Combine(
+                datasetRoot,
+                group,
+                study.PseudonymousSubjectId,
+                study.PseudonymousStudyId);
+
+            try
+            {
+                var copy = await importer.WriteDeidentifiedCopyAsync(
+                    scan, study, target, CancellationToken.None);
+
+                counted.Add(study.PseudonymousSubjectId);
+
+                entries.Add(new ManifestEntry
+                {
+                    Group = group,
+                    PseudonymousSubjectId = study.PseudonymousSubjectId,
+                    PseudonymousStudyId = study.PseudonymousStudyId,
+                    Series = [.. copy.Study.Series.Select(series => new ManifestSeries
+                    {
+                        PseudonymousSeriesId = series.PseudonymousSeriesId,
+                        Weighting = series.Weighting.ToString(),
+                        Tier = series.Geometry.Tier.ToString(),
+                        Slices = series.Geometry.Dimensions.Slices,
+                        SliceSpacingMillimetres = series.Geometry.SliceSpacingMillimetres,
+                    })],
+                    ExcludedSeries = copy.ExcludedSeries.Count,
+                    Files = [.. HashFiles(target)],
+                });
+            }
+            catch (DomainRuleViolationException error)
+            {
+                // Прежде всего отказ проверки обезличивания: исследование с
+                // остаточным идентификатором в набор не попадает. Частично
+                // записанное убирается — иначе оно выглядело бы пригодным.
+                Discard(target);
+                refused.Add($"{group}/{number}: {Shorten(error.Message)}");
+            }
+            catch (Exception error) when (error is IOException or InvalidOperationException)
+            {
+                Discard(target);
+                refused.Add($"{group}/{number}: запись не удалась ({error.GetType().Name})");
+            }
+        }
+
+        Console.Out.Flush();
+    }
+}
+
+var manifest = new Manifest
+{
+    BuiltAt = DateTimeOffset.UtcNow,
+    BuiltBy = BuildProvenance.CommitShaOf(typeof(StudyImporter).Assembly),
+    Studies = entries,
+};
+
+Directory.CreateDirectory(datasetRoot);
+
+var manifestPath = Path.Combine(datasetRoot, "manifest.json");
+
+await File.WriteAllTextAsync(
+    manifestPath,
+    JsonSerializer.Serialize(manifest, ManifestJson.Options),
+    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+    CancellationToken.None);
+
+Console.WriteLine();
+Console.WriteLine("=== Записано ===");
+
+foreach (var (group, _) in groups)
+{
+    var studies = entries.Count(entry => string.Equals(entry.Group, group, StringComparison.Ordinal));
+
+    Console.WriteLine(
+        $"{group,-28} пациентов {subjects[group].Count,3}  исследований {studies,3}");
+}
+
+Console.WriteLine($"файлов всего: {entries.Sum(entry => entry.Files.Count)}");
+
+if (refused.Count > 0)
+{
+    Console.WriteLine();
+    Console.WriteLine($"=== Не вошли ({refused.Count}) ===");
+
+    foreach (var line in refused)
+    {
+        Console.WriteLine("  " + line);
+    }
+}
+
+Console.WriteLine();
+Console.WriteLine("Манифест записан рядом с набором.");
+
+return 0;
+
+static IEnumerable<ManifestFile> HashFiles(string directory) =>
+    Directory.EnumerateFiles(directory, "*.dcm", SearchOption.AllDirectories)
+        .OrderBy(path => path, StringComparer.Ordinal)
+        .Select(path => new ManifestFile
+        {
+            // Путь относительный и целиком из псевдонимов: раскладка внутри
+            // каталога построена по ним же.
+            Path = Path.GetRelativePath(directory, path).Replace('\\', '/'),
+            Sha256 = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))),
+        });
+
+static void Discard(string directory)
+{
+    if (Directory.Exists(directory))
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static string Shorten(string message) =>
+    message.Length <= 120 ? message : message[..120] + "…";
+
+/// <summary>Манифест набора: что вошло и в каком виде.</summary>
+internal sealed record Manifest
+{
+    /// <summary>Момент сборки.</summary>
+    public required DateTimeOffset BuiltAt { get; init; }
+
+    /// <summary>
+    /// Коммит сборки, которой собран набор.
+    ///
+    /// Им же задан и профиль обезличивания: профиль — это код, а не значение,
+    /// и отдельной версии у него нет. Повторить набор можно только на том же коде.
+    /// </summary>
+    public required string BuiltBy { get; init; }
+
+    /// <summary>Исследования набора.</summary>
+    public required IReadOnlyList<ManifestEntry> Studies { get; init; }
+}
+
+/// <summary>Одно исследование набора.</summary>
+internal sealed record ManifestEntry
+{
+    /// <summary>Группа сравнения, из папки которой взято исследование.</summary>
+    public required string Group { get; init; }
+
+    /// <summary>
+    /// Псевдоним пациента, выведенный из исходных полей.
+    ///
+    /// Записан потому, что по копии он не вычисляется: обезличивание переписывает
+    /// UID, и разбор набора дал бы псевдоним от псевдонима.
+    /// </summary>
+    public required string PseudonymousSubjectId { get; init; }
+
+    /// <summary>Псевдоним исследования, выведенный из исходного UID.</summary>
+    public required string PseudonymousStudyId { get; init; }
+
+    /// <summary>Серии, вошедшие в набор.</summary>
+    public required IReadOnlyList<ManifestSeries> Series { get; init; }
+
+    /// <summary>Сколько серий отброшено блокирующим замечанием и в набор не вошло.</summary>
+    public required int ExcludedSeries { get; init; }
+
+    /// <summary>Файлы исследования с хешами.</summary>
+    public required IReadOnlyList<ManifestFile> Files { get; init; }
+}
+
+/// <summary>Серия набора: чем она полезна, без содержимого.</summary>
+internal sealed record ManifestSeries
+{
+    /// <summary>Псевдоним серии.</summary>
+    public required string PseudonymousSeriesId { get; init; }
+
+    /// <summary>Распознанная взвешенность.</summary>
+    public required string Weighting { get; init; }
+
+    /// <summary>Уровень входа.</summary>
+    public required string Tier { get; init; }
+
+    /// <summary>Число срезов.</summary>
+    public required int Slices { get; init; }
+
+    /// <summary>Шаг между срезами, мм.</summary>
+    public required double SliceSpacingMillimetres { get; init; }
+}
+
+/// <summary>Файл набора и его хеш.</summary>
+internal sealed record ManifestFile
+{
+    /// <summary>Путь относительно каталога исследования.</summary>
+    public required string Path { get; init; }
+
+    /// <summary>SHA-256 содержимого.</summary>
+    public required string Sha256 { get; init; }
+}
+
+/// <summary>Настройки записи манифеста.</summary>
+internal static class ManifestJson
+{
+    /// <summary>
+    /// Отступы включены, порядок полей — порядок объявления: манифест читают
+    /// глазами и сравнивают между сборками, а однострочный JSON для этого негоден.
+    /// </summary>
+    internal static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+    };
+}

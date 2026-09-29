@@ -159,36 +159,7 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
         ImagingStudy study,
         CancellationToken cancellationToken)
     {
-        // Серия с блокирующим замечанием — прежде всего вписанные в изображение
-        // аннотации — в рабочую копию не попадает (ADR 0003): такие серии уходят
-        // в ручной контроль. Если пригодных серий не остаётся, исследование
-        // доходит до сценария анализа с уровнем Unusable и отклоняется там,
-        // а не исчезает молча.
-        var blockedSeries = scan.Findings
-            .Where(finding => finding.Issue.Severity == QualityIssueSeverity.Blocking)
-            .Select(finding => finding.PseudonymousSeriesId)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var retainedSeries = study.Series
-            .Where(series => !blockedSeries.Contains(series.PseudonymousSeriesId))
-            .ToList();
-
-        // Отброшенные серии описываются, а не исчезают. Данные их на диск
-        // не попадают — только описание и замечание, по которому видно,
-        // почему серия ушла в ручной контроль.
-        var excludedSeries = study.Series
-            .Where(series => blockedSeries.Contains(series.PseudonymousSeriesId))
-            .Select(series => new ExcludedSeries
-            {
-                Series = series,
-                Issues = [.. scan.Findings
-                    .Where(finding => string.Equals(
-                        finding.PseudonymousSeriesId,
-                        series.PseudonymousSeriesId,
-                        StringComparison.Ordinal))
-                    .Select(finding => finding.Issue)],
-            })
-            .ToList();
+        var (retainedSeries, excludedSeries) = SplitBlockedSeries(scan, study);
 
         var retainedIds = retainedSeries
             .Select(series => series.PseudonymousSeriesId)
@@ -209,11 +180,11 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
 
         try
         {
-            var written = await this.WriteWorkingCopyAsync(
+            var written = await this.WriteDeidentifiedAsync(
                     scan,
-                    session,
                     study.PseudonymousSubjectId,
                     retainedIds,
+                    session.WriteAsync,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -238,6 +209,116 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
             Study = study with { Series = retainedSeries },
             VolumeReference = session.Directory,
             ExcludedSeries = excludedSeries,
+        };
+    }
+
+    /// <summary>
+    /// Делит серии исследования на записываемые и отброшенные.
+    ///
+    /// Серия с блокирующим замечанием — прежде всего вписанные в изображение
+    /// аннотации — на диск не попадает (ADR 0003): такие серии уходят в ручной
+    /// контроль. Если пригодных серий не остаётся, исследование доходит до
+    /// сценария анализа с уровнем Unusable и отклоняется там, а не исчезает молча.
+    ///
+    /// Отброшенные серии описываются, а не пропадают. Данные их на диск не
+    /// попадают — только описание и замечание, по которому видно, почему серия
+    /// ушла в ручной контроль.
+    /// </summary>
+    /// <param name="scan">Результат разбора источника.</param>
+    /// <param name="study">Исследование.</param>
+    /// <returns>Принятые серии и отброшенные с причинами.</returns>
+    private static (List<ImagingSeries> Retained, List<ExcludedSeries> Excluded) SplitBlockedSeries(
+        DicomScanResult scan,
+        ImagingStudy study)
+    {
+        var blocked = scan.Findings
+            .Where(finding => finding.Issue.Severity == QualityIssueSeverity.Blocking)
+            .Select(finding => finding.PseudonymousSeriesId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var retained = study.Series
+            .Where(series => !blocked.Contains(series.PseudonymousSeriesId))
+            .ToList();
+
+        var excluded = study.Series
+            .Where(series => blocked.Contains(series.PseudonymousSeriesId))
+            .Select(series => new ExcludedSeries
+            {
+                Series = series,
+                Issues = [.. scan.Findings
+                    .Where(finding => string.Equals(
+                        finding.PseudonymousSeriesId,
+                        series.PseudonymousSeriesId,
+                        StringComparison.Ordinal))
+                    .Select(finding => finding.Issue)],
+            })
+            .ToList();
+
+        return (retained, excluded);
+    }
+
+    /// <summary>
+    /// Записывает обезличенную копию исследования открытыми файлами.
+    ///
+    /// Нужно замороженному набору выборки: рабочая копия зашифрована ключом,
+    /// защищённым DPAPI, то есть привязана к учётной записи на этой машине.
+    /// Как резервная копия невосполнимого материала и как набор для внешней
+    /// валидации она поэтому не годится — её нельзя ни перенести, ни
+    /// восстановить на другой машине.
+    ///
+    /// Открытыми файлами — решение владельца данных от 2026-09-29. Данные при
+    /// этом не персональные: остаточные идентификаторы ловит та же проверка,
+    /// что и при импорте, и при её срабатывании запись не состоится.
+    ///
+    /// Раскладка внутри каталога — по псевдонимам серий, как в рабочей копии.
+    /// Каталог назначения задаёт вызывающая сторона: соответствие псевдонимов
+    /// исходным группам ведёт набор, а не этот метод.
+    /// </summary>
+    /// <param name="scan">Результат разбора источника.</param>
+    /// <param name="study">Исследование, которое нужно записать.</param>
+    /// <param name="targetDirectory">Каталог назначения.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Записанное исследование с отброшенными сериями.</returns>
+    public async Task<WorkingCopy> WriteDeidentifiedCopyAsync(
+        DicomScanResult scan,
+        ImagingStudy study,
+        string targetDirectory,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scan);
+        ArgumentNullException.ThrowIfNull(study);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetDirectory);
+
+        var (retained, excluded) = SplitBlockedSeries(scan, study);
+
+        var retainedIds = retained
+            .Select(series => series.PseudonymousSeriesId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Directory.CreateDirectory(targetDirectory);
+
+        var written = await this.WriteDeidentifiedAsync(
+                scan,
+                study.PseudonymousSubjectId,
+                retainedIds,
+                async (relativePath, content, token) =>
+                {
+                    var path = Path.Combine(targetDirectory, relativePath);
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+                    await File.WriteAllBytesAsync(path, content, token).ConfigureAwait(false);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        VerifyNothingWasLost(retained, written);
+
+        return new WorkingCopy
+        {
+            Study = study with { Series = retained },
+            VolumeReference = targetDirectory,
+            ExcludedSeries = excluded,
         };
     }
 
@@ -296,11 +377,26 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
     private void CreateProtected(string directory) =>
         ProtectedDirectory.Create(directory, this.workingCopyOptions.RestrictAccessToCurrentUser);
 
-    private async Task<Dictionary<string, int>> WriteWorkingCopyAsync(
+    /// <summary>
+    /// Обезличивает принятые разбором файлы и отдаёт их приёмнику.
+    ///
+    /// Приёмник — параметр, потому что мест назначения два: зашифрованная рабочая
+    /// копия для разбора случая и открытый набор для исследования. Обезличивание
+    /// и проверка на остаточные идентификаторы при этом одни: второй путь рано
+    /// или поздно разошёлся бы с первым, и разошёлся бы именно там, где цена
+    /// ошибки — выход персональных данных наружу.
+    /// </summary>
+    /// <param name="scan">Результат разбора источника.</param>
+    /// <param name="pseudonymousSubjectId">Псевдоним пациента.</param>
+    /// <param name="retainedSeriesIds">Серии, которые нужно записать.</param>
+    /// <param name="write">Куда писать: относительный путь и содержимое файла.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Сколько экземпляров записано по каждой серии.</returns>
+    private async Task<Dictionary<string, int>> WriteDeidentifiedAsync(
         DicomScanResult scan,
-        WorkingCopySession session,
         string pseudonymousSubjectId,
         HashSet<string> retainedSeriesIds,
+        Func<string, byte[], CancellationToken, Task> write,
         CancellationToken cancellationToken)
     {
         var deidentifier = new DicomDeidentifier(this.importOptions);
@@ -356,15 +452,15 @@ public sealed class StudyImporter : IStudyImporter, IWorkingCopyLifetime
 
             Verify(instance, target.FileMetaInfo, relativePath);
 
-            // Файл шифруется в памяти и только потом ложится на диск:
-            // записать открытым и зашифровать следом означало бы оставить окно,
-            // в котором деидентифицированные снимки лежат в открытом виде.
+            // Файл собирается в памяти и только потом ложится на диск. Для
+            // рабочей копии это существенно: записать открытым и зашифровать
+            // следом означало бы оставить окно, в котором деидентифицированные
+            // снимки лежат в открытом виде.
             using var buffer = new MemoryStream();
 
             await target.SaveAsync(buffer).ConfigureAwait(false);
 
-            await session.WriteAsync(relativePath, buffer.ToArray(), cancellationToken)
-                .ConfigureAwait(false);
+            await write(relativePath, buffer.ToArray(), cancellationToken).ConfigureAwait(false);
 
             written[seriesId] = written.GetValueOrDefault(seriesId) + 1;
         }
