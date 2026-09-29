@@ -40,6 +40,11 @@ var groups = new List<(string Group, string Root)>();
 
 foreach (var argument in args)
 {
+    if (string.Equals(argument, "--overwrite", StringComparison.Ordinal))
+    {
+        continue;
+    }
+
     var separator = argument.IndexOf('=', StringComparison.Ordinal);
 
     if (separator <= 0 || separator == argument.Length - 1)
@@ -76,6 +81,23 @@ var datasetRoot = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
     "Hydrocephalus",
     "dataset");
+
+// Набор целиком выводится из источника, но существующий не дополняется молча:
+// прогон с другими именами групп оставил бы прежние рядом, и одни и те же
+// пациенты оказались бы в наборе дважды под разными именами. Счёт по группам
+// после такого неверен, а причина невидима.
+if (Directory.Exists(datasetRoot) && Directory.EnumerateFileSystemEntries(datasetRoot).Any())
+{
+    if (!args.Contains("--overwrite", StringComparer.Ordinal))
+    {
+        Console.Error.WriteLine(
+            "Набор уже существует. Повторная сборка стирает прежний: добавьте --overwrite.");
+
+        return 2;
+    }
+
+    Directory.Delete(datasetRoot, recursive: true);
+}
 
 var importOptions = new DicomImportOptions
 {
@@ -209,7 +231,7 @@ await File.WriteAllTextAsync(
 Console.WriteLine();
 Console.WriteLine("=== Записано ===");
 
-foreach (var (group, _) in groups)
+foreach (var group in groups.Select(item => item.Group).Distinct(StringComparer.Ordinal))
 {
     var studies = entries.Count(entry => string.Equals(entry.Group, group, StringComparison.Ordinal));
 
@@ -251,6 +273,17 @@ static void Discard(string directory)
     if (Directory.Exists(directory))
     {
         Directory.Delete(directory, recursive: true);
+    }
+
+    // Каталог пациента убирается следом, если он опустел: иначе от отклонённого
+    // исследования остаётся пустая папка, и пациент выглядит вошедшим в набор.
+    var subject = Path.GetDirectoryName(directory);
+
+    if (subject is not null
+        && Directory.Exists(subject)
+        && !Directory.EnumerateFileSystemEntries(subject).Any())
+    {
+        Directory.Delete(subject);
     }
 }
 
