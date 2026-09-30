@@ -175,11 +175,25 @@ foreach (var (group, root) in groups)
 
                 counted.Add(study.PseudonymousSubjectId);
 
+                // Записанная копия разбирается ещё раз — ради псевдонимов, которые
+                // из неё выйдут. Обезличивание переписывает UID, поэтому разбор
+                // копии даёт псевдоним от псевдонима, а при пустом PatientID —
+                // отдельного «пациента» на каждое исследование. Без этой пары
+                // измерения, сделанные по набору, не легли бы ни в одну группу:
+                // проверено, у первого же исследования исходный b7141aa5…
+                // превращается в 2193b2fb….
+                var written = await new DicomStudyScanner(importOptions)
+                    .ScanAsync(target, CancellationToken.None);
+
+                var derived = written.Studies.SingleOrDefault();
+
                 entries.Add(new ManifestEntry
                 {
                     Group = group,
                     PseudonymousSubjectId = study.PseudonymousSubjectId,
                     PseudonymousStudyId = study.PseudonymousStudyId,
+                    DerivedSubjectId = derived?.PseudonymousSubjectId,
+                    DerivedStudyId = derived?.PseudonymousStudyId,
                     Series = [.. copy.Study.Series.Select(series => new ManifestSeries
                     {
                         PseudonymousSeriesId = series.PseudonymousSeriesId,
@@ -324,6 +338,19 @@ internal sealed record ManifestEntry
 
     /// <summary>Псевдоним исследования, выведенный из исходного UID.</summary>
     public required string PseudonymousStudyId { get; init; }
+
+    /// <summary>
+    /// Псевдоним пациента, который выходит при разборе самой копии.
+    ///
+    /// Отчёт об измерении, сделанном по набору, лежит под ним, а не под исходным:
+    /// по копии исходный не восстанавливается. Без этой пары сведение не свяжет
+    /// измерение с группой. <see langword="null"/>, если копия неожиданно
+    /// разобралась не в одно исследование.
+    /// </summary>
+    public required string? DerivedSubjectId { get; init; }
+
+    /// <summary>Псевдоним исследования, который выходит при разборе самой копии.</summary>
+    public required string? DerivedStudyId { get; init; }
 
     /// <summary>Серии, вошедшие в набор.</summary>
     public required IReadOnlyList<ManifestSeries> Series { get; init; }

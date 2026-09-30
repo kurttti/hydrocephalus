@@ -42,19 +42,40 @@ if (!File.Exists(manifestPath))
 // Группа и пациент по псевдониму исследования — из манифеста.
 var groupOf = new Dictionary<string, string>(StringComparer.Ordinal);
 var subjectOf = new Dictionary<string, string>(StringComparer.Ordinal);
+var studiesInDataset = 0;
 
 using (var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(manifestPath)))
 {
     foreach (var study in manifest.RootElement.GetProperty("Studies").EnumerateArray())
     {
-        var id = study.GetProperty("PseudonymousStudyId").GetString()!;
+        studiesInDataset++;
 
-        groupOf[id] = study.GetProperty("Group").GetString()!;
-        subjectOf[id] = study.GetProperty("PseudonymousSubjectId").GetString()!;
+        var group = study.GetProperty("Group").GetString()!;
+        var subject = study.GetProperty("PseudonymousSubjectId").GetString()!;
+
+        // Оба псевдонима ведут к одной группе и к одному пациенту. Исходный —
+        // под ним лежат отчёты по измерениям с оригиналов; производный — под ним
+        // лягут измерения по набору, потому что разбор копии даёт другой
+        // псевдоним и исходный по ней не восстанавливается.
+        Map(study.GetProperty("PseudonymousStudyId").GetString());
+
+        if (study.TryGetProperty("DerivedStudyId", out var derived))
+        {
+            Map(derived.GetString());
+        }
+
+        void Map(string? id)
+        {
+            if (!string.IsNullOrEmpty(id))
+            {
+                groupOf[id] = group;
+                subjectOf[id] = subject;
+            }
+        }
     }
 }
 
-Console.WriteLine($"в наборе исследований: {groupOf.Count}");
+Console.WriteLine($"в наборе исследований: {studiesInDataset}, псевдонимов к ним {groupOf.Count}");
 
 if (!Directory.Exists(reportRoot))
 {
