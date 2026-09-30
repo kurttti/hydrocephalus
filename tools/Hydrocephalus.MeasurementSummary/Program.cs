@@ -1,5 +1,5 @@
-using System.Globalization;
-using System.Text.Json;
+using Hydrocephalus.Infrastructure.Dataset;
+using Hydrocephalus.Infrastructure.Reporting;
 
 // Сведение ручных измерений по группам сравнения.
 //
@@ -7,17 +7,10 @@ using System.Text.Json;
 // индексу Эванса. И на второй, не менее нужный: насколько автоматический индекс
 // сходится с измеренным врачом — на тех исследованиях, где есть оба.
 //
-// Группа берётся из манифеста набора, а не выводится заново. Причина в том, что
-// заново её вывести нельзя: обезличивание переписывает UID, поэтому разбор копии
-// даёт псевдоним от псевдонима, а при пустом PatientID — отдельного «пациента»
-// на каждое исследование (docs/data/README.md).
+// Чтение набора и чтение отчётов живут в инфраструктуре: тем же кодом ведёт
+// рабочий список измерений просмотрщик, и две копии правил разошлись бы молча.
 //
-// Последнее ручное измерение исследования ищется **перебором всех версий отчёта**,
-// а не в последней: повторное открытие исследования заново запускает анализ и
-// сохраняет отчёт без ручной отметки, поэтому самая свежая версия её может не
-// содержать. Тем же перебором поглощается случайное повторное нажатие.
-//
-// Печатаются только агрегаты и псевдонимы. Ни имён, ни путей источника.
+// Печатаются только агрегаты. Ни имён, ни путей источника.
 if (args.Contains("--help"))
 {
     Console.WriteLine("Использование: Hydrocephalus.MeasurementSummary [--dataset <каталог>] [--reports <каталог>]");
@@ -30,111 +23,38 @@ var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplication
 var datasetRoot = Argument("--dataset") ?? Path.Combine(local, "Hydrocephalus", "dataset");
 var reportRoot = Argument("--reports") ?? Path.Combine(local, "Hydrocephalus", "reports");
 
-var manifestPath = Path.Combine(datasetRoot, "manifest.json");
+var manifest = await DatasetManifest.ReadAsync(datasetRoot, CancellationToken.None);
 
-if (!File.Exists(manifestPath))
+if (manifest is null)
 {
     Console.Error.WriteLine("Манифеста набора нет: сначала соберите набор утилитой DatasetBuild.");
 
     return 2;
 }
 
-// Группа и пациент по псевдониму исследования — из манифеста.
-var groupOf = new Dictionary<string, string>(StringComparer.Ordinal);
-var subjectOf = new Dictionary<string, string>(StringComparer.Ordinal);
-var studiesInDataset = 0;
+var readout = await ManualMeasurementIndex.ReadAsync(reportRoot, CancellationToken.None);
 
-using (var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(manifestPath)))
+Console.WriteLine($"в наборе исследований: {manifest.Studies.Count}");
+Console.WriteLine($"исследований с ручным измерением: {readout.Manual.Count}");
+Console.WriteLine($"исследований с автоматическим индексом: {readout.Automatic.Count}");
+
+if (readout.UnreadableReports > 0)
 {
-    foreach (var study in manifest.RootElement.GetProperty("Studies").EnumerateArray())
-    {
-        studiesInDataset++;
-
-        var group = study.GetProperty("Group").GetString()!;
-        var subject = study.GetProperty("PseudonymousSubjectId").GetString()!;
-
-        // Оба псевдонима ведут к одной группе и к одному пациенту. Исходный —
-        // под ним лежат отчёты по измерениям с оригиналов; производный — под ним
-        // лягут измерения по набору, потому что разбор копии даёт другой
-        // псевдоним и исходный по ней не восстанавливается.
-        Map(study.GetProperty("PseudonymousStudyId").GetString());
-
-        if (study.TryGetProperty("DerivedStudyId", out var derived))
-        {
-            Map(derived.GetString());
-        }
-
-        void Map(string? id)
-        {
-            if (!string.IsNullOrEmpty(id))
-            {
-                groupOf[id] = group;
-                subjectOf[id] = subject;
-            }
-        }
-    }
+    Console.WriteLine($"отчётов не прочитано: {readout.UnreadableReports}");
 }
 
-Console.WriteLine($"в наборе исследований: {studiesInDataset}, псевдонимов к ним {groupOf.Count}");
-
-if (!Directory.Exists(reportRoot))
-{
-    Console.Error.WriteLine("Каталога отчётов нет: измерений ещё не было.");
-
-    return 2;
-}
-
-var manual = new Dictionary<string, Measurement>(StringComparer.Ordinal);
-var automatic = new Dictionary<string, double>(StringComparer.Ordinal);
-
-foreach (var studyDirectory in Directory.EnumerateDirectories(reportRoot))
-{
-    var studyId = Path.GetFileName(studyDirectory);
-
-    // Версии перебираются по времени, записанному внутри отчёта, а не по имени
-    // файла: имя начинается с той же отметки, но полагаться на это незачем.
-    foreach (var path in Directory.EnumerateFiles(studyDirectory, "*.json"))
-    {
-        Report? report;
-
-        try
-        {
-            report = ReadReport(await File.ReadAllBytesAsync(path));
-        }
-        catch (JsonException)
-        {
-            Console.Error.WriteLine($"отчёт не разобран: {studyId[..8]}…");
-            continue;
-        }
-
-        if (report is null)
-        {
-            continue;
-        }
-
-        if (report.EvansManual is { } value
-            && (!manual.TryGetValue(studyId, out var known) || report.CreatedAt > known.CreatedAt))
-        {
-            manual[studyId] = new Measurement(value, report.HeadRotation, report.CreatedAt);
-        }
-
-        if (report.EvansAutomatic is { } auto)
-        {
-            automatic[studyId] = auto;
-        }
-    }
-}
-
-Console.WriteLine($"исследований с ручным измерением: {manual.Count}");
-Console.WriteLine($"исследований с автоматическим индексом: {automatic.Count}");
-
-var measured = manual
-    .Where(entry => groupOf.ContainsKey(entry.Key))
-    .GroupBy(entry => groupOf[entry.Key], StringComparer.Ordinal)
-    .OrderBy(group => group.Key, StringComparer.Ordinal)
+// Измерение привязывается к исследованию набора по любому из двух его
+// псевдонимов: с оригинала отчёт ложится под исходным, из набора — под
+// производным (docs/data/README.md).
+var rows = manifest.Studies
+    .Select(study => new Row(
+        study,
+        Find<ManualMeasurement>(study, key => readout.Manual.TryGetValue(key, out var found) ? found : null),
+        Find<double>(study, key => readout.Automatic.TryGetValue(key, out var found) ? found : null)))
+    .Where(row => row.Measurement is not null)
     .ToList();
 
-var outside = manual.Count(entry => !groupOf.ContainsKey(entry.Key));
+var outside = readout.Manual.Count - rows.Count;
 
 if (outside > 0)
 {
@@ -147,13 +67,18 @@ Console.WriteLine();
 Console.WriteLine("=== Индекс Эванса по группам ===");
 Console.WriteLine("группа            n   медиана   P25     P75     мин     макс    ≥0,30");
 
-foreach (var group in measured)
+foreach (var group in rows
+    .GroupBy(row => row.Study.Group, StringComparer.Ordinal)
+    .OrderBy(group => group.Key, StringComparer.Ordinal))
 {
-    // Пациент, а не исследование: у одного пациента исследований бывает
-    // несколько, и считать их как разных больных значило бы удвоить группу.
+    // Пациент, а не исследование: у одного больного исследований бывает
+    // несколько, и счёт по исследованиям удвоил бы группу.
     var perSubject = group
-        .GroupBy(entry => subjectOf[entry.Key], StringComparer.Ordinal)
-        .Select(subject => subject.OrderByDescending(entry => entry.Value.CreatedAt).First().Value.Index)
+        .GroupBy(row => row.Study.PseudonymousSubjectId, StringComparer.Ordinal)
+        .Select(subject => subject
+            .OrderByDescending(row => row.Measurement!.Value.RecordedAt)
+            .First()
+            .Measurement!.Value.EvansIndex)
         .OrderBy(value => value)
         .ToList();
 
@@ -164,8 +89,8 @@ foreach (var group in measured)
         + $"{perSubject[^1],-8:0.000}{perSubject.Count(value => value >= 0.30),3}");
 }
 
-var rotations = manual.Values
-    .Select(item => item.RotationDegrees)
+var rotations = rows
+    .Select(row => row.Measurement!.Value.HeadRotationDegrees)
     .Where(value => value is not null)
     .Select(value => value!.Value)
     .OrderBy(value => value)
@@ -180,9 +105,9 @@ if (rotations.Count > 0)
         + $"P95 {Quantile(rotations, 0.95):0.0}, максимум {rotations[^1]:0.0}");
 }
 
-var pairs = manual
-    .Where(entry => automatic.ContainsKey(entry.Key))
-    .Select(entry => (Manual: entry.Value.Index, Automatic: automatic[entry.Key]))
+var pairs = rows
+    .Where(row => row.Automatic is not null)
+    .Select(row => (Manual: row.Measurement!.Value.EvansIndex, Automatic: row.Automatic!.Value))
     .ToList();
 
 Console.WriteLine();
@@ -215,6 +140,20 @@ string? Argument(string name)
     return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
 }
 
+static T? Find<T>(DatasetStudy study, Func<string, T?> lookup)
+    where T : struct
+{
+    foreach (var key in study.ReportKeys())
+    {
+        if (lookup(key) is { } found)
+        {
+            return found;
+        }
+    }
+
+    return null;
+}
+
 static double Quantile(IReadOnlyList<double> sorted, double fraction)
 {
     if (sorted.Count == 1)
@@ -229,65 +168,8 @@ static double Quantile(IReadOnlyList<double> sorted, double fraction)
     return sorted[lower] + ((sorted[upper] - sorted[lower]) * (position - lower));
 }
 
-static Report? ReadReport(byte[] content)
-{
-    using var document = JsonDocument.Parse(content);
-    var root = document.RootElement;
-
-    if (!root.TryGetProperty("createdAt", out var createdAt)
-        || !DateTimeOffset.TryParse(
-            createdAt.GetString(),
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.RoundtripKind,
-            out var moment))
-    {
-        return null;
-    }
-
-    double? manual = null;
-    double? auto = null;
-    double? rotation = null;
-
-    if (root.TryGetProperty("biomarkers", out var biomarkers))
-    {
-        foreach (var biomarker in biomarkers.EnumerateArray())
-        {
-            var code = biomarker.GetProperty("code").GetString();
-            var value = biomarker.GetProperty("value").GetDouble();
-
-            // Значение вне диапазона правдоподобия в сведение не идёт: запись
-            // такого сейчас и не проходит, но отчёты прежних версий остаются.
-            if (biomarker.TryGetProperty("outOfRange", out var flagged) && flagged.GetBoolean())
-            {
-                continue;
-            }
-
-            switch (code)
-            {
-                case "evans-index-manual":
-                    manual = value;
-                    break;
-                case "evans-index":
-                    auto = value;
-                    break;
-                case "head-rotation-in-plane":
-                    rotation = value;
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-
-    return new Report(moment, manual, auto, rotation);
-}
-
-/// <summary>Отчёт в том виде, в каком он нужен сведению.</summary>
-internal sealed record Report(
-    DateTimeOffset CreatedAt,
-    double? EvansManual,
-    double? EvansAutomatic,
-    double? HeadRotation);
-
-/// <summary>Ручное измерение одного исследования.</summary>
-internal sealed record Measurement(double Index, double? RotationDegrees, DateTimeOffset CreatedAt);
+/// <summary>Исследование набора вместе с тем, что по нему измерено.</summary>
+internal readonly record struct Row(
+    DatasetStudy Study,
+    ManualMeasurement? Measurement,
+    double? Automatic);

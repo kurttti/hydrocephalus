@@ -5,6 +5,7 @@ using System.Text.Json;
 using Hydrocephalus.Domain;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Infrastructure.Configuration;
+using Hydrocephalus.Infrastructure.Dataset;
 using Hydrocephalus.Infrastructure.Dicom;
 
 // Сборка замороженного обезличенного набора выборки.
@@ -117,7 +118,7 @@ var importer = new StudyImporter(
     },
     TimeProvider.System);
 
-var entries = new List<ManifestEntry>();
+var entries = new List<DatasetStudy>();
 var refused = new List<string>();
 var subjects = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
@@ -187,14 +188,14 @@ foreach (var (group, root) in groups)
 
                 var derived = written.Studies.SingleOrDefault();
 
-                entries.Add(new ManifestEntry
+                entries.Add(new DatasetStudy
                 {
                     Group = group,
                     PseudonymousSubjectId = study.PseudonymousSubjectId,
                     PseudonymousStudyId = study.PseudonymousStudyId,
                     DerivedSubjectId = derived?.PseudonymousSubjectId,
                     DerivedStudyId = derived?.PseudonymousStudyId,
-                    Series = [.. copy.Study.Series.Select(series => new ManifestSeries
+                    Series = [.. copy.Study.Series.Select(series => new DatasetSeries
                     {
                         PseudonymousSeriesId = series.PseudonymousSeriesId,
                         Weighting = series.Weighting.ToString(),
@@ -225,22 +226,14 @@ foreach (var (group, root) in groups)
     }
 }
 
-var manifest = new Manifest
+var manifest = new DatasetManifest
 {
     BuiltAt = DateTimeOffset.UtcNow,
     BuiltBy = BuildProvenance.CommitShaOf(typeof(StudyImporter).Assembly),
     Studies = entries,
 };
 
-Directory.CreateDirectory(datasetRoot);
-
-var manifestPath = Path.Combine(datasetRoot, "manifest.json");
-
-await File.WriteAllTextAsync(
-    manifestPath,
-    JsonSerializer.Serialize(manifest, ManifestJson.Options),
-    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-    CancellationToken.None);
+await manifest.WriteAsync(datasetRoot, CancellationToken.None);
 
 Console.WriteLine();
 Console.WriteLine("=== Записано ===");
@@ -271,10 +264,10 @@ Console.WriteLine("Манифест записан рядом с набором.
 
 return 0;
 
-static IEnumerable<ManifestFile> HashFiles(string directory) =>
+static IEnumerable<DatasetFile> HashFiles(string directory) =>
     Directory.EnumerateFiles(directory, "*.dcm", SearchOption.AllDirectories)
         .OrderBy(path => path, StringComparer.Ordinal)
-        .Select(path => new ManifestFile
+        .Select(path => new DatasetFile
         {
             // Путь относительный и целиком из псевдонимов: раскладка внутри
             // каталога построена по ним же.
@@ -303,103 +296,3 @@ static void Discard(string directory)
 
 static string Shorten(string message) =>
     message.Length <= 120 ? message : message[..120] + "…";
-
-/// <summary>Манифест набора: что вошло и в каком виде.</summary>
-internal sealed record Manifest
-{
-    /// <summary>Момент сборки.</summary>
-    public required DateTimeOffset BuiltAt { get; init; }
-
-    /// <summary>
-    /// Коммит сборки, которой собран набор.
-    ///
-    /// Им же задан и профиль обезличивания: профиль — это код, а не значение,
-    /// и отдельной версии у него нет. Повторить набор можно только на том же коде.
-    /// </summary>
-    public required string BuiltBy { get; init; }
-
-    /// <summary>Исследования набора.</summary>
-    public required IReadOnlyList<ManifestEntry> Studies { get; init; }
-}
-
-/// <summary>Одно исследование набора.</summary>
-internal sealed record ManifestEntry
-{
-    /// <summary>Группа сравнения, из папки которой взято исследование.</summary>
-    public required string Group { get; init; }
-
-    /// <summary>
-    /// Псевдоним пациента, выведенный из исходных полей.
-    ///
-    /// Записан потому, что по копии он не вычисляется: обезличивание переписывает
-    /// UID, и разбор набора дал бы псевдоним от псевдонима.
-    /// </summary>
-    public required string PseudonymousSubjectId { get; init; }
-
-    /// <summary>Псевдоним исследования, выведенный из исходного UID.</summary>
-    public required string PseudonymousStudyId { get; init; }
-
-    /// <summary>
-    /// Псевдоним пациента, который выходит при разборе самой копии.
-    ///
-    /// Отчёт об измерении, сделанном по набору, лежит под ним, а не под исходным:
-    /// по копии исходный не восстанавливается. Без этой пары сведение не свяжет
-    /// измерение с группой. <see langword="null"/>, если копия неожиданно
-    /// разобралась не в одно исследование.
-    /// </summary>
-    public required string? DerivedSubjectId { get; init; }
-
-    /// <summary>Псевдоним исследования, который выходит при разборе самой копии.</summary>
-    public required string? DerivedStudyId { get; init; }
-
-    /// <summary>Серии, вошедшие в набор.</summary>
-    public required IReadOnlyList<ManifestSeries> Series { get; init; }
-
-    /// <summary>Сколько серий отброшено блокирующим замечанием и в набор не вошло.</summary>
-    public required int ExcludedSeries { get; init; }
-
-    /// <summary>Файлы исследования с хешами.</summary>
-    public required IReadOnlyList<ManifestFile> Files { get; init; }
-}
-
-/// <summary>Серия набора: чем она полезна, без содержимого.</summary>
-internal sealed record ManifestSeries
-{
-    /// <summary>Псевдоним серии.</summary>
-    public required string PseudonymousSeriesId { get; init; }
-
-    /// <summary>Распознанная взвешенность.</summary>
-    public required string Weighting { get; init; }
-
-    /// <summary>Уровень входа.</summary>
-    public required string Tier { get; init; }
-
-    /// <summary>Число срезов.</summary>
-    public required int Slices { get; init; }
-
-    /// <summary>Шаг между срезами, мм.</summary>
-    public required double SliceSpacingMillimetres { get; init; }
-}
-
-/// <summary>Файл набора и его хеш.</summary>
-internal sealed record ManifestFile
-{
-    /// <summary>Путь относительно каталога исследования.</summary>
-    public required string Path { get; init; }
-
-    /// <summary>SHA-256 содержимого.</summary>
-    public required string Sha256 { get; init; }
-}
-
-/// <summary>Настройки записи манифеста.</summary>
-internal static class ManifestJson
-{
-    /// <summary>
-    /// Отступы включены, порядок полей — порядок объявления: манифест читают
-    /// глазами и сравнивают между сборками, а однострочный JSON для этого негоден.
-    /// </summary>
-    internal static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-    };
-}
