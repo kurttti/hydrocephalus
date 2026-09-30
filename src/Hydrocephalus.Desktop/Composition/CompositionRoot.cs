@@ -482,6 +482,22 @@ public sealed class CompositionRoot : IDisposable
     }
 
     /// <summary>
+    /// Открывает рабочий список измерений по замороженному набору.
+    ///
+    /// Читается заново при каждом вызове: измеренность выводится из хранилища
+    /// отчётов, а оно меняется и от работы с оригиналами, мимо набора.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Список либо <see langword="null"/>, если набор не собран.</returns>
+    public Task<Infrastructure.Dataset.MeasurementWorklist?> OpenWorklistAsync(
+        CancellationToken cancellationToken) =>
+        Infrastructure.Dataset.MeasurementWorklist.OpenAsync(
+            this.paths.DatasetRoot,
+            this.paths.ReportRoot,
+            group: null,
+            cancellationToken);
+
+    /// <summary>
     /// Записывает в отчёт измерение, выполненное врачом вручную.
     ///
     /// Записывается в отчёт открытой серии: <c>this.report</c> относится к той

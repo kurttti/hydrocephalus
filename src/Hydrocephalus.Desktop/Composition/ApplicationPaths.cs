@@ -49,6 +49,15 @@ public sealed record ApplicationPaths
     public required string DatasetManifestRoot { get; init; }
 
     /// <summary>
+    /// Корень замороженного обезличенного набора выборки.
+    ///
+    /// Отдельно от манифестов датасета: там лежат выгруженные описания выборки,
+    /// здесь — сами снимки набора, по которым ведётся рабочий список измерений.
+    /// Уборкой рабочих копий не затрагивается (docs/data/README.md).
+    /// </summary>
+    public required string DatasetRoot { get; init; }
+
+    /// <summary>
     /// Строит расположение в профиле текущего пользователя.
     /// </summary>
     /// <returns>Пути приложения.</returns>
@@ -78,6 +87,7 @@ public sealed record ApplicationPaths
             AuditLogPath = IoPath.Combine(root, "audit", "audit.log"),
             PseudonymSaltPath = IoPath.Combine(root, "secrets", "pseudonym-salt.bin"),
             DatasetManifestRoot = IoPath.Combine(root, "dataset-manifests"),
+            DatasetRoot = IoPath.Combine(root, "dataset"),
         };
     }
 }

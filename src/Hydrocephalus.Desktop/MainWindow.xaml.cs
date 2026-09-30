@@ -66,6 +66,10 @@ public partial class MainWindow : Window
     // после записи измерения, не открывая исследование заново.
     private Results.AnalysedStudy? analysed;
 
+    // Каталог показанного исследования: от него рабочий список отсчитывает
+    // следующее. Наружу не выводится.
+    private string? openedDirectory;
+
     /// <summary>Создаёт главное окно.</summary>
     public MainWindow()
     {
@@ -121,6 +125,68 @@ public partial class MainWindow : Window
         await this.OpenAsync(dialog.FolderName).ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Открывает следующее неизмеренное исследование набора.
+    ///
+    /// Список читается заново при каждом нажатии, а не держится в поле: врач мог
+    /// измерить что-то с оригиналов между нажатиями, и список, прочитанный один
+    /// раз, предложил бы это исследование снова.
+    /// </summary>
+    private async void OnNextStudyClick(object sender, RoutedEventArgs e)
+    {
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            return;
+        }
+
+        var worklist = await composition.OpenWorklistAsync(CancellationToken.None)
+            .ConfigureAwait(true);
+
+        if (worklist is null)
+        {
+            this.StatusText.Text = "Набора нет: соберите его утилитой DatasetBuild.";
+
+            return;
+        }
+
+        if (worklist.NextUnmeasured(this.openedDirectory) is not { } study)
+        {
+            this.WorklistText.Text = string.Create(
+                CultureInfo.CurrentCulture,
+                $"измерено {worklist.MeasuredCount} из {worklist.Studies.Count} — всё");
+
+            this.StatusText.Text = "Неизмеренных исследований в наборе не осталось.";
+
+            return;
+        }
+
+        await this.OpenAsync(study.Directory).ConfigureAwait(true);
+    }
+
+    /// <summary>Обновляет счётчик рабочего списка и доступность кнопки.</summary>
+    private async Task RefreshWorklistAsync()
+    {
+        var composition = Current.Composition;
+
+        if (composition is null)
+        {
+            return;
+        }
+
+        var worklist = await composition.OpenWorklistAsync(CancellationToken.None)
+            .ConfigureAwait(true);
+
+        this.NextStudyButton.IsEnabled = worklist is not null;
+
+        this.WorklistText.Text = worklist is null
+            ? string.Empty
+            : string.Create(
+                CultureInfo.CurrentCulture,
+                $"измерено {worklist.MeasuredCount} из {worklist.Studies.Count}");
+    }
+
     private async Task OpenAsync(string directory)
     {
         var composition = Current.Composition;
@@ -142,7 +208,12 @@ public partial class MainWindow : Window
                 () => composition.OpenForViewingAsync(directory, CancellationToken.None))
                 .ConfigureAwait(true);
 
+            this.openedDirectory = directory;
             this.Show(opened);
+
+            // Счётчик обновляется после показа: измерение могло быть записано
+            // в прошлом исследовании, и число «измерено» уже другое.
+            await this.RefreshWorklistAsync().ConfigureAwait(true);
         }
         catch (AccessDeniedException)
         {
@@ -891,6 +962,8 @@ public partial class MainWindow : Window
             // Экран результата показывает новую версию: иначе измерение было бы
             // записано, а на экране его бы не было.
             this.ShowResult(ResultReadout.Describe(report, this.analysed));
+
+            await this.RefreshWorklistAsync().ConfigureAwait(true);
         }
         catch (Exception error) when (error is Hydrocephalus.Domain.DomainRuleViolationException
             or AccessDeniedException

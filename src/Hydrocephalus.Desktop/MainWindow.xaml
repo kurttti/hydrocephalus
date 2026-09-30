@@ -81,6 +81,23 @@
 
                 <!-- Выбор исследования: в папке пациента их бывает несколько.
                      Открывается лучшее для анализа, остальные — здесь. -->
+                <!-- Рабочий список: открывает следующее неизмеренное исследование
+                     набора. Выбирать каталог в диалоге полсотни раз — и морока,
+                     и источник ошибок: по двум сотням папок невозможно помнить,
+                     какие уже сделаны. -->
+                <Button x:Name="NextStudyButton"
+                        Content="_Следующее"
+                        Padding="12,4"
+                        Margin="8,0,0,0"
+                        IsEnabled="False"
+                        Click="OnNextStudyClick"
+                        ToolTip="Открыть следующее неизмеренное исследование набора." />
+
+                <TextBlock x:Name="WorklistText"
+                           Foreground="#9A9AA6"
+                           Margin="8,0,0,0"
+                           VerticalAlignment="Center" />
+
                 <TextBlock Text="Исследование" Foreground="#9A9AA6" Margin="18,0,6,0" VerticalAlignment="Center" />
                 <ComboBox x:Name="StudySelector"
                           Width="260"
