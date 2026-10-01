@@ -156,13 +156,25 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
                 "The analysis request names a series that the study does not contain.");
         }
 
-        // Два условия, при которых измерять нельзя, и оба проверяются, а не
-        // предполагаются. Пустой список — отсутствие измерения; нулевого объёма
-        // конвейер не выдаёт вовсе (см. ниже).
-        if (series.Tier != AcquisitionTier.Extended || series.Weighting == SeriesWeighting.Unknown)
+        // Взвешенность обязана быть известна: по ней сегментация выбирает
+        // направление порога, а угадать его нельзя — ошибка выделит ткань
+        // вместо ликвора и даст объём того же порядка с обратным смыслом.
+        if (series.Weighting == SeriesWeighting.Unknown)
         {
             return [];
         }
+
+        // Уровень входа решает, что именно можно измерить, а не можно ли вообще.
+        //
+        // Объём желудочковой системы требует объёмной серии по определению:
+        // на шаге среза 7 мм между срезами нет ткани, и сумма вокселей — не
+        // объём. Индекс Эванса не требует: он отмеряется на одном аксиальном
+        // срезе, и толщина среза ему безразлична.
+        //
+        // Прежде ворота стояли на уровне входа целиком, и из-за этого метод
+        // не касался 48 исследований выборки из 58 — все рутинные двумерные
+        // серии (docs/data/README.md). Контрольной группе он не измерял ничего.
+        var volumetric = series.Tier == AcquisitionTier.Extended;
 
         progress?.Report(new AnalysisProgress(AnalysisStage.Segmentation, 0.0));
 
@@ -184,10 +196,12 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
             // по умолчанию у RegionVolumes — «надёжно», и забыть этот аргумент
             // значило бы выдать правдоподобный объём, полученный методом,
             // за который сам метод не ручается.
-            var biomarkers = RegionVolumes.Measure(
-                segmentation.Mask,
-                series.Tier,
-                segmentation.Quality);
+            var biomarkers = volumetric
+                ? RegionVolumes.Measure(
+                    segmentation.Mask,
+                    series.Tier,
+                    segmentation.Quality)
+                : [];
 
             var evans = AutomaticEvansIndex.Measure(volume, segmentation, series.Weighting, cancellationToken);
 
