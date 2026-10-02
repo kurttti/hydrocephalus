@@ -385,9 +385,25 @@ public static partial class BaselineVentricleSegmentation
             return Refused(grid, TruncatedByFrame(), labels, candidate);
         }
 
+        if (selected == 0)
+        {
+            // Пустая маска — отказ, а не результат. Условие «selected > 0» стояло
+            // ниже, у проверки размера, чтобы не объявлять «0,0 мл — слишком
+            // мало»: не найдено ничего, а не найдено мало. Следствие было хуже
+            // самой неточности — отбор, не нашедший ни одного отсчёта, выходил
+            // с пометкой «сомнительно», то есть годным.
+            //
+            // Молчание обходится дороже, чем кажется. Индекс Эванса принимал
+            // такую маску и отказывал с причиной «не найдены передние рога»,
+            // хотя рога не найдены не на снимке, а в пустоте. На наборе так
+            // отказывали шесть из семи объёмных исследований, и по этой ложной
+            // причине был составлен план работ (docs/data/README.md).
+            return Refused(grid, NothingFound(), labels, candidate);
+        }
+
         var millilitres = selected * voxelMillilitres;
 
-        if (selected > 0 && millilitres < options.MinVentricleMillilitres)
+        if (millilitres < options.MinVentricleMillilitres)
         {
             return Refused(grid, TooSmall(millilitres), labels, candidate);
         }
@@ -499,6 +515,22 @@ public static partial class BaselineVentricleSegmentation
         {
             ["reason"] = "ventricularSystemOneSided",
             ["smallerSideFraction"] = smallerSide.ToString("0.###", CultureInfo.InvariantCulture),
+        },
+    };
+
+    /// <summary>
+    /// Отбор не нашёл ни одного отсчёта желудочковой системы.
+    ///
+    /// Отдельно от «слишком мала»: «ничего не найдено» и «найдено мало» —
+    /// разные утверждения, и второе подсказывает, что структура всё же видна.
+    /// </summary>
+    private static QualityIssue NothingFound() => new()
+    {
+        Code = QualityIssueCode.InconsistentGeometry,
+        Severity = QualityIssueSeverity.Blocking,
+        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["reason"] = "ventricularSystemNotFound",
         },
     };
 

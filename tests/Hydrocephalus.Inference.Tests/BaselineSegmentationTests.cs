@@ -116,6 +116,30 @@ public sealed class BaselineSegmentationTests
     }
 
     [Fact]
+    public void Finding_nothing_is_a_refusal_and_not_a_result()
+    {
+        // Отбор, не нашедший ни одного отсчёта, прежде выходил с пометкой
+        // «сомнительно», то есть годным: проверка размера стояла под условием
+        // «найдено больше нуля», чтобы не объявлять «0,0 мл — слишком мало».
+        //
+        // Молчание обошлось дороже неточности. Индекс Эванса принимал пустую
+        // маску и отказывал с причиной «не найдены передние рога» — рога не
+        // найдены не на снимке, а в пустоте; по этой ложной причине был составлен
+        // план работ. «Ничего не найдено» и «найдено мало» — разные утверждения.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 0);
+
+        var result = BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1);
+
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+
+        Assert.Contains(
+            result.Issues,
+            issue => issue.Severity == QualityIssueSeverity.Blocking
+                && issue.Parameters.TryGetValue("reason", out var reason)
+                && reason == "ventricularSystemNotFound");
+    }
+
+    [Fact]
     public void The_result_is_always_marked_as_an_unvalidated_baseline()
     {
         // Замечание есть даже когда маска выглядит хорошо: иначе число из неё
