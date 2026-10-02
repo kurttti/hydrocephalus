@@ -149,7 +149,7 @@ public static class AutomaticEvansIndex
         var space = new PlaneSpace(volume, segmentation.Mask, axes);
         var threshold = IntensityThresholds.Otsu(volume);
 
-        if (FrontalHorns(space, threshold, cancellationToken) is not { } horns)
+        if (FrontalHorns(space, threshold, 0.0, FrontalFraction, cancellationToken) is not { } horns)
         {
             return Refused(AutomaticEvansRefusal.FrontalHornsNotFound);
         }
@@ -229,7 +229,137 @@ public static class AutomaticEvansIndex
         return Math.Abs(component(directions[best])) >= MinimumAxisAlignment ? best : null;
     }
 
-    private static Horns? FrontalHorns(PlaneSpace space, double threshold, CancellationToken cancellationToken)
+    /// <summary>
+    /// Доля головы спереди назад, с которой начинается поиск линии рогов, когда
+    /// маски желудочков нет.
+    ///
+    /// У трёхмерного пути окно отсчитывается от переднего края **маски
+    /// желудочков** и равно её передней трети. Здесь маски нет: по срезам
+    /// выделен весь ликвор, и его передний край — это лоб. Окно поэтому задано
+    /// долей головы, и доля взята из измерения: на шести исследованиях, где
+    /// трёхмерный путь работает, линия рогов легла на 31, 33, 35, 36, 40 и 41 %
+    /// передне-заднего размера головы. «Передняя треть головы» отсекла бы
+    /// четыре случая из шести.
+    /// </summary>
+    public const double SliceSearchFromFraction = 0.25;
+
+    /// <summary>Задняя граница того же окна: за ней идут тела желудочков.</summary>
+    public const double SliceSearchToFraction = 0.50;
+
+    /// <summary>Радиус размыкания маски ликвора, мм.</summary>
+    public const double SliceOpeningRadiusMillimetres = 2.0;
+
+    /// <summary>
+    /// Вычисляет индекс по срезам, без маски желудочков.
+    ///
+    /// Нужен там, где объёмная сегментация не даёт пригодной маски, то есть на
+    /// большей части выборки.
+    ///
+    /// Маска ликвора на срезе содержит и желудочки, и борозды, и щель, причём
+    /// одним куском. Разделяет их размыкание по толщине: желудочки на уровне
+    /// рогов 10–20 мм поперёк, борозды и щель 1–3 мм. По разомкнутой маске
+    /// выбираются область и линия; концы отрезка берутся продлением вдоль той же
+    /// линии по **неразомкнутой** маске, потому что сжатие срезает сужающиеся
+    /// концы рогов — ровно те точки, которые меряет индекс. Продление
+    /// одномерное и уйти в борозду не может.
+    /// </summary>
+    /// <param name="volume">Объём.</param>
+    /// <param name="weighting">Взвешенность серии.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Индекс с отрезками либо названная причина отказа.</returns>
+    public static AutomaticEvansResult MeasureOnSlices(
+        IVoxelVolume volume,
+        SeriesWeighting weighting,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(volume);
+
+        if (weighting is not (SeriesWeighting.T1 or SeriesWeighting.Flair))
+        {
+            return Refused(AutomaticEvansRefusal.WeightingNotSupported);
+        }
+
+        if (AxesOf(volume.Geometry) is not { } axes)
+        {
+            return Refused(AutomaticEvansRefusal.AxesNotAligned);
+        }
+
+        if (SliceCerebrospinalFluid.Build(
+                volume,
+                axes.AxialAcross,
+                darkCsf: true,
+                SliceOpeningRadiusMillimetres,
+                cancellationToken) is not { } masks)
+        {
+            return Refused(AutomaticEvansRefusal.SegmentationRefused);
+        }
+
+        var space = new PlaneSpace(volume, masks.Opened, axes);
+        var rawSpace = new PlaneSpace(volume, masks.Raw, axes);
+        var threshold = IntensityThresholds.Otsu(volume);
+
+        if (FrontalHorns(space, threshold, SliceSearchFromFraction, SliceSearchToFraction, cancellationToken)
+            is not { } horns)
+        {
+            return Refused(AutomaticEvansRefusal.FrontalHornsNotFound);
+        }
+
+        if (InnerSkull(space, threshold, horns) is not { } skull)
+        {
+            return Refused(AutomaticEvansRefusal.InnerSkullNotFound);
+        }
+
+        var (start, end) = ExtendOnRaw(rawSpace, horns);
+
+        var segments = new EvansSegments(
+            axes.AxialAcross,
+            horns.Plane,
+            space.Position(start - 0.5, horns.Line, horns.Plane),
+            space.Position(end + 0.5, horns.Line, horns.Plane),
+            space.Position(skull.Start - 0.5, skull.Line, horns.Plane),
+            space.Position(skull.End + 0.5, skull.Line, horns.Plane));
+
+        return new AutomaticEvansResult
+        {
+            Biomarker = LinearBiomarkers.EvansIndex(
+                volume,
+                segments.AxialAcross,
+                segments.FrontalHornFirst,
+                segments.FrontalHornSecond,
+                segments.InnerSkullFirst,
+                segments.InnerSkullSecond,
+                MeasurementQuality.Questionable),
+            Segments = segments,
+        };
+    }
+
+    /// <summary>
+    /// Продлевает концы отрезка вдоль его линии по неразомкнутой маске.
+    /// </summary>
+    private static (int Start, int End) ExtendOnRaw(PlaneSpace raw, Horns horns)
+    {
+        var start = horns.Start;
+        var end = horns.End;
+
+        while (start > 0 && raw.IsMask(start - 1, horns.Line, horns.Plane))
+        {
+            start--;
+        }
+
+        while (end < raw.Width - 1 && raw.IsMask(end + 1, horns.Line, horns.Plane))
+        {
+            end++;
+        }
+
+        return (start, end);
+    }
+
+    private static Horns? FrontalHorns(
+        PlaneSpace space,
+        double threshold,
+        double fromFraction,
+        double toFraction,
+        CancellationToken cancellationToken)
     {
         var (anteriorMost, span) = space.MaskExtentFrontToBack();
 
@@ -238,7 +368,8 @@ public static class AutomaticEvansIndex
             return null;
         }
 
-        var frontalLines = (int)(span * FrontalFraction);
+        var firstLine = (int)(span * fromFraction);
+        var frontalLines = (int)(span * toFraction);
         var reach = MidlineReachMillimetres / space.WidthSpacing;
         var side = MinimumSideMillimetres / space.WidthSpacing;
 
@@ -257,7 +388,7 @@ public static class AutomaticEvansIndex
 
             var central = CentralRegions(mask, space.Width, space.Lines, midline, reach);
 
-            for (var step = 0; step <= frontalLines; step++)
+            for (var step = firstLine; step <= frontalLines; step++)
             {
                 var line = space.LineFromFront(anteriorMost, step);
                 var (start, end) = Extent(central, space.Width, line);
