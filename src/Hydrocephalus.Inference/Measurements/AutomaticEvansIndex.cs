@@ -149,7 +149,7 @@ public static class AutomaticEvansIndex
         var space = new PlaneSpace(volume, segmentation.Mask, axes);
         var threshold = IntensityThresholds.Otsu(volume);
 
-        if (FrontalHorns(space, threshold, 0.0, FrontalFraction, cancellationToken) is not { } horns)
+        if (FrontalHorns(space, threshold, 0.0, FrontalFraction, null, cancellationToken) is not { } horns)
         {
             return Refused(AutomaticEvansRefusal.FrontalHornsNotFound);
         }
@@ -265,11 +265,16 @@ public static class AutomaticEvansIndex
     /// </summary>
     /// <param name="volume">Объём.</param>
     /// <param name="weighting">Взвешенность серии.</param>
+    /// <param name="onlyPlane">
+    /// Искать лишь на этом срезе; <see langword="null"/> — искать по всем.
+    /// Нужно для проверки: позволяет отделить выбор среза от измерения на нём.
+    /// </param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Индекс с отрезками либо названная причина отказа.</returns>
     public static AutomaticEvansResult MeasureOnSlices(
         IVoxelVolume volume,
         SeriesWeighting weighting,
+        int? onlyPlane = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(volume);
@@ -298,13 +303,18 @@ public static class AutomaticEvansIndex
         var rawSpace = new PlaneSpace(volume, masks.Raw, axes);
         var threshold = IntensityThresholds.Otsu(volume);
 
-        if (FrontalHorns(space, threshold, SliceSearchFromFraction, SliceSearchToFraction, cancellationToken)
-            is not { } horns)
+        if (FrontalHorns(
+                space,
+                threshold,
+                SliceSearchFromFraction,
+                SliceSearchToFraction,
+                onlyPlane,
+                cancellationToken) is not { } horns)
         {
             return Refused(AutomaticEvansRefusal.FrontalHornsNotFound);
         }
 
-        if (InnerSkull(space, threshold, horns) is not { } skull)
+        if (InnerSkull(space, threshold, horns, useMask: false) is not { } skull)
         {
             return Refused(AutomaticEvansRefusal.InnerSkullNotFound);
         }
@@ -359,6 +369,7 @@ public static class AutomaticEvansIndex
         double threshold,
         double fromFraction,
         double toFraction,
+        int? onlyPlane,
         CancellationToken cancellationToken)
     {
         var (anteriorMost, span) = space.MaskExtentFrontToBack();
@@ -378,6 +389,11 @@ public static class AutomaticEvansIndex
         for (var plane = 0; plane < space.Planes; plane++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (onlyPlane is { } wanted && plane != wanted)
+            {
+                continue;
+            }
 
             var mask = space.MaskPlane(plane);
 
@@ -437,7 +453,7 @@ public static class AutomaticEvansIndex
         return central;
     }
 
-    private static Skull? InnerSkull(PlaneSpace space, double threshold, Horns horns)
+    private static Skull? InnerSkull(PlaneSpace space, double threshold, Horns horns, bool useMask = true)
     {
         var width = space.Width;
         var lines = space.Lines;
@@ -448,8 +464,13 @@ public static class AutomaticEvansIndex
             for (var across = 0; across < width; across++)
             {
                 // Желудочки темнее порога, но принадлежат мозгу, а не фону.
+                // Маска добавляется к ткани лишь когда она — желудочки: тёмные
+                // внутри, но заведомо не наружное пространство. Маска ликвора на
+                // срезе содержит и кольцо у поверхности, и тогда тканью была бы
+                // объявлена полоса до самой кости — внутренняя пластинка не
+                // находится вовсе либо находится не там.
                 tissue[(line * width) + across] = space.Value(across, line, horns.Plane) > threshold
-                    || space.IsMask(across, line, horns.Plane);
+                    || (useMask && space.IsMask(across, line, horns.Plane));
             }
         }
 
