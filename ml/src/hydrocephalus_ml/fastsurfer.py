@@ -224,3 +224,172 @@ def ventricle_mask(labels):
         mask[labels == label] = 1
 
     return mask
+
+
+#: Размер входа, на который обучена сеть (`HEIGHT`/`WIDTH` в её конфигурации).
+MODEL_INPUT_SIZE = 256
+
+#: Число входных каналов: семь соседних срезов (`NUM_CHANNELS`).
+MODEL_INPUT_CHANNELS = 7
+
+
+class _AtOneMillimetre(torch.nn.Module):
+    """Сеть с закреплённым единичным масштабом.
+
+    Слой интерполяции VINN вычисляет размер выхода **из коэффициента масштаба
+    во время работы**, и граф получается зависимым от данных — так экспорт не
+    проходит. Коэффициент закрепляется единицей, и это не упрощение: снимок
+    приводится к 1 мм до вывода в любом случае, иначе стопка из семи соседних
+    срезов охватывает не семь миллиметров, а тридцать с лишним.
+
+    Отсюда ограничение, которое обязано ехать вместе с файлом: модель в ONNX
+    верна только для приведённого входа.
+    """
+
+    def __init__(self, inner: torch.nn.Module):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        scale = torch.ones(image.shape[0], 2, dtype=image.dtype, device=image.device)
+
+        return self.inner(image, scale)
+
+
+def export_onnx(
+    destination,
+    plane: str = "axial",
+    code_root=None,
+    weights_root=None,
+):
+    """Переводит один вид сети в ONNX одним файлом.
+
+    Нужно для поставки: Python в клиническую сборку не входит (ADR 0002), и
+    модель попадает туда весами ONNX внутри подписанного пакета (ADR 0004).
+
+    Веса сохраняются внутри файла, а не рядом: пакет подписывается целиком, и
+    отдельный файл данных пришлось бы подписывать и проверять отдельно.
+
+    Returns
+    -------
+    Path
+        Путь записанного файла.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    import onnx  # noqa: PLC0415
+
+    model = _AtOneMillimetre(load_model(plane, code_root, weights_root)).eval()
+    destination = _Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    image = torch.zeros(
+        1, MODEL_INPUT_CHANNELS, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, dtype=torch.float32
+    )
+
+    torch.onnx.export(
+        model,
+        (image,),
+        str(destination),
+        dynamo=True,
+        input_names=["image"],
+        output_names=["logits"],
+    )
+
+    # Экспорт кладёт веса в соседний файл; собираем обратно в один.
+    whole = onnx.load(str(destination))
+    onnx.save(whole, str(destination), save_as_external_data=False)
+
+    for leftover in destination.parent.glob(destination.name + ".data"):
+        leftover.unlink()
+
+    return destination
+
+
+#: Наибольший отрыв первого класса от второго, при котором расхождение метки
+#: считается ничьёй, а не ошибкой перевода.
+TIE_LOGIT_MARGIN = 1.0
+
+
+def compare_onnx(
+    onnx_path,
+    volume,
+    plane: str = "axial",
+    code_root=None,
+    weights_root=None,
+    centres=(100, 115, 128, 140, 155),
+):
+    """Сверяет разметку ONNX с исходной моделью PyTorch на настоящих срезах.
+
+    ADR 0009 называет расхождение здесь блокирующей ошибкой перевода: модель,
+    дающая в поставке другие метки, чем проверенная в контуре, обесценивает
+    всякую проверку до неё.
+
+    Сверяются **метки**, а не logits: у уверенно размеченного отсчёта отрыв
+    первого класса от второго достигает сотен, и расхождение logits в единицы
+    на метку не влияет. Считается ошибкой лишь расхождение метки там, где отрыв
+    больше :data:`TIE_LOGIT_MARGIN`; при меньшем отрыве метку переворачивает
+    любая разница округления, и это ничья, а не ошибка.
+
+    Сверять на случайном шуме недостаточно: он сети чужд, и расхождения на нём
+    ни о чём не говорят. Поэтому нужен настоящий объём.
+
+    Parameters
+    ----------
+    volume : numpy.ndarray
+        Приведённый объём, из которого берутся стопки срезов.
+
+    Returns
+    -------
+    dict
+        Доля совпавших меток, число настоящих расхождений и наибольший отрыв
+        среди них.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    import onnxruntime  # noqa: PLC0415
+
+    model = load_model(plane, code_root, weights_root)
+    session = onnxruntime.InferenceSession(
+        str(onnx_path), providers=["CPUExecutionProvider"]
+    )
+
+    agreed = 0
+    total = 0
+    genuine = 0
+    worst_margin = 0.0
+
+    for centre in centres:
+        stack = np.stack(
+            [
+                volume[:, min(max(centre + offset, 0), volume.shape[1] - 1), :]
+                for offset in range(-3, 4)
+            ],
+            axis=0,
+        )
+        image = torch.from_numpy(stack[None].astype(np.float32))
+
+        with torch.no_grad():
+            expected = model(image, torch.ones(1, 2)).numpy()
+
+        actual = session.run(["logits"], {"image": image.numpy()})[0]
+        expected_labels = expected.argmax(1)
+        actual_labels = actual.argmax(1)
+
+        agreed += int((expected_labels == actual_labels).sum())
+        total += int(expected_labels.size)
+
+        for batch, y, x in np.argwhere(expected_labels != actual_labels):
+            ranked = np.sort(expected[batch, :, y, x])
+            margin = float(ranked[-1] - ranked[-2])
+
+            if margin > TIE_LOGIT_MARGIN:
+                genuine += 1
+                worst_margin = max(worst_margin, margin)
+
+    return {
+        "label_agreement": agreed / total,
+        "genuine_disagreements": genuine,
+        "worst_genuine_margin": worst_margin,
+        "voxels": total,
+    }
