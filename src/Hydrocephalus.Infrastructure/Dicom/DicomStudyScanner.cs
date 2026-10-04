@@ -99,6 +99,14 @@ public sealed class DicomStudyScanner
                 continue;
             }
 
+            if (!IsHead(dataset))
+            {
+                rejections.Add(new ImportRejection(
+                    ImportRejectionCode.NotHead,
+                    walk.OpaqueReference(file.FullName)));
+                continue;
+            }
+
             var sopInstanceUid = dataset.GetSingleValueOrDefault(DicomTag.SOPInstanceUID, string.Empty);
 
             if (!string.IsNullOrWhiteSpace(sopInstanceUid) && !acceptedInstances.Add(sopInstanceUid))
@@ -150,6 +158,45 @@ public sealed class DicomStudyScanner
 
         return string.IsNullOrEmpty(modality)
             || string.Equals(modality, "MR", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Головные области съёмки.
+    ///
+    /// Перечень разрешающий, а не запрещающий, — как и у модальности. Запрещать
+    /// пришлось бы перечислением всего остального тела, и каждая незнакомая
+    /// область молча проходила бы как голова.
+    ///
+    /// Состав взят из данных: в замороженном наборе встречаются только `HEAD`
+    /// (53 серии) и `BRAIN` (20), остальные 312 тег не заполняют. `SKULL` и
+    /// `HEADNECK` добавлены как стандартные определённые термины DICOM той же
+    /// области.
+    /// </summary>
+    private static readonly string[] HeadBodyParts = ["HEAD", "BRAIN", "SKULL", "HEADNECK"];
+
+    /// <summary>
+    /// Голова ли на снимке.
+    ///
+    /// Цель исследования — головной мозг (решение владельца данных), и снимок
+    /// живота или позвоночника разбирать незачем.
+    ///
+    /// Пустой тег пропускается: в наборе он пуст у 312 серий из 385, и отклонять
+    /// по нему значило бы потерять почти весь материал. Поэтому проверка ловит
+    /// лишь то, что помечено явно, — чего для абдоминальных серий довольно.
+    ///
+    /// Значение сравнивается обрезанным и без учёта регистра: DICOM дополняет
+    /// строки VR CS пробелом до чётной длины.
+    /// </summary>
+    /// <param name="dataset">Набор тегов файла.</param>
+    /// <returns><c>true</c>, если область головная или не объявлена.</returns>
+    private static bool IsHead(DicomDataset dataset)
+    {
+        var part = dataset.GetSingleValueOrDefault(DicomTag.BodyPartExamined, string.Empty)?.Trim();
+
+        return string.IsNullOrEmpty(part)
+            || Array.Exists(
+                HeadBodyParts,
+                known => string.Equals(known, part, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

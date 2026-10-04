@@ -272,6 +272,52 @@ public sealed class DicomStudyScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_study_of_another_body_part_is_refused_with_a_named_reason()
+    {
+        // Цель — головной мозг. Прежде абдоминальная МРТ принималась как
+        // Baseline/T1 и отвергалась лишь сегментацией, с причиной «желудочки
+        // неправдоподобно малы»: формально верной, по существу вводящей в
+        // заблуждение, потому что желудочков в животе нет.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "AB0.dcm"),
+            studyUid: "1.2.3.600",
+            seriesUid: "1.2.3.601",
+            patientId: "P-1",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.BodyPartExamined, "ABDOMEN"));
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        Assert.Empty(result.Studies);
+        Assert.Equal(ImportRejectionCode.NotHead, Assert.Single(result.Rejections).Code);
+    }
+
+    [Theory]
+    [InlineData("HEAD")]
+    [InlineData("BRAIN")]
+    [InlineData("HEAD ")]
+    [InlineData("")]
+    public async Task A_head_study_is_accepted_however_the_body_part_is_spelled(string part)
+    {
+        // Пустое значение принимается намеренно: в наборе тег пуст у 312 серий
+        // из 385. Дополняющий пробел VR CS значения не меняет.
+        //
+        // Строчное написание не проверяется: VR CS допускает только прописные,
+        // и такое значение в DICOM не записать. Сравнение в коде всё равно идёт
+        // без учёта регистра — на случай снимка, собранного в обход стандарта.
+        SyntheticDicom.WriteSlice(
+            Path.Combine(this.root.FullName, "HD0.dcm"),
+            studyUid: "1.2.3.610",
+            seriesUid: "1.2.3.611",
+            patientId: "P-1",
+            customize: dataset => dataset.AddOrUpdate(DicomTag.BodyPartExamined, part));
+
+        var result = await new DicomStudyScanner(Options()).ScanAsync(this.root.FullName, CancellationToken.None);
+
+        Assert.Empty(result.Rejections);
+        Assert.Single(result.Studies);
+    }
+
+    [Fact]
     public async Task A_slice_without_a_declared_modality_is_still_accepted()
     {
         // Снисходительность намеренная: пустой тег означает неполный экспорт, а не
