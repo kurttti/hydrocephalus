@@ -287,6 +287,12 @@ def export_onnx(
         1, MODEL_INPUT_CHANNELS, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, dtype=torch.float32
     )
 
+    # Пачка закреплена единицей, и это вынужденно. `torch.export` спотыкается о
+    # слой интерполяции — тот вычисляет размер выхода из коэффициента масштаба
+    # во время работы, — экспорт уходит в запасной путь через TorchScript, а он
+    # переменные оси не принимает и запекает форму целиком. Обойти интерполяцию
+    # значило бы менять саму сеть, то есть поставлять не то, что проверено.
+    # Движок поэтому считает срез за срезом.
     torch.onnx.export(
         model,
         (image,),
@@ -311,15 +317,64 @@ def export_onnx(
 TIE_LOGIT_MARGIN = 1.0
 
 
-def compare_onnx(
-    onnx_path,
-    volume,
-    plane: str = "axial",
-    code_root=None,
-    weights_root=None,
-    centres=(100, 115, 128, 140, 155),
-):
-    """Сверяет разметку ONNX с исходной моделью PyTorch на настоящих срезах.
+def capture_network_input(volume, zooms, affine, plane="axial", code_root=None, weights_root=None):
+    """Перехватывает тензор, который в действительности приходит в сеть.
+
+    Нужен сверке. Подавать сети срезы напрямую — значит проверять её как
+    функцию, а не тот вход, который придётся воспроизводить в движке: путь
+    данных FastSurfer делит значения на 255, собирает по семь соседних срезов и
+    складывает их пачками, и всё это между объёмом и сетью. Сверка на сыром
+    срезе этого не захватывает, а числа там в 255 раз больше настоящих.
+
+    Returns
+    -------
+    tuple
+        Тензор входа (N, 7, 256, 256) и коэффициент масштаба.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    root = _code_root(code_root)
+
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from FastSurferCNN.inference import Inference  # noqa: PLC0415
+
+    grabbed: list = []
+    original = Inference.run
+
+    def patched(self, init_pred, name, data, zoom, out=None, out_res=None, batch_size=None):
+        def hook(module, inputs):
+            if not grabbed:
+                grabbed.append((inputs[0].detach().clone(), inputs[1].detach().clone()))
+
+        handle = self.model.register_forward_pre_hook(hook)
+
+        try:
+            return original(self, init_pred, name, data, zoom, out=out, out_res=out_res, batch_size=batch_size)
+        finally:
+            handle.remove()
+
+    Inference.run = patched
+
+    try:
+        segment(volume, zooms, affine, planes=(plane,), code_root=code_root, weights_root=weights_root)
+    finally:
+        Inference.run = original
+
+    if not grabbed:
+        raise RuntimeError("Вход сети не перехвачен.")
+
+    return grabbed[0]
+
+
+#: Наибольший отрыв первого класса от второго, при котором расхождение метки
+#: считается ничьёй, а не ошибкой перевода.
+TIE_LOGIT_MARGIN = 1.0
+
+
+def compare_onnx(onnx_path, network_input, scale, plane="axial", code_root=None, weights_root=None):
+    """Сверяет разметку ONNX с исходной моделью на перехваченном входе.
 
     ADR 0009 называет расхождение здесь блокирующей ошибкой перевода: модель,
     дающая в поставке другие метки, чем проверенная в контуре, обесценивает
@@ -327,69 +382,54 @@ def compare_onnx(
 
     Сверяются **метки**, а не logits: у уверенно размеченного отсчёта отрыв
     первого класса от второго достигает сотен, и расхождение logits в единицы
-    на метку не влияет. Считается ошибкой лишь расхождение метки там, где отрыв
-    больше :data:`TIE_LOGIT_MARGIN`; при меньшем отрыве метку переворачивает
-    любая разница округления, и это ничья, а не ошибка.
+    на метку не влияет. Ошибкой считается расхождение метки там, где отрыв
+    больше :data:`TIE_LOGIT_MARGIN`; при меньшем метку переворачивает любая
+    разница округления, и это ничья.
 
-    Сверять на случайном шуме недостаточно: он сети чужд, и расхождения на нём
-    ни о чём не говорят. Поэтому нужен настоящий объём.
-
-    Parameters
-    ----------
-    volume : numpy.ndarray
-        Приведённый объём, из которого берутся стопки срезов.
+    Вход берётся из :func:`capture_network_input`, а не собирается вручную.
 
     Returns
     -------
     dict
-        Доля совпавших меток, число настоящих расхождений и наибольший отрыв
-        среди них.
+        Доля совпавших меток, число настоящих расхождений, наибольшее
+        расхождение logits и число отсчётов.
     """
     import numpy as np  # noqa: PLC0415
 
     import onnxruntime  # noqa: PLC0415
 
     model = load_model(plane, code_root, weights_root)
-    session = onnxruntime.InferenceSession(
-        str(onnx_path), providers=["CPUExecutionProvider"]
-    )
+    session = onnxruntime.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
 
+    data = network_input.numpy() if torch.is_tensor(network_input) else np.asarray(network_input)
     agreed = 0
     total = 0
     genuine = 0
-    worst_margin = 0.0
+    worst = 0.0
 
-    for centre in centres:
-        stack = np.stack(
-            [
-                volume[:, min(max(centre + offset, 0), volume.shape[1] - 1), :]
-                for offset in range(-3, 4)
-            ],
-            axis=0,
-        )
-        image = torch.from_numpy(stack[None].astype(np.float32))
+    # Срез за срезом: в экспортированной модели пачка закреплена единицей.
+    for index in range(data.shape[0]):
+        one = data[index : index + 1].astype(np.float32)
 
         with torch.no_grad():
-            expected = model(image, torch.ones(1, 2)).numpy()
+            expected = model(torch.from_numpy(one), scale[:1]).numpy()
 
-        actual = session.run(["logits"], {"image": image.numpy()})[0]
+        actual = session.run(["logits"], {"image": one})[0]
+        worst = max(worst, float(np.abs(expected - actual).max()))
         expected_labels = expected.argmax(1)
         actual_labels = actual.argmax(1)
-
         agreed += int((expected_labels == actual_labels).sum())
         total += int(expected_labels.size)
 
         for batch, y, x in np.argwhere(expected_labels != actual_labels):
             ranked = np.sort(expected[batch, :, y, x])
-            margin = float(ranked[-1] - ranked[-2])
 
-            if margin > TIE_LOGIT_MARGIN:
+            if float(ranked[-1] - ranked[-2]) > TIE_LOGIT_MARGIN:
                 genuine += 1
-                worst_margin = max(worst_margin, margin)
 
     return {
         "label_agreement": agreed / total,
         "genuine_disagreements": genuine,
-        "worst_genuine_margin": worst_margin,
+        "max_logit_difference": worst,
         "voxels": total,
     }
