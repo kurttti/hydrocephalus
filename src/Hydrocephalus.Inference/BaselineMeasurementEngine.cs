@@ -1,4 +1,5 @@
 using Hydrocephalus.Domain;
+using System.Globalization;
 using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Measurements;
@@ -95,14 +96,68 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
     /// <param name="request">Запрос на анализ.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Результат контроля качества.</returns>
-    public Task<QualityAssessment> RunQualityControlAsync(
+    public async Task<QualityAssessment> RunQualityControlAsync(
         AnalysisRequest request,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
         cancellationToken.ThrowIfCancellationRequested();
 
-        return Task.FromResult(this.qualityControl.Evaluate(request));
+        var assessment = this.qualityControl.Evaluate(request);
+        var series = SeriesOf(request);
+
+        // Голова ли на снимке — проверяется здесь, а не на приёмке: приёмка
+        // читает только теги, а теги об этом лгут. Найденная абдоминальная МРТ
+        // объявляет себя `TEMP^HEAD` при пустой области съёмки.
+        //
+        // И здесь, а не в измерении: контроль качества идёт первым и
+        // останавливает разбор, то есть снимок живота не проходит сегментацию
+        // ради отказа «желудочки неправдоподобно малы» — правды о числе и
+        // неправды о сути.
+        if (series is null || !assessment.IsAcceptable)
+        {
+            return assessment;
+        }
+
+        var volume = await this.volumes
+            .LoadAsync(request.VolumeReference, series.PseudonymousSeriesId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var (extent, looksLikeHead) = HeadPresence.Measure(volume, cancellationToken);
+
+        if (looksLikeHead)
+        {
+            return assessment;
+        }
+
+        return new QualityAssessment
+        {
+            Issues =
+            [
+                .. assessment.Issues,
+                new QualityIssue
+                {
+                    Code = QualityIssueCode.NotAHeadStudy,
+                    Severity = QualityIssueSeverity.Blocking,
+                    Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["extentMillimetres"] = extent.ToString(
+                            "0", CultureInfo.InvariantCulture),
+                        ["limitMillimetres"] = HeadPresence.MaxHeadExtentMillimetres.ToString(
+                            "0", CultureInfo.InvariantCulture),
+                    },
+                },
+            ],
+        };
     }
+
+    /// <summary>Серия запроса либо <see langword="null"/>, если её нет.</summary>
+    private static ImagingSeries? SeriesOf(AnalysisRequest request) =>
+        request.Study.Series.FirstOrDefault(item => string.Equals(
+            item.PseudonymousSeriesId,
+            request.PseudonymousSeriesId,
+            StringComparison.Ordinal));
 
     /// <summary>
     /// Измеряет объёмы желудочковой системы и отказывается от классификации.
@@ -142,10 +197,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
-        var series = request.Study.Series.FirstOrDefault(item => string.Equals(
-            item.PseudonymousSeriesId,
-            request.PseudonymousSeriesId,
-            StringComparison.Ordinal));
+        var series = SeriesOf(request);
 
         if (series is null)
         {
@@ -183,6 +235,16 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
             var volume = await this.volumes
                 .LoadAsync(request.VolumeReference, series.PseudonymousSeriesId, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Голова ли это — до сегментации, а не после. Снимок живота иначе
+            // проходит весь разбор, чтобы получить отказ «желудочки
+            // неправдоподобно малы»: правду о числе и неправду о сути.
+            var (extent, looksLikeHead) = HeadPresence.Measure(volume, cancellationToken);
+
+            if (!looksLikeHead)
+            {
+                return [];
+            }
 
             var segmentation = BaselineVentricleSegmentation.Segment(
                 volume,

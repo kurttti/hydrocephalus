@@ -431,6 +431,11 @@ public static class ResultReadout
             QualityIssueCode.UnsupportedVoxelGeometry => DescribeVoxelGeometry(parameter, parameters),
             QualityIssueCode.HeadTruncated => DescribeTruncation(reason, parameter, parameters),
 
+            QualityIssueCode.NotAHeadStudy =>
+                "Это снимок не головы: анатомия поперёк "
+                + Value(parameters, "extentMillimetres") + " мм при допустимых "
+                + Value(parameters, "limitMillimetres") + ". Разбор не выполнялся.",
+
             QualityIssueCode.AcquisitionTierTooLow =>
                 "Геометрии серии не хватает даже на линейные измерения.",
 
