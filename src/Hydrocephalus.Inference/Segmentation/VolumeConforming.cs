@@ -72,6 +72,62 @@ public static class VolumeConforming
     }
 
     /// <summary>
+    /// Переносит разметку приведённого куба обратно в сетку серии.
+    ///
+    /// Нужно потому, что меряет приложение в геометрии снимка, а не приведённой:
+    /// отрезки обязаны лечь на те же отсчёты, которые видит врач.
+    ///
+    /// Выборка ближайшим соседом, а не линейная: метки не усредняются — половина
+    /// желудочка не желудочек.
+    /// </summary>
+    /// <param name="conformed">Разметка куба: 1 — желудочки, 0 — остальное.</param>
+    /// <param name="volume">Объём серии, в сетку которого переносится разметка.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Разметка в сетке серии.</returns>
+    public static byte[] ProjectBack(
+        byte[] conformed,
+        IVoxelVolume volume,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(conformed);
+        ArgumentNullException.ThrowIfNull(volume);
+
+        var dimensions = volume.Grid.Dimensions;
+        var source = SourceToPatient(volume);
+        var target = TargetToPatient(source, dimensions);
+        var inverseTarget = Invert(target);
+        var labels = new byte[dimensions.Columns * dimensions.Rows * dimensions.Slices];
+
+        for (var slice = 0; slice < dimensions.Slices; slice++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            for (var row = 0; row < dimensions.Rows; row++)
+            {
+                for (var column = 0; column < dimensions.Columns; column++)
+                {
+                    var patient = Apply(source, column, row, slice);
+                    var cube = Apply(inverseTarget, patient[0], patient[1], patient[2]);
+
+                    var i = (int)Math.Round(cube[0]);
+                    var j = (int)Math.Round(cube[1]);
+                    var k = (int)Math.Round(cube[2]);
+
+                    if (i < 0 || j < 0 || k < 0 || i >= Size || j >= Size || k >= Size)
+                    {
+                        continue;
+                    }
+
+                    labels[(((slice * dimensions.Rows) + row) * dimensions.Columns) + column] =
+                        conformed[(((k * Size) + j) * Size) + i];
+                }
+            }
+        }
+
+        return labels;
+    }
+
+    /// <summary>
     /// Переход от отсчётов серии к координатам пациента, в системе RAS.
     ///
     /// DICOM задаёт направления в LPS, а обучающий контур работает в RAS;
