@@ -4,6 +4,12 @@
     <ProjectReference Include="..\Hydrocephalus.Domain\Hydrocephalus.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Движок вывода обученной модели (ADR 0009). Нативные библиотеки пакета
+         попадают в установщик и SBOM — требование ADR 0002. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
