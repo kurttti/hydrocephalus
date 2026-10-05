@@ -102,6 +102,12 @@ public sealed class OnnxVentricleSegmentation : IDisposable
         var inputName = this.session.InputMetadata.Keys.Single();
         var mask = new byte[expected];
         var tensor = new DenseTensor<float>([1, SliceStack, size, size]);
+        var area = size * size;
+
+        // Лучший класс и его значение по каждому отсчёту среза. Заводятся один
+        // раз: на 256 срезов это 256 выделений вместо двух.
+        var bestValue = new float[area];
+        var bestLabel = new byte[area];
 
         // Осевые срезы приведённого куба перпендикулярны второй оси: укладка
         // LIA ставит по ней направление «вниз». Внутри среза строка тензора
@@ -117,29 +123,42 @@ public sealed class OnnxVentricleSegmentation : IDisposable
             using var results = this.session.Run(
                 [NamedOnnxValue.CreateFromTensor(inputName, tensor)]);
 
-            var logits = results.Single().AsTensor<float>();
+            // Выход читается сплошным куском памяти, а не по многомерному
+            // указателю: там на каждый отсчёт пересчитывается индекс с проверкой
+            // границ, и перебор 79 классов по 65 тысячам отсчётов каждого из 256
+            // срезов — это 1,3 млрд таких обращений.
+            var logits = results.Single().Value as DenseTensor<float>
+                ?? throw new DomainRuleViolationException(
+                    "The model returned an output that is not a dense tensor.");
+            var values = logits.Buffer.Span;
+
+            bestValue.AsSpan().Fill(float.NegativeInfinity);
+
+            for (var label = 0; label < FreeSurferLabels.Length; label++)
+            {
+                var offset = label * area;
+
+                for (var index = 0; index < area; index++)
+                {
+                    var value = values[offset + index];
+
+                    if (value > bestValue[index])
+                    {
+                        bestValue[index] = value;
+                        bestLabel[index] = (byte)label;
+                    }
+                }
+            }
 
             for (var row = 0; row < size; row++)
             {
+                var rowBase = (row * size) + plane;
+
                 for (var column = 0; column < size; column++)
                 {
-                    var best = 0;
-                    var bestValue = float.NegativeInfinity;
-
-                    for (var label = 0; label < FreeSurferLabels.Length; label++)
+                    if (this.isVentricle[bestLabel[(row * size) + column]])
                     {
-                        var value = logits[0, label, row, column];
-
-                        if (value > bestValue)
-                        {
-                            bestValue = value;
-                            best = label;
-                        }
-                    }
-
-                    if (this.isVentricle[best])
-                    {
-                        mask[(((row * size) + plane) * size) + column] = 1;
+                        mask[(rowBase * size) + column] = 1;
                     }
                 }
             }
@@ -161,17 +180,23 @@ public sealed class OnnxVentricleSegmentation : IDisposable
     /// </summary>
     private static void Fill(DenseTensor<float> tensor, byte[] conformed, int plane, int size)
     {
+        var destination = tensor.Buffer.Span;
+        var area = size * size;
+
         for (var channel = 0; channel < SliceStack; channel++)
         {
             var source = Math.Clamp(plane + channel - (SliceStack / 2), 0, size - 1);
+            var channelBase = channel * area;
 
             for (var row = 0; row < size; row++)
             {
+                var from = ((row * size) + source) * size;
+                var to = channelBase + (row * size);
+
                 for (var column = 0; column < size; column++)
                 {
                     // Сеть обучена на значениях от нуля до единицы, а не 0–255.
-                    tensor[0, channel, row, column] =
-                        conformed[(((row * size) + source) * size) + column] / 255f;
+                    destination[to + column] = conformed[from + column] / 255f;
                 }
             }
         }
