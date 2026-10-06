@@ -107,11 +107,11 @@ public static class VolumeConforming
                 for (var column = 0; column < dimensions.Columns; column++)
                 {
                     var patient = Apply(source, column, row, slice);
-                    var cube = Apply(inverseTarget, patient[0], patient[1], patient[2]);
+                    var cube = Apply(inverseTarget, patient.X, patient.Y, patient.Z);
 
-                    var i = (int)Math.Round(cube[0]);
-                    var j = (int)Math.Round(cube[1]);
-                    var k = (int)Math.Round(cube[2]);
+                    var i = (int)Math.Round(cube.X);
+                    var j = (int)Math.Round(cube.Y);
+                    var k = (int)Math.Round(cube.Z);
 
                     if (i < 0 || j < 0 || k < 0 || i >= Size || j >= Size || k >= Size)
                     {
@@ -183,9 +183,11 @@ public static class VolumeConforming
 
         var half = Size / 2.0;
 
+        Span<double> centres = [centre.X, centre.Y, centre.Z];
+
         for (var row = 0; row < 3; row++)
         {
-            matrix[row, 3] = centre[row]
+            matrix[row, 3] = centres[row]
                 - ((matrix[row, 0] * half) + (matrix[row, 1] * half) + (matrix[row, 2] * half));
         }
 
@@ -211,10 +213,10 @@ public static class VolumeConforming
                 for (var i = 0; i < Size; i++)
                 {
                     var patient = Apply(targetToPatient, i, j, k);
-                    var source = Apply(patientToSource, patient[0], patient[1], patient[2]);
+                    var source = Apply(patientToSource, patient.X, patient.Y, patient.Z);
 
                     sampled[(((k * Size) + j) * Size) + i] =
-                        Sample(volume, dimensions, source[0], source[1], source[2]);
+                        Sample(volume, dimensions, source.X, source.Y, source.Z);
                 }
             }
         }
@@ -342,12 +344,20 @@ public static class VolumeConforming
         matrix[2, column] = direction.Z * unit;
     }
 
-    private static double[] Apply(double[,] matrix, double i, double j, double k) =>
-    [
+    /// <summary>
+    /// Применяет однородную матрицу к точке.
+    ///
+    /// Возвращает кортеж, а не массив: вызывается на каждый отсчёт, а отсчётов
+    /// в кубе шестнадцать миллионов. Массив означал бы столько же выделений в
+    /// куче, и приведение занимало минуты вместо секунд.
+    /// </summary>
+    private static (double X, double Y, double Z) Apply(
+        double[,] matrix, double i, double j, double k) =>
+    (
         (matrix[0, 0] * i) + (matrix[0, 1] * j) + (matrix[0, 2] * k) + matrix[0, 3],
         (matrix[1, 0] * i) + (matrix[1, 1] * j) + (matrix[1, 2] * k) + matrix[1, 3],
-        (matrix[2, 0] * i) + (matrix[2, 1] * j) + (matrix[2, 2] * k) + matrix[2, 3],
-    ];
+        (matrix[2, 0] * i) + (matrix[2, 1] * j) + (matrix[2, 2] * k) + matrix[2, 3]
+    );
 
     /// <summary>Обращение однородной матрицы 4×4 методом Гаусса.</summary>
     private static double[,] Invert(double[,] matrix)
