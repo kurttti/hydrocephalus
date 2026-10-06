@@ -204,8 +204,11 @@ public sealed class AuditJournalReaderTests : IDisposable
         // Более новая версия пишет событие, которого эта не знает. Разбор кода
         // даёт Unspecified, а имя должно дожить до экрана: «событие неизвестного
         // кода» без указания какого не помогает разбирающему журнал.
+        //
+        // Имя нарочно небывалое: прежде здесь стояло правдоподобное, и когда
+        // такой код действительно появился, тест стал проверять не то.
         const string payload =
-            """{"code":"ModelPackageLoaded","occurredAt":"2026-03-14T09:26:53.0000000Z"}""";
+            """{"code":"SomethingThisVersionHasNeverHeardOf","occurredAt":"2026-03-14T09:26:53.0000000Z"}""";
 
         var separator = ((char)0x1E).ToString();
         var hash = Convert.ToHexStringLower(SHA256.HashData(
@@ -225,7 +228,7 @@ public sealed class AuditJournalReaderTests : IDisposable
 
         Assert.Equal(AuditRecordIntegrity.Verified, record.Integrity);
         Assert.Equal(AuditEventCode.Unspecified, record.Code);
-        Assert.Equal("ModelPackageLoaded", record.CodeName);
+        Assert.Equal("SomethingThisVersionHasNeverHeardOf", record.CodeName);
     }
 
     private Task<AuditJournal> ReadAsync() =>

@@ -5,70 +5,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using Hydrocephalus.Domain.Abstractions;
+
 namespace Hydrocephalus.Infrastructure.Models;
-
-/// <summary>
-/// Причина, по которой пакет модели не принят.
-///
-/// Код машинно-читаемый: объяснение для человека собирается на слое
-/// представления. Частичная загрузка запрещена — любой из этих случаев означает
-/// отказ целиком (ADR 0004).
-/// </summary>
-public enum ModelPackageRejection
-{
-    /// <summary>Причина не задана.</summary>
-    Unspecified = 0,
-
-    /// <summary>Файл не читается как пакет.</summary>
-    NotAPackage = 1,
-
-    /// <summary>Манифест отсутствует или не разбирается.</summary>
-    ManifestUnreadable = 2,
-
-    /// <summary>Список хешей отсутствует или не разбирается.</summary>
-    ChecksumsUnreadable = 3,
-
-    /// <summary>Подписи нет, либо она не сходится с доверенным ключом.</summary>
-    SignatureInvalid = 4,
-
-    /// <summary>Хеш файла не совпал с объявленным.</summary>
-    ContentAltered = 5,
-
-    /// <summary>Состав пакета не совпадает с объявленным: файл лишний или пропал.</summary>
-    CompositionMismatch = 6,
-
-    /// <summary>Пакет требует более новой версии приложения.</summary>
-    ApplicationTooOld = 7,
-
-    /// <summary>Версия предобработки или карты меток приложению неизвестна.</summary>
-    IncompatibleContract = 8,
-}
-
-/// <summary>
-/// Объявление пакета модели.
-/// </summary>
-/// <param name="FormatVersion">Версия самого формата пакета.</param>
-/// <param name="ModelVersion">Версия модели, как её показывают врачу.</param>
-/// <param name="MinimumApplicationVersion">Наименьшая версия приложения, с которой пакет совместим.</param>
-/// <param name="PreprocessingVersion">Версия описания предобработки.</param>
-/// <param name="LabelMapVersion">Версия карты меток.</param>
-/// <param name="SigningKeyId">Идентификатор ключа, которым подписан список хешей.</param>
-public sealed record ModelPackageManifest(
-    [property: JsonPropertyName("formatVersion")] string FormatVersion,
-    [property: JsonPropertyName("modelVersion")] string ModelVersion,
-    [property: JsonPropertyName("minimumApplicationVersion")] string MinimumApplicationVersion,
-    [property: JsonPropertyName("preprocessingVersion")] string PreprocessingVersion,
-    [property: JsonPropertyName("labelMapVersion")] string LabelMapVersion,
-    [property: JsonPropertyName("signingKeyId")] string SigningKeyId);
-
-/// <summary>Итог проверки пакета.</summary>
-/// <param name="Manifest">Объявление пакета; <see langword="null"/> при отказе.</param>
-/// <param name="Rejection">Причина отказа; <see langword="null"/>, если пакет принят.</param>
-/// <param name="Detail">Уточнение к причине: имя файла или версия. Не содержит PHI.</param>
-public sealed record ModelPackageCheck(
-    ModelPackageManifest? Manifest,
-    ModelPackageRejection? Rejection,
-    string Detail = "");
 
 /// <summary>
 /// Пакет модели: чтение, проверка целостности и подписи.
@@ -83,6 +22,23 @@ public sealed record ModelPackageCheck(
 /// </summary>
 public static class ModelPackage
 {
+    /// <summary>
+    /// Манифест, как он лежит в файле.
+    ///
+    /// Отдельный от доменного тип: имена полей в JSON — забота формата, а не
+    /// договора. Домену незачем знать, как пакет записан на диск.
+    /// </summary>
+    private sealed record ManifestFile(
+        [property: JsonPropertyName("formatVersion")] string FormatVersion,
+        [property: JsonPropertyName("modelVersion")] string ModelVersion,
+        [property: JsonPropertyName("minimumApplicationVersion")] string MinimumApplicationVersion,
+        [property: JsonPropertyName("preprocessingVersion")] string PreprocessingVersion,
+        [property: JsonPropertyName("labelMapVersion")] string LabelMapVersion,
+        [property: JsonPropertyName("signingKeyId")] string SigningKeyId);
+
+    /// <summary>Настройки записи манифеста: читаемый отступ, один экземпляр.</summary>
+    private static readonly JsonSerializerOptions ManifestFormat = new() { WriteIndented = true };
+
     /// <summary>Версия формата, которую понимает эта сборка.</summary>
     public const string SupportedFormatVersion = "1";
 
@@ -193,7 +149,15 @@ public static class ModelPackage
 
         try
         {
-            manifest = JsonSerializer.Deserialize<ModelPackageManifest>(manifestBytes);
+            manifest = JsonSerializer.Deserialize<ManifestFile>(manifestBytes) is { } file
+                ? new ModelPackageManifest(
+                    file.FormatVersion,
+                    file.ModelVersion,
+                    file.MinimumApplicationVersion,
+                    file.PreprocessingVersion,
+                    file.LabelMapVersion,
+                    file.SigningKeyId)
+                : null;
         }
         catch (JsonException)
         {
@@ -333,6 +297,30 @@ public static class ModelPackage
         }
 
         return declared.Count > 0 ? declared : null;
+    }
+
+    /// <summary>
+    /// Записывает манифест в том виде, в каком его читает <see cref="Verify"/>.
+    ///
+    /// Запись и чтение держатся рядом намеренно: имена полей в файле — забота
+    /// формата, и разойдясь, они дали бы пакет, который не читается собственным
+    /// же приложением.
+    /// </summary>
+    /// <param name="manifest">Объявление пакета.</param>
+    /// <returns>Содержимое `manifest.json`.</returns>
+    public static byte[] WriteManifest(ModelPackageManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+
+        return JsonSerializer.SerializeToUtf8Bytes(
+            new ManifestFile(
+                manifest.FormatVersion,
+                manifest.ModelVersion,
+                manifest.MinimumApplicationVersion,
+                manifest.PreprocessingVersion,
+                manifest.LabelMapVersion,
+                manifest.SigningKeyId),
+            ManifestFormat);
     }
 
     /// <summary>

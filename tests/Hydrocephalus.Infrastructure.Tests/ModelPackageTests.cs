@@ -1,7 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
+using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Infrastructure.Models;
 
 namespace Hydrocephalus.Infrastructure.Tests;
@@ -155,7 +155,7 @@ public sealed class ModelPackageTests : IDisposable
         string preprocessing = "conform-1",
         string? extraDeclared = null)
     {
-        var manifest = JsonSerializer.SerializeToUtf8Bytes(new ModelPackageManifest(
+        var manifest = ModelPackage.WriteManifest(new ModelPackageManifest(
             FormatVersion: ModelPackage.SupportedFormatVersion,
             ModelVersion: "vinn-axial-2.0.0",
             MinimumApplicationVersion: minimumApplication,

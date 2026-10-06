@@ -89,6 +89,62 @@ public enum AuditEventCode
     /// не набирал.
     /// </summary>
     MeasurementRecordedByClinician = 14,
+
+    /// <summary>
+    /// Пакет модели принят и загружен.
+    ///
+    /// В журнал идут версия пакета, идентификатор ключа подписи и то, что
+    /// подпись сошлась: `docs/windows/README.md` требует, чтобы обновление
+    /// модели не происходило незаметно, а `docs/security/README.md` называет
+    /// подмену модели отдельной угрозой. Запись о загрузке — её след.
+    /// </summary>
+    ModelPackageLoaded = 15,
+
+    /// <summary>
+    /// Пакет модели отвергнут.
+    ///
+    /// Отказ пишется наравне с успехом и по той же причине: попытка подсунуть
+    /// изменённый пакет — ровно то событие, ради которого журнал ведётся, и
+    /// именно оно не должно пройти бесследно.
+    /// </summary>
+    ModelPackageRefused = 16,
+}
+
+/// <summary>
+/// Что записывается о проверке пакета модели.
+///
+/// Поля именованные, а не одна строка: `docs/windows/README.md` требует, чтобы
+/// пользователь видел источник и статус подписи, и отвечать на это разбором
+/// свободного текста было бы ненадёжно.
+///
+/// Состояние подписи отделено от исхода намеренно. «Подпись не проверялась»
+/// (разбор не дошёл до неё) и «подпись неверна» — разные события, и путать их
+/// нельзя: первое говорит о повреждённом файле, второе о подмене.
+/// </summary>
+/// <param name="SigningKeyId">Идентификатор ключа из манифеста; пусто, если манифест не прочитан.</param>
+/// <param name="Signature">Состояние подписи.</param>
+/// <param name="Rejection">Причина отказа; <see langword="null"/> у принятого пакета.</param>
+/// <param name="Detail">Уточнение к причине: имя файла или версия. Не содержит PHI.</param>
+public readonly record struct ModelPackageAudit(
+    string SigningKeyId,
+    ModelPackageSignature Signature,
+    ModelPackageRejection? Rejection,
+    string Detail);
+
+/// <summary>Состояние подписи пакета на момент проверки.</summary>
+public enum ModelPackageSignature
+{
+    /// <summary>Состояние не определено.</summary>
+    Unspecified = 0,
+
+    /// <summary>До проверки подписи разбор не дошёл.</summary>
+    NotChecked = 1,
+
+    /// <summary>Подпись сошлась с доверенным ключом.</summary>
+    Valid = 2,
+
+    /// <summary>Подписи нет либо она не сошлась.</summary>
+    Invalid = 3,
 }
 
 /// <summary>
@@ -158,6 +214,11 @@ public sealed record AuditEvent
     /// Вариант экспорта отчёта, если событие относится к экспорту.
     /// </summary>
     public Reporting.ReportExportVariant? ReportExportVariant { get; init; }
+
+    /// <summary>
+    /// Итог проверки пакета модели, если событие относится к его установке.
+    /// </summary>
+    public ModelPackageAudit? ModelPackage { get; init; }
 
     /// <summary>
     /// Итог уборки рабочих копий, если событие относится к ней.

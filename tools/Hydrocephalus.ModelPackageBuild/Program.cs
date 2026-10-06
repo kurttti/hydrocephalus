@@ -2,7 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
+using Hydrocephalus.Domain.Abstractions;
 using Hydrocephalus.Infrastructure.Models;
 using Hydrocephalus.ModelPackageBuild;
 
@@ -48,15 +48,14 @@ if (!File.Exists(onnxPath))
     return 2;
 }
 
-var manifest = JsonSerializer.SerializeToUtf8Bytes(
+var manifest = ModelPackage.WriteManifest(
     new ModelPackageManifest(
         FormatVersion: ModelPackage.SupportedFormatVersion,
         ModelVersion: modelVersion,
         MinimumApplicationVersion: minimumApplication,
         PreprocessingVersion: PackageContent.PreprocessingVersion,
         LabelMapVersion: PackageContent.LabelMapVersion,
-        SigningKeyId: keyPath is null ? "unsigned" : Path.GetFileNameWithoutExtension(keyPath)),
-    new JsonSerializerOptions { WriteIndented = true });
+        SigningKeyId: keyPath is null ? "unsigned" : Path.GetFileNameWithoutExtension(keyPath)));
 
 var files = new List<(string Name, byte[] Content)>
 {

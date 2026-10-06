@@ -69,6 +69,7 @@ public static class RolePolicy
             [ClinicalRole.Administrator] = new HashSet<Capability>
             {
                 Capability.ReadAuditLog,
+                Capability.InstallModelPackage,
             },
 
             [ClinicalRole.Unspecified] = new HashSet<Capability>(),
