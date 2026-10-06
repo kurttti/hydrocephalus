@@ -99,6 +99,27 @@ public static class ModelPackage
     public const string SegmentationEntry = "segmentation.onnx";
 
     /// <summary>
+    /// Файлы, которые пакету разрешено содержать.
+    ///
+    /// Перечень закрытый: ADR 0004 требует отвергать незнакомые имена, а не
+    /// пропускать их. Подписанный пакет с лишним файлом — всё ещё подписанный,
+    /// и подпись сама по себе не говорит, что этот файл кто-то проверял.
+    ///
+    /// Классификатор и калибровка не названы: их в пакете пока нет, и
+    /// добавление — отдельное решение, а не молчаливое расширение списка.
+    /// </summary>
+    private static readonly string[] AllowedEntries =
+    [
+        ManifestEntry,
+        ChecksumsEntry,
+        SignatureEntry,
+        SegmentationEntry,
+        "preprocessing.json",
+        "labels.json",
+        "model-card.md",
+    ];
+
+    /// <summary>
     /// Проверяет пакет и возвращает его объявление.
     /// </summary>
     /// <param name="packagePath">Путь к файлу пакета.</param>
@@ -214,7 +235,8 @@ public static class ModelPackage
         // для отказа, как пропавший. Иначе в подписанный пакет можно подложить.
         foreach (var name in present)
         {
-            if (!declared.ContainsKey(name))
+            if (!declared.ContainsKey(name)
+                || !Array.Exists(AllowedEntries, allowed => string.Equals(allowed, name, StringComparison.Ordinal)))
             {
                 return new ModelPackageCheck(manifest, ModelPackageRejection.CompositionMismatch, name);
             }

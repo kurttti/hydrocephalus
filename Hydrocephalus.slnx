@@ -11,6 +11,7 @@
     <Project Path="tools/Hydrocephalus.DatasetBuild/Hydrocephalus.DatasetBuild.csproj" />
     <Project Path="tools/Hydrocephalus.Inventory/Hydrocephalus.Inventory.csproj" />
     <Project Path="tools/Hydrocephalus.MeasurementSummary/Hydrocephalus.MeasurementSummary.csproj" />
+    <Project Path="tools/Hydrocephalus.ModelPackageBuild/Hydrocephalus.ModelPackageBuild.csproj" />
     <Project Path="tools/Hydrocephalus.ReviewPlan/Hydrocephalus.ReviewPlan.csproj" />
     <Project Path="tools/Hydrocephalus.SegmentationCheck/Hydrocephalus.SegmentationCheck.csproj" />
   </Folder>

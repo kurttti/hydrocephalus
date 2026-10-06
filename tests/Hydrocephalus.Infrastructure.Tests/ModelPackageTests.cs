@@ -73,6 +73,19 @@ public sealed class ModelPackageTests : IDisposable
     }
 
     [Fact]
+    public void A_file_with_an_unknown_name_is_refused_even_when_declared()
+    {
+        // Перечень имён закрытый: подписанный пакет с посторонним файлом всё
+        // ещё подписан, но подпись не говорит, что этот файл кто-то смотрел.
+        var path = Build(extraDeclared: "notes.md");
+
+        var check = ModelPackage.Verify(path, this.key, Application, KnownPreprocessing, KnownLabelMaps);
+
+        Assert.Equal(ModelPackageRejection.CompositionMismatch, check.Rejection);
+        Assert.Equal("notes.md", check.Detail);
+    }
+
+    [Fact]
     public void A_package_signed_by_another_key_is_refused()
     {
         var path = Build();
@@ -139,7 +152,8 @@ public sealed class ModelPackageTests : IDisposable
         string? omit = null,
         string? extra = null,
         string minimumApplication = "1.0.0",
-        string preprocessing = "conform-1")
+        string preprocessing = "conform-1",
+        string? extraDeclared = null)
     {
         var manifest = JsonSerializer.SerializeToUtf8Bytes(new ModelPackageManifest(
             FormatVersion: ModelPackage.SupportedFormatVersion,
@@ -157,6 +171,11 @@ public sealed class ModelPackageTests : IDisposable
             ("labels.json", Encoding.UTF8.GetBytes("{}")),
             ("model-card.md", Encoding.UTF8.GetBytes("# карточка")),
         };
+
+        if (extraDeclared is not null)
+        {
+            files.Add((extraDeclared, Encoding.UTF8.GetBytes("посторонний")));
+        }
 
         // Хеши считаются по полному составу, а в архив пропущенный файл не
         // кладётся: именно так выглядит пропажа файла из подписанного пакета.
