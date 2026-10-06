@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Formats.Tar;
 using System.Globalization;
 using System.IO.Compression;
@@ -24,7 +24,9 @@ using Hydrocephalus.SegmentationCheck;
 // остаются только агрегаты.
 if (args.Length == 0 || args.Contains("--help"))
 {
-    Console.WriteLine("Использование: Hydrocephalus.SegmentationCheck --out <каталог> [--limit N] <IXI-T1.tar> [<IXI-T2.tar>...]");
+    Console.WriteLine(
+        "Использование: Hydrocephalus.SegmentationCheck --out <каталог> [--limit N]"
+        + " [--model <модель.onnx>] <IXI-T1.tar> [<IXI-T2.tar>...]");
     return args.Length == 0 ? 2 : 0;
 }
 
@@ -41,12 +43,19 @@ var limit = limitIndex >= 0 && limitIndex < args.Length - 1
     ? int.Parse(args[limitIndex + 1], CultureInfo.InvariantCulture)
     : int.MaxValue;
 
+var modelIndex = Array.IndexOf(args, "--model");
 var skip = new HashSet<int> { outIndex, outIndex + 1 };
 
 if (limitIndex >= 0)
 {
     skip.Add(limitIndex);
     skip.Add(limitIndex + 1);
+}
+
+if (modelIndex >= 0)
+{
+    skip.Add(modelIndex);
+    skip.Add(modelIndex + 1);
 }
 
 var archives = args.Where((_, index) => !skip.Contains(index)).ToArray();
@@ -58,7 +67,14 @@ await using var results = new StreamWriter(
     append: false,
     Encoding.UTF8);
 
-await results.WriteLineAsync("file,site,weighting,outcome,volume_ml,refusal_detail,seconds");
+await results.WriteLineAsync(
+    "file,site,weighting,outcome,volume_ml,model_ml,refusal_detail,seconds");
+
+// Модель подключается по желанию: веса лежат вне репозитория и в CI их нет
+// (ADR 0009). Без неё столбец остаётся пустым, и инструмент работает как прежде.
+using var model = modelIndex >= 0 && modelIndex < args.Length - 1
+    ? new OnnxVentricleSegmentation(args[modelIndex + 1])
+    : null;
 
 var outcomes = new Dictionary<string, int>(StringComparer.Ordinal);
 var volumes = new Dictionary<string, List<double>>(StringComparer.Ordinal);
@@ -100,6 +116,7 @@ foreach (var archive in archives)
 
         string outcome;
         double volume = 0;
+        double modelVolume = -1;
         string detail = string.Empty;
 
         try
@@ -129,6 +146,24 @@ foreach (var archive in archives)
             volume = RegionVolumes
                 .Measure(segmentation.Mask, AcquisitionTier.Extended, segmentation.Quality)
                 .Sum(biomarker => biomarker.Value);
+
+            if (model is not null)
+            {
+                // Пара на одной и той же серии: порог ворот расхождения выводится
+                // из того, насколько два независимых пути расходятся там, где оба
+                // дают ответ.
+                var labels = model.Segment(VolumeConforming.Conform(voxels), null, CancellationToken.None);
+                var grid = voxels.Grid;
+                long count = 0;
+
+                foreach (var value in VolumeConforming.ProjectBack(labels, voxels))
+                {
+                    count += value;
+                }
+
+                modelVolume = count * grid.ColumnSpacingMillimetres * grid.RowSpacingMillimetres
+                    * grid.SliceSpacingMillimetres / 1000.0;
+            }
 
             outcome = volume > 0
                 ? "volume"
@@ -162,6 +197,7 @@ foreach (var archive in archives)
             weighting,
             outcome,
             volume.ToString("0.0", CultureInfo.InvariantCulture),
+            modelVolume < 0 ? string.Empty : modelVolume.ToString("0.0", CultureInfo.InvariantCulture),
             detail,
             study.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
 
