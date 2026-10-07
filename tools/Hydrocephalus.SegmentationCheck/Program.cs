@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Formats.Tar;
 using System.Globalization;
 using System.IO.Compression;
@@ -62,13 +62,35 @@ var archives = args.Where((_, index) => !skip.Contains(index)).ToArray();
 
 Directory.CreateDirectory(args[outIndex + 1]);
 
-await using var results = new StreamWriter(
-    Path.Combine(args[outIndex + 1], "ixi-segmentation.csv"),
-    append: false,
-    Encoding.UTF8);
+var resultsPath = Path.Combine(args[outIndex + 1], "ixi-segmentation.csv");
 
-await results.WriteLineAsync(
-    "file,site,weighting,outcome,volume_ml,model_ml,refusal_detail,seconds");
+// Уже посчитанное читается и пропускается: с моделью серия занимает около
+// минуты, и прерванный прогон иначе начинался бы сначала. Ключ — имя файла
+// серии: оно уникально в наборе и уже стоит первым столбцом.
+var alreadyDone = new HashSet<string>(StringComparer.Ordinal);
+
+if (File.Exists(resultsPath))
+{
+    foreach (var line in await File.ReadAllLinesAsync(resultsPath))
+    {
+        var comma = line.IndexOf(',', StringComparison.Ordinal);
+
+        if (comma > 0 && !line.StartsWith("file,", StringComparison.Ordinal))
+        {
+            alreadyDone.Add(line[..comma]);
+        }
+    }
+
+    Console.WriteLine($"Уже посчитано: {alreadyDone.Count}; эти серии пропускаются.");
+}
+
+await using var results = new StreamWriter(resultsPath, append: alreadyDone.Count > 0, Encoding.UTF8);
+
+if (alreadyDone.Count == 0)
+{
+    await results.WriteLineAsync(
+        "file,site,weighting,outcome,volume_ml,model_ml,refusal_detail,seconds");
+}
 
 // Модель подключается по желанию: веса лежат вне репозитория и в CI их нет
 // (ADR 0009). Без неё столбец остаётся пустым, и инструмент работает как прежде.
@@ -109,6 +131,14 @@ foreach (var archive in archives)
         }
 
         perArchive++;
+
+        // Счётчик увеличивается и для пропущенных: --limit задаёт, сколько серий
+        // архива охватить, а не сколько посчитать в этот раз. Иначе продолжение
+        // прогона уехало бы дальше заданной границы.
+        if (alreadyDone.Contains(Path.GetFileName(entry.Name)))
+        {
+            continue;
+        }
 
         var site = IxiArchive.SiteOf(entry.Name);
         var group = site + "/" + weighting;
