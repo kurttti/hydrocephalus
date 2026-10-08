@@ -10,8 +10,10 @@ using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Inference;
 using Hydrocephalus.Inference.QualityControl;
+using Hydrocephalus.Inference.Segmentation;
 using Hydrocephalus.Infrastructure.Configuration;
 using Hydrocephalus.Infrastructure.Dicom;
+using Hydrocephalus.Infrastructure.Models;
 using Hydrocephalus.Infrastructure.Reporting;
 using Hydrocephalus.Infrastructure.Volumes;
 
@@ -131,11 +133,36 @@ var importer = new StudyImporter(
     importOptions,
     new WorkingCopyOptions { RootDirectory = Path.Combine(applicationRoot, "working-copies") });
 
+// Способ разметки выбирается так же, как в приложении, и тем же кодом: прогон
+// по выборке обязан мерить тем, чем мерит программа у врача, иначе сверять
+// результаты незачем. Каталог пакетов и ключ берутся из того же профиля.
+var modelRoot = Path.Combine(applicationRoot, "models");
+var trustKeyPath = Path.Combine(applicationRoot, "secrets", "model-trust.pub.pem");
+var activePackage = new InstalledModelStore(modelRoot).ActivePackagePath();
+
+SignedModelPackageReader? packageReader = null;
+
+if (activePackage is not null && File.Exists(trustKeyPath))
+{
+    packageReader = new SignedModelPackageReader(
+        File.ReadAllText(trustKeyPath),
+        Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0),
+        [VolumeConforming.PreprocessingVersion],
+        [OnnxVentricleSegmentation.LabelMapVersion]);
+}
+
+var segmentation = new CachingVentricleSegmentation(
+    VentricleSegmentationChoice.For(activePackage, packageReader));
+
+packageReader?.Dispose();
+
+Console.WriteLine($"Разметка желудочков: {segmentation.Provenance}.");
+
 var pipeline = new PipelineIdentity
 {
     PreprocessingVersion = PipelineIdentity.NotImplementedVersion,
     FeatureSchemaVersion = PipelineIdentity.NotImplementedVersion,
-    LabelMapVersion = PipelineIdentity.NotImplementedVersion,
+    LabelMapVersion = segmentation.Provenance,
     ApplicationCommitSha = BuildProvenance.CommitShaOf(Assembly.GetExecutingAssembly()),
 };
 
@@ -165,7 +192,11 @@ for (var index = 0; index < plan.Count; index++)
     var useCase = new AnalyzeStudyUseCase(
         adapter,
         importer,
-        new BaselineMeasurementEngine(new InputQualityControl(), new WorkingCopyVolumeSource(importer), pipeline),
+        new BaselineMeasurementEngine(
+            new InputQualityControl(),
+            new WorkingCopyVolumeSource(importer),
+            pipeline,
+            segmentation),
         new JsonReportStore(Path.Combine(output, "reports")),
         auditLog,
         TimeProvider.System);

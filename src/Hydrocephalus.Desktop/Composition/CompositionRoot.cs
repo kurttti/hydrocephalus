@@ -684,27 +684,14 @@ public sealed class CompositionRoot : IDisposable
     /// из CI это точное значение, и именно они попадают к врачу.
     /// </summary>
     /// <summary>
-    /// Выбирает способ разметки желудочков.
+    /// Собирает способ разметки из того, что установлено.
     ///
-    /// Три исхода, и они не равнозначны.
+    /// Само решение — в <see cref="VentricleSegmentationChoice"/>: оно одно для
+    /// оконного приложения и для пакетного замера выборки. Здесь только то, что
+    /// знает именно состав приложения, — где лежат пакеты и где доверенный ключ.
     ///
-    /// **Модели нет** — ни ключа доверия, ни действующего пакета. Это рядовое
-    /// состояние: приложение поставляется без модели (ADR 0008 — установщик её
-    /// не приносит), и до установки работает пороговым путём.
-    ///
-    /// **Модель есть и проверку прошла** — работает она. Веса берутся из того же
-    /// прохода проверки, которым сошлись хеши: распакованного файла на диске не
-    /// возникает, и подменить нечего (ADR 0004).
-    ///
-    /// **Пакет есть, но проверку не прошёл** — анализ блокируется. Откат на
-    /// пороговый путь здесь запрещён прямо: ADR 0008 требует не подставлять
-    /// молча другой пакет, а остановиться до решения администратора. Врач не
-    /// должен получить число, посчитанное не тем способом, которым, по экрану,
-    /// считает программа.
-    ///
-    /// Ключ доверия читается из файла в профиле пользователя, и для выпуска
-    /// этого недостаточно — см.
-    /// <see cref="ApplicationPaths.ModelTrustKeyPath"/>.
+    /// Ключ читается из файла в профиле пользователя, и для выпуска этого
+    /// недостаточно — см. <see cref="ApplicationPaths.ModelTrustKeyPath"/>.
     /// </summary>
     private static IVentricleSegmentation ChooseSegmentation(ApplicationPaths paths)
     {
@@ -712,7 +699,7 @@ public sealed class CompositionRoot : IDisposable
 
         if (package is null || !System.IO.File.Exists(paths.ModelTrustKeyPath))
         {
-            return new ThresholdVentricleSegmentation();
+            return VentricleSegmentationChoice.For(activePackagePath: null, reader: null);
         }
 
         using var reader = new SignedModelPackageReader(
@@ -721,23 +708,7 @@ public sealed class CompositionRoot : IDisposable
             [VolumeConforming.PreprocessingVersion],
             [OnnxVentricleSegmentation.LabelMapVersion]);
 
-        var check = reader.Open(package);
-
-        // Принятый пакет обязан отдать и объявление, и веса: разбор доходит до
-        // них одним проходом. Если чего-то нет — это не «почти прошёл», а
-        // противоречие внутри проверки, и блокировка здесь уместнее, чем
-        // попытка продолжить.
-        if (check.Rejection is not null
-            || check.Weights is not { } weights
-            || check.Manifest is not { } manifest)
-        {
-            return new BlockedVentricleSegmentation(
-                check.Rejection?.ToString() ?? "incompleteCheck",
-                check.Detail);
-        }
-
-        return new ModelVentricleSegmentation(
-            new OnnxVentricleSegmentation(weights), manifest.ModelVersion);
+        return VentricleSegmentationChoice.For(package, reader);
     }
 
     private static PipelineIdentity DescribePipeline(string segmentationProvenance) => new()
