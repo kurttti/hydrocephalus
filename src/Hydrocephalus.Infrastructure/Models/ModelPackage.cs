@@ -84,12 +84,18 @@ public static class ModelPackage
     /// <param name="knownPreprocessing">Версии предобработки, которые умеет приложение.</param>
     /// <param name="knownLabelMaps">Версии карт меток, которые умеет приложение.</param>
     /// <returns>Объявление пакета либо названная причина отказа.</returns>
+    /// <param name="withWeights">
+    /// Отдать ли веса сегментации вместе с вердиктом. Экрану установки они не
+    /// нужны — это сотня мегабайт на решение, которому они ни к чему, — а
+    /// загрузке нужны именно те байты, у которых здесь сошёлся хеш.
+    /// </param>
     public static ModelPackageCheck Verify(
         string packagePath,
         ECDsa trustedPublicKey,
         Version applicationVersion,
         IReadOnlyCollection<string> knownPreprocessing,
-        IReadOnlyCollection<string> knownLabelMaps)
+        IReadOnlyCollection<string> knownLabelMaps,
+        bool withWeights = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
         ArgumentNullException.ThrowIfNull(trustedPublicKey);
@@ -110,27 +116,14 @@ public static class ModelPackage
 
         using (archive)
         {
-            return Inspect(archive, trustedPublicKey, applicationVersion, knownPreprocessing, knownLabelMaps);
+            return Inspect(
+                archive,
+                trustedPublicKey,
+                applicationVersion,
+                knownPreprocessing,
+                knownLabelMaps,
+                withWeights);
         }
-    }
-
-    /// <summary>
-    /// Извлекает файл из пакета. Зовётся только после успешной проверки.
-    /// </summary>
-    /// <param name="packagePath">Путь к файлу пакета.</param>
-    /// <param name="entryName">Имя файла внутри пакета.</param>
-    /// <param name="destinationPath">Куда положить.</param>
-    public static void Extract(string packagePath, string entryName, string destinationPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(entryName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
-
-        using var archive = ZipFile.OpenRead(packagePath);
-        var entry = archive.GetEntry(entryName)
-            ?? throw new InvalidDataException($"The package holds no entry named {entryName}.");
-
-        entry.ExtractToFile(destinationPath, overwrite: true);
     }
 
     private static ModelPackageCheck Inspect(
@@ -138,8 +131,11 @@ public static class ModelPackage
         ECDsa trustedPublicKey,
         Version applicationVersion,
         IReadOnlyCollection<string> knownPreprocessing,
-        IReadOnlyCollection<string> knownLabelMaps)
+        IReadOnlyCollection<string> knownLabelMaps,
+        bool withWeights)
     {
+        byte[]? weights = null;
+
         if (Read(archive, ManifestEntry) is not { } manifestBytes)
         {
             return new ModelPackageCheck(null, ModelPackageRejection.ManifestUnreadable);
@@ -218,6 +214,14 @@ public static class ModelPackage
             {
                 return new ModelPackageCheck(manifest, ModelPackageRejection.ContentAltered, name);
             }
+
+            // Веса запоминаются здесь, а не читаются заново после проверки:
+            // второе чтение файла оставило бы между проверкой и загрузкой щель,
+            // в которую и пролезает подмена модели.
+            if (withWeights && string.Equals(name, SegmentationEntry, StringComparison.Ordinal))
+            {
+                weights = content;
+            }
         }
 
         if (!Version.TryParse(manifest.MinimumApplicationVersion, out var minimum))
@@ -239,7 +243,7 @@ public static class ModelPackage
         }
 
         return knownLabelMaps.Contains(manifest.LabelMapVersion, StringComparer.Ordinal)
-            ? new ModelPackageCheck(manifest, null)
+            ? new ModelPackageCheck(manifest, null) { Weights = weights }
             : new ModelPackageCheck(
                 manifest, ModelPackageRejection.IncompatibleContract, manifest.LabelMapVersion);
     }

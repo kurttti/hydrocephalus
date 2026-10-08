@@ -118,7 +118,7 @@ public sealed class ModelVentricleSegmentationTests
             SpacingMillimetres);
 
         var result = new ModelVentricleSegmentation(labelling, "vinn-axial-2.0.0")
-            .Segment(new TestVolume(grid), SeriesWeighting.T1);
+            .Segment(new TestVolume(grid), SeriesWeighting.T1, "series-1");
 
         var issue = Assert.Single(result.Issues);
 
@@ -184,7 +184,7 @@ public sealed class ModelVentricleSegmentationTests
         IConformedVolumeLabelling labelling,
         SeriesWeighting weighting = SeriesWeighting.T1) =>
         new ModelVentricleSegmentation(labelling, "vinn-axial-2.0.0")
-            .Segment(Volume(), weighting);
+            .Segment(Volume(), weighting, "series-1");
 
     private static TestVolume Volume() => new(
         new VolumeGrid(

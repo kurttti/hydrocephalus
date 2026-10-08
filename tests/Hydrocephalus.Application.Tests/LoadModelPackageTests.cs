@@ -109,6 +109,10 @@ public sealed class LoadModelPackageTests
     private sealed class StubReader(ModelPackageCheck check) : IModelPackageReader
     {
         public ModelPackageCheck Verify(string packagePath) => check;
+
+        // Установка весов не читает: экрану администратора нужно решение о
+        // пакете, а не сотня мегабайт. Веса берёт загрузка, своим проходом.
+        public ModelPackageCheck Open(string packagePath) => check;
     }
 
     private sealed class RecordingAudit : IAuditLog

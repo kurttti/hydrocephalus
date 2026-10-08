@@ -58,6 +58,32 @@ public sealed record ApplicationPaths
     public required string DatasetRoot { get; init; }
 
     /// <summary>
+    /// Корень установленных пакетов модели.
+    ///
+    /// Версии лежат рядом, одна помечена действующей (ADR 0008): откат в клинике
+    /// должен быть переключением метки, а не переустановкой файла, которого у
+    /// администратора может уже не быть.
+    /// </summary>
+    public required string ModelRoot { get; init; }
+
+    /// <summary>
+    /// Файл с доверенным открытым ключом подписи пакетов модели.
+    ///
+    /// Лежит рядом с солью, в том же каталоге секретов. **Для выпуска этого
+    /// недостаточно:** каталог профиля доступен пользователю на запись, и
+    /// подменивший этот файл подменит и доверие к пакету, то есть защита от
+    /// подмены модели (`docs/security/README.md`) сводится к защите этого файла.
+    /// В выпускаемой сборке ключ обязан быть встроен в подписанный
+    /// исполняемый файл; это условие записано в ADR 0008 и требует конвейера
+    /// выпуска. Пока его нет, такое расположение — осознанное решение
+    /// исследовательской сборки, а не упущение.
+    ///
+    /// Нет файла — нет и доверенного ключа: ни один пакет не пройдёт проверку,
+    /// и приложение останется на пороговом пути. Это верный исход по умолчанию.
+    /// </summary>
+    public required string ModelTrustKeyPath { get; init; }
+
+    /// <summary>
     /// Строит расположение в профиле текущего пользователя.
     /// </summary>
     /// <returns>Пути приложения.</returns>
@@ -88,6 +114,8 @@ public sealed record ApplicationPaths
             PseudonymSaltPath = IoPath.Combine(root, "secrets", "pseudonym-salt.bin"),
             DatasetManifestRoot = IoPath.Combine(root, "dataset-manifests"),
             DatasetRoot = IoPath.Combine(root, "dataset"),
+            ModelRoot = IoPath.Combine(root, "models"),
+            ModelTrustKeyPath = IoPath.Combine(root, "secrets", "model-trust.pub.pem"),
         };
     }
 }

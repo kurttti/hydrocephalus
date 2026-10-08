@@ -43,12 +43,18 @@ public sealed class SignedModelPackageReader : IModelPackageReader, IDisposable
     }
 
     /// <inheritdoc />
-    public ModelPackageCheck Verify(string packagePath) => ModelPackage.Verify(
+    public ModelPackageCheck Verify(string packagePath) => this.Check(packagePath, withWeights: false);
+
+    /// <inheritdoc />
+    public ModelPackageCheck Open(string packagePath) => this.Check(packagePath, withWeights: true);
+
+    private ModelPackageCheck Check(string packagePath, bool withWeights) => ModelPackage.Verify(
         packagePath,
         this.trustedPublicKey,
         this.applicationVersion,
         this.knownPreprocessing,
-        this.knownLabelMaps);
+        this.knownLabelMaps,
+        withWeights);
 
     /// <summary>Освобождает ключ.</summary>
     public void Dispose() => this.trustedPublicKey.Dispose();

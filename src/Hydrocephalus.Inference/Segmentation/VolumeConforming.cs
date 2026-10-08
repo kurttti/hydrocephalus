@@ -19,6 +19,16 @@ namespace Hydrocephalus.Inference.Segmentation;
 /// </summary>
 public static class VolumeConforming
 {
+    /// <summary>
+    /// Версия описания предобработки.
+    ///
+    /// Объявлена здесь, у того, кто предобработку выполняет: пакет модели
+    /// называет версию, с которой веса верны, и приложение обязано уметь
+    /// сверить её со своей (ADR 0004). Два независимых объявления разошлись бы
+    /// молча.
+    /// </summary>
+    public const string PreprocessingVersion = "conform-lia-256-1";
+
     /// <summary>Сторона куба, к которому приводится объём.</summary>
     public const int Size = 256;
 

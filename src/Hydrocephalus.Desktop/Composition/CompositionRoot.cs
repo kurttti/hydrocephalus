@@ -13,6 +13,7 @@ using Hydrocephalus.Inference.Segmentation;
 using Hydrocephalus.Infrastructure.Configuration;
 using Hydrocephalus.Infrastructure.Dataset;
 using Hydrocephalus.Infrastructure.Dicom;
+using Hydrocephalus.Infrastructure.Models;
 using Hydrocephalus.Infrastructure.Reporting;
 using Hydrocephalus.Infrastructure.Volumes;
 
@@ -62,10 +63,15 @@ public sealed class CompositionRoot : IDisposable
     // из него наружу не выходят.
     private DicomScanResult? scanned;
 
+    // Тот же способ разметки, что у конвейера, и тот же экземпляр: иначе экран
+    // и отчёт показывали бы разные маски одной серии.
+    private readonly IVentricleSegmentation segmentation;
+
     private AnalysisReport? report;
 
     private CompositionRoot(
         Hydrocephalus.Application.AnalyzeStudyUseCase analyzeStudy,
+        IVentricleSegmentation segmentation,
         Hydrocephalus.Application.ExportDatasetManifestUseCase exportDatasetManifest,
         Hydrocephalus.Application.ExportReportUseCase exportReport,
         Hydrocephalus.Application.RecordManualMeasurementUseCase recordMeasurement,
@@ -78,6 +84,7 @@ public sealed class CompositionRoot : IDisposable
         ApplicationPaths paths)
     {
         this.AnalyzeStudy = analyzeStudy;
+        this.segmentation = segmentation;
         this.ExportDatasetManifest = exportDatasetManifest;
         this.exportReport = exportReport;
         this.recordMeasurement = recordMeasurement;
@@ -139,7 +146,13 @@ public sealed class CompositionRoot : IDisposable
             .GetOrCreateAsync(paths.PseudonymSaltPath, cancellationToken)
             .ConfigureAwait(false);
 
-        var pipeline = DescribePipeline();
+        // Способ разметки желудочков выбирается один раз, при сборке: ни
+        // конвейер, ни просмотрщик не должны знать, установлена ли модель.
+        // Обёртка с памятью — поверх выбранного: одну серию размечают дважды,
+        // для экрана и для отчёта, и моделью это минута счёта на каждый раз.
+        var segmentation = new CachingVentricleSegmentation(ChooseSegmentation(paths));
+
+        var pipeline = DescribePipeline(segmentation.Provenance);
 
         var auditLog = new HashChainAuditLog(paths.AuditLogPath);
 
@@ -168,7 +181,8 @@ public sealed class CompositionRoot : IDisposable
             new BaselineMeasurementEngine(
                 new InputQualityControl(),
                 new WorkingCopyVolumeSource(importer),
-                pipeline),
+                pipeline,
+                segmentation),
             new JsonReportStore(paths.ReportRoot),
             auditLog,
             TimeProvider.System);
@@ -207,6 +221,7 @@ public sealed class CompositionRoot : IDisposable
 
         return new CompositionRoot(
             useCase,
+            segmentation,
             exportDatasetManifest,
             exportReport,
             recordMeasurement,
@@ -382,8 +397,11 @@ public sealed class CompositionRoot : IDisposable
 
         if (series.Weighting != SeriesWeighting.Unknown)
         {
-            segmentation = BaselineVentricleSegmentation
-                .Segment(volume, series.Weighting, cancellationToken: cancellationToken);
+            segmentation = this.segmentation.Segment(
+                volume,
+                series.Weighting,
+                series.PseudonymousSeriesId,
+                cancellationToken);
             review = segmentation.Value.Review;
 
             // Индекс считается и конвейером для отчёта; здесь он нужен ради
@@ -665,11 +683,74 @@ public sealed class CompositionRoot : IDisposable
     /// незакоммиченными правками сошлётся на предыдущий коммит. Для сборок
     /// из CI это точное значение, и именно они попадают к врачу.
     /// </summary>
-    private static PipelineIdentity DescribePipeline() => new()
+    /// <summary>
+    /// Выбирает способ разметки желудочков.
+    ///
+    /// Три исхода, и они не равнозначны.
+    ///
+    /// **Модели нет** — ни ключа доверия, ни действующего пакета. Это рядовое
+    /// состояние: приложение поставляется без модели (ADR 0008 — установщик её
+    /// не приносит), и до установки работает пороговым путём.
+    ///
+    /// **Модель есть и проверку прошла** — работает она. Веса берутся из того же
+    /// прохода проверки, которым сошлись хеши: распакованного файла на диске не
+    /// возникает, и подменить нечего (ADR 0004).
+    ///
+    /// **Пакет есть, но проверку не прошёл** — анализ блокируется. Откат на
+    /// пороговый путь здесь запрещён прямо: ADR 0008 требует не подставлять
+    /// молча другой пакет, а остановиться до решения администратора. Врач не
+    /// должен получить число, посчитанное не тем способом, которым, по экрану,
+    /// считает программа.
+    ///
+    /// Ключ доверия читается из файла в профиле пользователя, и для выпуска
+    /// этого недостаточно — см.
+    /// <see cref="ApplicationPaths.ModelTrustKeyPath"/>.
+    /// </summary>
+    private static IVentricleSegmentation ChooseSegmentation(ApplicationPaths paths)
+    {
+        var package = new InstalledModelStore(paths.ModelRoot).ActivePackagePath();
+
+        if (package is null || !System.IO.File.Exists(paths.ModelTrustKeyPath))
+        {
+            return new ThresholdVentricleSegmentation();
+        }
+
+        using var reader = new SignedModelPackageReader(
+            System.IO.File.ReadAllText(paths.ModelTrustKeyPath),
+            Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0),
+            [VolumeConforming.PreprocessingVersion],
+            [OnnxVentricleSegmentation.LabelMapVersion]);
+
+        var check = reader.Open(package);
+
+        // Принятый пакет обязан отдать и объявление, и веса: разбор доходит до
+        // них одним проходом. Если чего-то нет — это не «почти прошёл», а
+        // противоречие внутри проверки, и блокировка здесь уместнее, чем
+        // попытка продолжить.
+        if (check.Rejection is not null
+            || check.Weights is not { } weights
+            || check.Manifest is not { } manifest)
+        {
+            return new BlockedVentricleSegmentation(
+                check.Rejection?.ToString() ?? "incompleteCheck",
+                check.Detail);
+        }
+
+        return new ModelVentricleSegmentation(
+            new OnnxVentricleSegmentation(weights), manifest.ModelVersion);
+    }
+
+    private static PipelineIdentity DescribePipeline(string segmentationProvenance) => new()
     {
         PreprocessingVersion = PipelineIdentity.NotImplementedVersion,
         FeatureSchemaVersion = PipelineIdentity.NotImplementedVersion,
-        LabelMapVersion = PipelineIdentity.NotImplementedVersion,
+
+        // Версия разметки приходит от того, кто её делает, и называет и способ,
+        // и версию модели. До появления модели здесь стояло «не реализовано»,
+        // хотя пороговый метод свою версию имел: смена способа не была видна в
+        // отчёте, а ADR 0008 требует, чтобы отчёт называл версию, которой он
+        // получен, и чтобы прежние отчёты не пересчитывались задним числом.
+        LabelMapVersion = segmentationProvenance,
         ApplicationCommitSha = BuildProvenance.CommitShaOf(Assembly.GetExecutingAssembly()),
     };
 }

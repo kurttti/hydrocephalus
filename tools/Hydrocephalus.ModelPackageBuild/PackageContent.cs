@@ -12,8 +12,13 @@ namespace Hydrocephalus.ModelPackageBuild;
 /// </summary>
 internal static class PackageContent
 {
-    /// <summary>Версия описания предобработки.</summary>
-    internal const string PreprocessingVersion = "conform-lia-256-1";
+    /// <summary>
+    /// Версия описания предобработки.
+    ///
+    /// Берётся у движка, а не объявляется здесь второй строкой — по той же
+    /// причине, что и карта меток ниже.
+    /// </summary>
+    internal static readonly string PreprocessingVersion = VolumeConforming.PreprocessingVersion;
 
     /// <summary>
     /// Версия карты меток.

@@ -35,10 +35,21 @@ public interface IVentricleSegmentation
     /// </summary>
     /// <param name="volume">Объём серии.</param>
     /// <param name="weighting">Взвешенность серии.</param>
+    /// <param name="pseudonymousSeriesId">
+    /// Псевдоним серии, которой принадлежит объём.
+    ///
+    /// Нужен затем, что одну и ту же серию размечают дважды — для экрана и для
+    /// отчёта, — а моделью это минута счёта на каждый раз. По псевдониму
+    /// <see cref="CachingVentricleSegmentation"/> узнаёт, что отвечать нечего:
+    /// ответ уже есть. Сами реализации его не используют, и это нормально.
+    /// Псевдоним здесь не исключение в слое: источник объёмов принимает его так
+    /// же и по той же причине.
+    /// </param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Маска с замечаниями и достоверностью; при отказе маска пуста.</returns>
     VentricleSegmentationResult Segment(
         IVoxelVolume volume,
         SeriesWeighting weighting,
+        string pseudonymousSeriesId,
         CancellationToken cancellationToken = default);
 }

@@ -129,6 +129,60 @@ public sealed class ModelPackageTests : IDisposable
     }
 
     [Fact]
+    public void Verifying_does_not_read_the_weights()
+    {
+        // Экрану установки веса не нужны: это сотня мегабайт на решение,
+        // которому они ни к чему.
+        var path = Build();
+
+        var check = ModelPackage.Verify(path, this.key, Application, KnownPreprocessing, KnownLabelMaps);
+
+        Assert.Null(check.Weights);
+    }
+
+    [Fact]
+    public void Opening_returns_the_very_bytes_whose_hash_matched()
+    {
+        // Смысл в том, чтобы между проверкой и загрузкой не было второго чтения
+        // файла: проверить один набор байт, а скормить сети другой — ровно та
+        // подмена, против которой ADR 0004 и написан.
+        var path = Build();
+
+        var check = ModelPackage.Verify(
+            path, this.key, Application, KnownPreprocessing, KnownLabelMaps, withWeights: true);
+
+        Assert.Null(check.Rejection);
+        Assert.Equal<byte[]>([1, 2, 3, 4], check.Weights);
+    }
+
+    [Fact]
+    public void An_altered_package_hands_out_no_weights_at_all()
+    {
+        var path = Build(corrupt: true);
+
+        var check = ModelPackage.Verify(
+            path, this.key, Application, KnownPreprocessing, KnownLabelMaps, withWeights: true);
+
+        Assert.Equal(ModelPackageRejection.ContentAltered, check.Rejection);
+        Assert.Null(check.Weights);
+    }
+
+    [Fact]
+    public void A_package_signed_by_another_key_hands_out_no_weights()
+    {
+        // Отказ до проверки хешей тоже не должен отдавать байты: иначе путь
+        // «подпись не та, но веса возьмём» существовал бы в коде.
+        var path = Build();
+        using var stranger = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+        var check = ModelPackage.Verify(
+            path, stranger, Application, KnownPreprocessing, KnownLabelMaps, withWeights: true);
+
+        Assert.Equal(ModelPackageRejection.SignatureInvalid, check.Rejection);
+        Assert.Null(check.Weights);
+    }
+
+    [Fact]
     public void Something_that_is_not_a_package_is_refused()
     {
         var path = Path.Combine(this.root.FullName, "not-a-package.hcmp");

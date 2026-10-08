@@ -61,7 +61,20 @@ public sealed record ModelPackageManifest(
 public sealed record ModelPackageCheck(
     ModelPackageManifest? Manifest,
     ModelPackageRejection? Rejection,
-    string Detail = "");
+    string Detail = "")
+{
+    /// <summary>
+    /// Веса сегментации — те самые байты, у которых сошёлся хеш.
+    ///
+    /// Заполняются только <see cref="IModelPackageReader.Open"/> и только у
+    /// принятого пакета. Смысл поля в том, чтобы между проверкой и загрузкой не
+    /// было второго чтения файла: проверить один набор байт, а скормить сети
+    /// другой — ровно та подмена, против которой ADR 0004 и написан. Для экрана
+    /// установки веса не нужны, и <see cref="IModelPackageReader.Verify"/> их не
+    /// читает: это сотня мегабайт на решение, которому они ни к чему.
+    /// </summary>
+    public byte[]? Weights { get; init; }
+}
 
 /// <summary>
 /// Чтение и проверка пакета модели.
@@ -74,9 +87,21 @@ public sealed record ModelPackageCheck(
 public interface IModelPackageReader
 {
     /// <summary>
-    /// Проверяет пакет.
+    /// Проверяет пакет, не читая весов.
     /// </summary>
     /// <param name="packagePath">Путь к файлу пакета.</param>
     /// <returns>Объявление пакета либо названная причина отказа.</returns>
     ModelPackageCheck Verify(string packagePath);
+
+    /// <summary>
+    /// Проверяет пакет и отдаёт веса, проверенные тем же проходом.
+    /// </summary>
+    /// <param name="packagePath">Путь к файлу пакета.</param>
+    /// <returns>
+    /// Объявление вместе с весами в <see cref="ModelPackageCheck.Weights"/> либо
+    /// названная причина отказа. Проверка та же, что у
+    /// <see cref="Verify"/>, — отдельного, более снисходительного пути к весам
+    /// не существует.
+    /// </returns>
+    ModelPackageCheck Open(string packagePath);
 }

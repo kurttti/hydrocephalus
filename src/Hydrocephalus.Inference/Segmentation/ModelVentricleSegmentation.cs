@@ -73,9 +73,14 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
     public VentricleSegmentationResult Segment(
         IVoxelVolume volume,
         SeriesWeighting weighting,
+        string pseudonymousSeriesId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(volume);
+
+        // Псевдоним серии здесь не нужен: разметка зависит от объёма, а не от
+        // того, чей он. Он есть в договоре ради кэша, который и держит ответ.
+        _ = pseudonymousSeriesId;
 
         var grid = volume.Grid;
 

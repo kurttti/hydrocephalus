@@ -258,6 +258,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
             var segmentation = this.segmentation.Segment(
                 volume,
                 series.Weighting,
+                series.PseudonymousSeriesId,
                 cancellationToken);
 
             progress?.Report(new AnalysisProgress(AnalysisStage.Segmentation, 1.0));

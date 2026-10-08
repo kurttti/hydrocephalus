@@ -63,7 +63,10 @@ public sealed class OnnxVentricleSegmentation : IConformedVolumeLabelling, IDisp
     private readonly bool[] isVentricle;
 
     /// <summary>
-    /// Открывает модель.
+    /// Открывает модель из файла.
+    ///
+    /// Годится для исследовательского прогона по файлу на диске. В приложении
+    /// веса приходят из проверенного пакета — см. перегрузку с байтами.
     /// </summary>
     /// <param name="modelPath">Путь к файлу модели в формате ONNX.</param>
     public OnnxVentricleSegmentation(string modelPath)
@@ -71,12 +74,37 @@ public sealed class OnnxVentricleSegmentation : IConformedVolumeLabelling, IDisp
         ArgumentException.ThrowIfNullOrWhiteSpace(modelPath);
 
         this.session = new InferenceSession(modelPath);
-        this.isVentricle = new bool[FreeSurferLabels.Length];
+        this.isVentricle = Ventricles();
+    }
+
+    /// <summary>
+    /// Открывает модель из байтов.
+    ///
+    /// Так её открывает приложение: байты приходят из пакета вместе с
+    /// вердиктом проверки и являются теми самыми, у которых сошёлся хеш
+    /// (ADR 0004). Пути к распакованному файлу в приложении не возникает —
+    /// распакованная копия на диске проверкой не покрыта, и подменить её было бы
+    /// проще, чем подписанный пакет.
+    /// </summary>
+    /// <param name="model">Содержимое файла модели в формате ONNX.</param>
+    public OnnxVentricleSegmentation(byte[] model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+
+        this.session = new InferenceSession(model);
+        this.isVentricle = Ventricles();
+    }
+
+    private static bool[] Ventricles()
+    {
+        var ventricles = new bool[FreeSurferLabels.Length];
 
         for (var index = 0; index < FreeSurferLabels.Length; index++)
         {
-            this.isVentricle[index] = Array.IndexOf(VentricleLabels, FreeSurferLabels[index]) >= 0;
+            ventricles[index] = Array.IndexOf(VentricleLabels, FreeSurferLabels[index]) >= 0;
         }
+
+        return ventricles;
     }
 
     /// <summary>

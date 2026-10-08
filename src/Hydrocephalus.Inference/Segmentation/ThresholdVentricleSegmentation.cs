@@ -33,9 +33,12 @@ public sealed class ThresholdVentricleSegmentation : IVentricleSegmentation
     public VentricleSegmentationResult Segment(
         IVoxelVolume volume,
         SeriesWeighting weighting,
+        string pseudonymousSeriesId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(volume);
+
+        _ = pseudonymousSeriesId;
 
         // Нераспознанная взвешенность — отказ, а не исключение. Сам метод здесь
         // бросает, и это верно для прямого вызова: направление порога угадать
