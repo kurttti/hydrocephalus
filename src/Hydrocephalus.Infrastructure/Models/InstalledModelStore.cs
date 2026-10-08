@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hydrocephalus.Domain.Abstractions;
 
 namespace Hydrocephalus.Infrastructure.Models;
 
@@ -20,7 +21,7 @@ namespace Hydrocephalus.Infrastructure.Models;
 /// поставляется без модели (ADR 0008 — установщик её не приносит), и до
 /// установки работает пороговым путём.
 /// </summary>
-public sealed class InstalledModelStore
+public sealed class InstalledModelStore : IInstalledModelStore
 {
     /// <summary>Имя файла с меткой действующей версии.</summary>
     public const string ActiveMarkerName = "active.json";
@@ -93,7 +94,7 @@ public sealed class InstalledModelStore
 
         var version = active?.ModelVersion;
 
-        return version is not null && File.Exists(this.PathOf(version)) ? version : null;
+        return version is not null && File.Exists(this.PackagePathOf(version)) ? version : null;
     }
 
     /// <summary>
@@ -104,7 +105,7 @@ public sealed class InstalledModelStore
     {
         var version = this.ActiveVersion();
 
-        return version is null ? null : this.PathOf(version);
+        return version is null ? null : this.PackagePathOf(version);
     }
 
     /// <summary>
@@ -117,15 +118,22 @@ public sealed class InstalledModelStore
     /// <param name="packagePath">Путь к проверенному файлу пакета.</param>
     /// <param name="modelVersion">Версия из объявления пакета.</param>
     /// <returns>Путь, по которому пакет лёг в хранилище.</returns>
+    /// <exception cref="IOException">Если такая версия уже установлена.</exception>
     public string Install(string packagePath, string modelVersion)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelVersion);
 
-        var destination = this.PathOf(modelVersion);
+        var destination = this.PackagePathOf(modelVersion);
 
         Directory.CreateDirectory(this.root);
-        File.Copy(packagePath, destination, overwrite: true);
+
+        // Поверх установленной версии не записывается ничего: две разные
+        // сборки под одним номером — это молчаливая смена измерительного
+        // инструмента, и отчёты, уже сославшиеся на эту версию, стали бы
+        // ссылаться не на то, чем они получены. Переустановка невозможна
+        // намеренно; новая сборка приходит с новым номером.
+        File.Copy(packagePath, destination, overwrite: false);
 
         return destination;
     }
@@ -139,7 +147,7 @@ public sealed class InstalledModelStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelVersion);
 
-        var package = this.PathOf(modelVersion);
+        var package = this.PackagePathOf(modelVersion);
 
         if (!File.Exists(package))
         {
@@ -179,9 +187,14 @@ public sealed class InstalledModelStore
     /// каталог к ней не прибавляется: версия вида `../..` иначе вывела бы запись
     /// за пределы хранилища.
     /// </summary>
-    private string PathOf(string modelVersion) => Path.Combine(
-        this.root,
-        Path.GetFileName(modelVersion) + PackageExtension);
+    /// <param name="modelVersion">Версия.</param>
+    /// <returns>Путь; файла по нему может не быть.</returns>
+    public string PackagePathOf(string modelVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelVersion);
+
+        return Path.Combine(this.root, Path.GetFileName(modelVersion) + PackageExtension);
+    }
 
     private sealed record ActiveModel(
         [property: JsonPropertyName("modelVersion")] string ModelVersion);

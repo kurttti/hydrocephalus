@@ -125,6 +125,24 @@ public sealed class InstalledModelStoreTests : IDisposable
     }
 
     [Fact]
+    public void Nothing_is_written_over_an_installed_version()
+    {
+        // Две разные сборки под одним номером — молчаливая смена
+        // измерительного инструмента: отчёт, уже сославшийся на эту версию,
+        // стал бы ссылаться не на то, чем получен. Новая сборка приходит
+        // с новым номером; переустановки поверх нет намеренно.
+        var store = this.Store();
+
+        store.Install(this.Package("one"), "vinn-axial-2.0.0");
+
+        Assert.Throws<IOException>(
+            () => store.Install(this.Package("two"), "vinn-axial-2.0.0"));
+
+        Assert.Equal("one", File.ReadAllText(
+            Path.Combine(this.root.FullName, "vinn-axial-2.0.0.hcmp")));
+    }
+
+    [Fact]
     public void A_version_cannot_write_outside_the_store()
     {
         // Версия приходит из объявления пакета, то есть из файла. Вида `../..`

@@ -194,6 +194,55 @@ public sealed class ModelPackageTests : IDisposable
         Assert.Equal(ModelPackageRejection.NotAPackage, check.Rejection);
     }
 
+    [Fact]
+    public void The_model_card_comes_from_the_checked_pass()
+    {
+        // ADR 0008 требует показать карточку администратору до подтверждения.
+        // Прочитанная вторым открытием архива, она описывала бы не обязательно
+        // тот пакет, который проверен, — поэтому берётся из того же прохода,
+        // которым сошлись хеши.
+        var check = ModelPackage.Verify(
+            Build(), this.key, Application, KnownPreprocessing, KnownLabelMaps);
+
+        Assert.Equal("# карточка", check.ModelCard);
+    }
+
+    [Fact]
+    public void A_signature_that_matched_is_not_called_unchecked()
+    {
+        // Отказ после проверки подписи не означает, что подпись не проверяли.
+        // Состояние подписи поэтому несёт сама проверка, а не выводится из кода
+        // отказа: «лишний файл в подписанном пакете» — это сошедшаяся подпись
+        // и непройденный состав одновременно.
+        var check = ModelPackage.Verify(
+            Build(extra: "readme.txt"), this.key, Application, KnownPreprocessing, KnownLabelMaps);
+
+        Assert.Equal(ModelPackageRejection.CompositionMismatch, check.Rejection);
+        Assert.Equal(ModelPackageSignature.Valid, check.Signature);
+    }
+
+    [Fact]
+    public void A_broken_file_does_not_claim_the_signature_was_checked()
+    {
+        var path = Path.Combine(this.root.FullName, "not-a-package-either.hcmp");
+
+        File.WriteAllText(path, "это не архив");
+
+        var check = ModelPackage.Verify(
+            path, this.key, Application, KnownPreprocessing, KnownLabelMaps);
+
+        Assert.Equal(ModelPackageSignature.NotChecked, check.Signature);
+    }
+
+    [Fact]
+    public void A_signature_that_did_not_match_is_named_as_such()
+    {
+        var check = ModelPackage.Verify(
+            Build(unsigned: true), this.key, Application, KnownPreprocessing, KnownLabelMaps);
+
+        Assert.Equal(ModelPackageSignature.Invalid, check.Signature);
+    }
+
     public void Dispose()
     {
         this.key.Dispose();

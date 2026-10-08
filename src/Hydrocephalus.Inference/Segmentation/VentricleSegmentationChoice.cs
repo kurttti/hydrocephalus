@@ -44,25 +44,54 @@ public static class VentricleSegmentationChoice
     /// <returns>Способ разметки. Обёртку с памятью накладывает вызывающий.</returns>
     public static IVentricleSegmentation For(
         string? activePackagePath,
-        IModelPackageReader? reader)
+        IModelPackageReader? reader) =>
+        For(activePackagePath, reader, out _);
+
+    /// <summary>
+    /// Выбирает способ разметки и отдаёт итог проверки пакета.
+    ///
+    /// Итог нужен вызывающему, чтобы записать отказ в журнал: пакет, который
+    /// испортился уже в хранилище, блокирует анализ, и бесследным это событие
+    /// быть не должно (`docs/security/README.md`). Проверка при этом остаётся
+    /// одна — второе чтение пакета ради той же справки стоило бы сотню
+    /// мегабайт и оставило бы щель между проверкой и загрузкой.
+    /// </summary>
+    /// <param name="activePackagePath">
+    /// Путь к действующему пакету либо <see langword="null"/>, если его нет.
+    /// </param>
+    /// <param name="reader">
+    /// Чем проверять пакет; <see langword="null"/>, если доверенного ключа нет.
+    /// </param>
+    /// <param name="check">
+    /// Итог проверки либо <see langword="null"/>, если проверять было нечего.
+    /// </param>
+    /// <returns>Способ разметки. Обёртку с памятью накладывает вызывающий.</returns>
+    public static IVentricleSegmentation For(
+        string? activePackagePath,
+        IModelPackageReader? reader,
+        out ModelPackageCheck? check)
     {
+        check = null;
+
         if (activePackagePath is null || reader is null)
         {
             return new ThresholdVentricleSegmentation();
         }
 
-        var check = reader.Open(activePackagePath);
+        var opened = reader.Open(activePackagePath);
+
+        check = opened;
 
         // Принятый пакет обязан отдать и объявление, и веса: разбор доходит до
         // них одним проходом. Если чего-то нет — это не «почти прошёл», а
         // противоречие внутри проверки, и блокировка уместнее попытки продолжить.
-        if (check.Rejection is not null
-            || check.Weights is not { } weights
-            || check.Manifest is not { } manifest)
+        if (opened.Rejection is not null
+            || opened.Weights is not { } weights
+            || opened.Manifest is not { } manifest)
         {
             return new BlockedVentricleSegmentation(
-                check.Rejection?.ToString() ?? "incompleteCheck",
-                check.Detail);
+                opened.Rejection?.ToString() ?? "incompleteCheck",
+                opened.Detail);
         }
 
         // Модель получает T1, остальное остаётся пороговому пути: модель

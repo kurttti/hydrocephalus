@@ -51,6 +51,9 @@ public static class ModelPackage
     /// <summary>Имя отделённой подписи списка хешей.</summary>
     public const string SignatureEntry = "checksums.sha256.sig";
 
+    /// <summary>Имя карточки модели.</summary>
+    public const string ModelCardEntry = "model-card.md";
+
     /// <summary>Имя файла весов сегментации.</summary>
     public const string SegmentationEntry = "segmentation.onnx";
 
@@ -72,7 +75,7 @@ public static class ModelPackage
         SegmentationEntry,
         "preprocessing.json",
         "labels.json",
-        "model-card.md",
+        ModelCardEntry,
     ];
 
     /// <summary>
@@ -135,10 +138,29 @@ public static class ModelPackage
         bool withWeights)
     {
         byte[]? weights = null;
+        var modelCard = string.Empty;
+
+        // Состояние подписи несётся явно, а не выводится потом из кода отказа:
+        // «список хешей не разбирается» встречается и до проверки подписи, и
+        // после неё, и по коду эти два случая не отличить. Экран установки
+        // показывает это состояние человеку, и догадка там была бы заявлением,
+        // которого проверка не делала.
+        var signatureState = ModelPackageSignature.NotChecked;
+
+        ModelPackageCheck Verdict(
+            ModelPackageManifest? manifest,
+            ModelPackageRejection? rejection,
+            string detail = "") =>
+            new(manifest, rejection, detail)
+            {
+                Signature = signatureState,
+                ModelCard = modelCard,
+                Weights = rejection is null ? weights : null,
+            };
 
         if (Read(archive, ManifestEntry) is not { } manifestBytes)
         {
-            return new ModelPackageCheck(null, ModelPackageRejection.ManifestUnreadable);
+            return Verdict(null, ModelPackageRejection.ManifestUnreadable);
         }
 
         ModelPackageManifest? manifest;
@@ -157,19 +179,19 @@ public static class ModelPackage
         }
         catch (JsonException)
         {
-            return new ModelPackageCheck(null, ModelPackageRejection.ManifestUnreadable);
+            return Verdict(null, ModelPackageRejection.ManifestUnreadable);
         }
 
         if (manifest is null
             || !string.Equals(manifest.FormatVersion, SupportedFormatVersion, StringComparison.Ordinal))
         {
-            return new ModelPackageCheck(
+            return Verdict(
                 null, ModelPackageRejection.ManifestUnreadable, manifest?.FormatVersion ?? string.Empty);
         }
 
         if (Read(archive, ChecksumsEntry) is not { } checksumBytes)
         {
-            return new ModelPackageCheck(manifest, ModelPackageRejection.ChecksumsUnreadable);
+            return Verdict(manifest, ModelPackageRejection.ChecksumsUnreadable);
         }
 
         // Подпись проверяется раньше самих хешей: список хешей, которому нельзя
@@ -177,12 +199,16 @@ public static class ModelPackage
         if (Read(archive, SignatureEntry) is not { } signature
             || !trustedPublicKey.VerifyData(checksumBytes, signature, HashAlgorithmName.SHA256))
         {
-            return new ModelPackageCheck(manifest, ModelPackageRejection.SignatureInvalid);
+            signatureState = ModelPackageSignature.Invalid;
+
+            return Verdict(manifest, ModelPackageRejection.SignatureInvalid);
         }
+
+        signatureState = ModelPackageSignature.Valid;
 
         if (ParseChecksums(checksumBytes) is not { } declared)
         {
-            return new ModelPackageCheck(manifest, ModelPackageRejection.ChecksumsUnreadable);
+            return Verdict(manifest, ModelPackageRejection.ChecksumsUnreadable);
         }
 
         var present = archive.Entries
@@ -198,7 +224,7 @@ public static class ModelPackage
             if (!declared.ContainsKey(name)
                 || !Array.Exists(AllowedEntries, allowed => string.Equals(allowed, name, StringComparison.Ordinal)))
             {
-                return new ModelPackageCheck(manifest, ModelPackageRejection.CompositionMismatch, name);
+                return Verdict(manifest, ModelPackageRejection.CompositionMismatch, name);
             }
         }
 
@@ -206,13 +232,13 @@ public static class ModelPackage
         {
             if (!present.Contains(name))
             {
-                return new ModelPackageCheck(manifest, ModelPackageRejection.CompositionMismatch, name);
+                return Verdict(manifest, ModelPackageRejection.CompositionMismatch, name);
             }
 
             if (Read(archive, name) is not { } content
                 || !string.Equals(Hash(content), expected, StringComparison.OrdinalIgnoreCase))
             {
-                return new ModelPackageCheck(manifest, ModelPackageRejection.ContentAltered, name);
+                return Verdict(manifest, ModelPackageRejection.ContentAltered, name);
             }
 
             // Веса запоминаются здесь, а не читаются заново после проверки:
@@ -222,29 +248,38 @@ public static class ModelPackage
             {
                 weights = content;
             }
+
+            // Карточка — по той же причине и тем же проходом: показанная
+            // администратору из второго чтения архива, она описывала бы не
+            // обязательно тот пакет, который проверен. Читается всегда:
+            // это текст, а не сотня мегабайт, и экрану установки он нужен.
+            if (string.Equals(name, ModelCardEntry, StringComparison.Ordinal))
+            {
+                modelCard = Encoding.UTF8.GetString(content).TrimEnd();
+            }
         }
 
         if (!Version.TryParse(manifest.MinimumApplicationVersion, out var minimum))
         {
-            return new ModelPackageCheck(
+            return Verdict(
                 manifest, ModelPackageRejection.ManifestUnreadable, manifest.MinimumApplicationVersion);
         }
 
         if (applicationVersion < minimum)
         {
-            return new ModelPackageCheck(
+            return Verdict(
                 manifest, ModelPackageRejection.ApplicationTooOld, minimum.ToString());
         }
 
         if (!knownPreprocessing.Contains(manifest.PreprocessingVersion, StringComparer.Ordinal))
         {
-            return new ModelPackageCheck(
+            return Verdict(
                 manifest, ModelPackageRejection.IncompatibleContract, manifest.PreprocessingVersion);
         }
 
         return knownLabelMaps.Contains(manifest.LabelMapVersion, StringComparer.Ordinal)
-            ? new ModelPackageCheck(manifest, null) { Weights = weights }
-            : new ModelPackageCheck(
+            ? Verdict(manifest, null)
+            : Verdict(
                 manifest, ModelPackageRejection.IncompatibleContract, manifest.LabelMapVersion);
     }
 
