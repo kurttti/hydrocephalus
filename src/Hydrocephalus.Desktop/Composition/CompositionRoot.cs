@@ -51,6 +51,23 @@ public sealed class CompositionRoot : IDisposable
 
     private readonly Hydrocephalus.Application.ReadAuditJournalUseCase readAuditJournal;
 
+    // Сценарии установки собираются только при наличии доверенного ключа:
+    // без него проверять пакет нечем, а установка без проверки запрещена
+    // ADR 0004. Поэтому здесь не заглушка, которая всегда отказывает, а прямое
+    // «нечем»: экран не предлагает действия, которого нет.
+    private readonly Hydrocephalus.Application.LoadModelPackageUseCase? loadModelPackage;
+
+    private readonly Hydrocephalus.Application.ActivateModelVersionUseCase? activateModelVersion;
+
+    private readonly InstalledModelStore modelStore;
+
+    // Читатель пакетов живёт весь запуск и один: тот же объект проверяет пакет
+    // при установке и при выборе способа разметки на старте. Двумя объектами
+    // они разошлись бы незаметно — экран принял бы пакет, который следующий
+    // запуск заблокирует, — потому что знание о версии приложения и о понятных
+    // версиям схемах задаётся при создании читателя.
+    private readonly SignedModelPackageReader? modelPackageReader;
+
     private readonly ApplicationPaths paths;
 
     // Открытое исследование держится здесь, а не в окне: рабочая копия — это
@@ -76,6 +93,10 @@ public sealed class CompositionRoot : IDisposable
         Hydrocephalus.Application.ExportReportUseCase exportReport,
         Hydrocephalus.Application.RecordManualMeasurementUseCase recordMeasurement,
         Hydrocephalus.Application.ReadAuditJournalUseCase readAuditJournal,
+        Hydrocephalus.Application.LoadModelPackageUseCase? loadModelPackage,
+        Hydrocephalus.Application.ActivateModelVersionUseCase? activateModelVersion,
+        InstalledModelStore modelStore,
+        SignedModelPackageReader? modelPackageReader,
         StudyImporter importer,
         HashChainAuditLog auditLog,
         PipelineIdentity pipeline,
@@ -89,6 +110,10 @@ public sealed class CompositionRoot : IDisposable
         this.exportReport = exportReport;
         this.recordMeasurement = recordMeasurement;
         this.readAuditJournal = readAuditJournal;
+        this.loadModelPackage = loadModelPackage;
+        this.activateModelVersion = activateModelVersion;
+        this.modelStore = modelStore;
+        this.modelPackageReader = modelPackageReader;
         this.importer = importer;
         this.auditLog = auditLog;
         this.Pipeline = pipeline;
@@ -146,15 +171,43 @@ public sealed class CompositionRoot : IDisposable
             .GetOrCreateAsync(paths.PseudonymSaltPath, cancellationToken)
             .ConfigureAwait(false);
 
+        // Журнал открывается раньше выбора способа разметки: отвергнутый
+        // пакет блокирует анализ, и это событие обязано попасть в журнал,
+        // а не остаться догадкой по отсутствию чисел в отчёте.
+        var auditLog = new HashChainAuditLog(paths.AuditLogPath);
+
+        var modelStore = new InstalledModelStore(paths.ModelRoot);
+        var modelPackageReader = CreateModelPackageReader(paths);
+
         // Способ разметки желудочков выбирается один раз, при сборке: ни
         // конвейер, ни просмотрщик не должны знать, установлена ли модель.
         // Обёртка с памятью — поверх выбранного: одну серию размечают дважды,
         // для экрана и для отчёта, и моделью это минута счёта на каждый раз.
-        var segmentation = new CachingVentricleSegmentation(ChooseSegmentation(paths));
+        //
+        // Отсюда же следует, что смена действующей версии вступает в силу
+        // только со следующего запуска. Это и есть то, как выполняется запрет
+        // ADR 0008 на переключение версии во время анализа: подменить способ
+        // у уже собранного конвейера нечем, и отчёт не может сослаться на
+        // версию, которой он не получен.
+        var segmentation = new CachingVentricleSegmentation(
+            VentricleSegmentationChoice.For(
+                modelStore.ActivePackagePath(), modelPackageReader, out var activeCheck));
+
+        if (activeCheck?.Rejection is not null)
+        {
+            await auditLog.RecordAsync(
+                new AuditEvent
+                {
+                    Code = AuditEventCode.ModelPackageRefused,
+                    OccurredAt = TimeProvider.System.GetUtcNow(),
+                    ModelVersion = activeCheck.Manifest?.ModelVersion ?? modelStore.ActiveVersion(),
+                    ModelPackage = Hydrocephalus.Application.LoadModelPackageUseCase
+                        .Describe(activeCheck),
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var pipeline = DescribePipeline(segmentation.Provenance);
-
-        var auditLog = new HashChainAuditLog(paths.AuditLogPath);
 
         var importer = new StudyImporter(
             new DicomImportOptions { PseudonymSalt = salt },
@@ -214,6 +267,19 @@ public sealed class CompositionRoot : IDisposable
             auditLog,
             TimeProvider.System);
 
+        // Осмотр, установка и переключение берут того же читателя пакета, что
+        // и выбор способа разметки: экран не должен принимать пакет, который
+        // следующий запуск заблокирует.
+        var loadModelPackage = modelPackageReader is null
+            ? null
+            : new Hydrocephalus.Application.LoadModelPackageUseCase(
+                modelPackageReader, modelStore, auditLog, TimeProvider.System);
+
+        var activateModelVersion = modelPackageReader is null
+            ? null
+            : new Hydrocephalus.Application.ActivateModelVersionUseCase(
+                modelPackageReader, modelStore, auditLog, TimeProvider.System);
+
         // Файл настроек лежит рядом с исполняемым файлом, а не в профиле
         // пользователя: роль задаёт тот, кто разворачивает приложение, и она
         // не должна меняться от того, под кем оно запущено.
@@ -226,6 +292,10 @@ public sealed class CompositionRoot : IDisposable
             exportReport,
             recordMeasurement,
             readAuditJournal,
+            loadModelPackage,
+            activateModelVersion,
+            modelStore,
+            modelPackageReader,
             importer,
             auditLog,
             pipeline,
@@ -611,7 +681,91 @@ public sealed class CompositionRoot : IDisposable
             Retention = this.Retention,
             PatientRegistryConfigured = PatientRegistryConfigured,
             Pipeline = this.Pipeline,
+            Models = this.DescribeModels(),
         };
+    }
+
+    /// <summary>
+    /// Состояние установленных пакетов модели.
+    ///
+    /// Отдельно от <see cref="OpenAdministrationAsync"/>, потому что экран
+    /// модели перечитывает его после каждого действия, а журнал аудита читать
+    /// для этого незачем: он растёт всю жизнь установки.
+    ///
+    /// Право проверяется здесь, а не экраном: выключенная кнопка — удобство,
+    /// а не разграничение (ADR 0005).
+    /// </summary>
+    /// <returns>Что установлено и что действует.</returns>
+    /// <exception cref="AccessDeniedException">
+    /// Если у роли нет права на установку модели.
+    /// </exception>
+    public Administration.ModelInstallationState ModelState()
+    {
+        this.Actor.Require(Capability.InstallModelPackage);
+
+        return this.DescribeModels();
+    }
+
+    /// <summary>
+    /// Осматривает пакет, ничего не устанавливая.
+    ///
+    /// Нужен до подтверждения: ADR 0008 требует показать версию, ключ, статус
+    /// подписи и карточку модели — и только потом устанавливать.
+    /// </summary>
+    /// <param name="packagePath">Путь к файлу пакета, выбранному администратором.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Что показать администратору.</returns>
+    /// <exception cref="InvalidOperationException">Если доверенного ключа нет.</exception>
+    public Task<Hydrocephalus.Application.ModelPackageInspection> InspectModelPackageAsync(
+        string packagePath,
+        CancellationToken cancellationToken) =>
+        ModelAdministrationOf(this.loadModelPackage)
+            .InspectAsync(packagePath, this.Actor, cancellationToken);
+
+    /// <summary>
+    /// Устанавливает пакет: проверяет заново и кладёт в хранилище.
+    ///
+    /// Действующим пакет не становится — это отдельное действие
+    /// (<see cref="ActivateModelVersionAsync"/>), как требует ADR 0008.
+    /// </summary>
+    /// <param name="packagePath">Путь к файлу пакета.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Исход установки.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Если доверенного ключа нет либо открыто исследование.
+    /// </exception>
+    public Task<Hydrocephalus.Application.ModelPackageInstallation> InstallModelPackageAsync(
+        string packagePath,
+        CancellationToken cancellationToken)
+    {
+        this.RequireNoOpenStudy();
+
+        return ModelAdministrationOf(this.loadModelPackage)
+            .ExecuteAsync(packagePath, this.Actor, cancellationToken);
+    }
+
+    /// <summary>
+    /// Делает установленную версию действующей; она же операция отката.
+    ///
+    /// Вступает в силу со следующего запуска: способ разметки собирается один
+    /// раз при сборке приложения. Так и выполняется запрет ADR 0008 на
+    /// переключение версии во время анализа — подменить способ у уже
+    /// собранного конвейера нечем.
+    /// </summary>
+    /// <param name="modelVersion">Версия, которая должна стать действующей.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Исход смены.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Если доверенного ключа нет либо открыто исследование.
+    /// </exception>
+    public Task<Hydrocephalus.Application.ModelVersionActivation> ActivateModelVersionAsync(
+        string modelVersion,
+        CancellationToken cancellationToken)
+    {
+        this.RequireNoOpenStudy();
+
+        return ModelAdministrationOf(this.activateModelVersion)
+            .ExecuteAsync(modelVersion, this.Actor, cancellationToken);
     }
 
     /// <summary>
@@ -649,12 +803,63 @@ public sealed class CompositionRoot : IDisposable
         this.CloseAsync().GetAwaiter().GetResult();
 
         this.auditLog.Dispose();
+        this.modelPackageReader?.Dispose();
     }
 
     // Из ссылки показывается только каталог: имя файла содержит псевдоним
     // исследования, а строка состояния видна на экране в кабинете.
     private static string DirectoryOf(string reference) =>
         System.IO.Path.GetDirectoryName(reference) ?? reference;
+
+    private static T ModelAdministrationOf<T>(T? useCase)
+        where T : class =>
+        useCase ?? throw new InvalidOperationException(
+            "There is no trusted key, so model packages cannot be checked.");
+
+    // Пока исследование открыто, установка и переключение версии недоступны:
+    // ADR 0008 запрещает менять версию во время выполняющегося анализа. Экран
+    // такие кнопки и не показывает; проверка здесь — на случай, когда показ
+    // и нажатие разошлись по времени с открытием исследования.
+    private void RequireNoOpenStudy()
+    {
+        if (this.opened is not null)
+        {
+            throw new InvalidOperationException(
+                "A study is open, so the model version must not be switched now.");
+        }
+    }
+
+    /// <summary>
+    /// Описывает установленные пакеты для экрана администрирования.
+    ///
+    /// Действующий пакет проверяется заново, а не берётся с запуска: экран
+    /// отвечает на вопрос «что сейчас», и пакет, испортившийся после старта,
+    /// должен быть виден здесь, а не обнаружиться у врача. Веса при этом не
+    /// читаются — экрану нужно решение о пакете, а не сотня мегабайт.
+    /// </summary>
+    private Administration.ModelInstallationState DescribeModels()
+    {
+        var active = this.modelStore.ActiveVersion();
+        var path = active is null ? null : this.modelStore.PackagePathOf(active);
+
+        var check = path is not null && this.modelPackageReader is not null
+            ? this.modelPackageReader.Verify(path)
+            : null;
+
+        return new Administration.ModelInstallationState
+        {
+            InstalledVersions = this.modelStore.InstalledVersions(),
+            ActiveVersion = active,
+            MeasuringNow = this.Pipeline.LabelMapVersion,
+            ActiveManifest = check?.Manifest,
+            ActiveSignature = check?.Signature ?? ModelPackageSignature.NotChecked,
+            ActiveRejection = check?.Rejection,
+            ActiveDetail = check?.Detail ?? string.Empty,
+            TrustKeyConfigured = this.modelPackageReader is not null,
+            ModelRoot = this.paths.ModelRoot,
+            StudyOpen = this.opened is not null,
+        };
+    }
 
     private async Task CloseAsync()
     {
@@ -684,32 +889,24 @@ public sealed class CompositionRoot : IDisposable
     /// из CI это точное значение, и именно они попадают к врачу.
     /// </summary>
     /// <summary>
-    /// Собирает способ разметки из того, что установлено.
+    /// Создаёт читателя пакетов модели либо сообщает, что проверять нечем.
     ///
-    /// Само решение — в <see cref="VentricleSegmentationChoice"/>: оно одно для
-    /// оконного приложения и для пакетного замера выборки. Здесь только то, что
-    /// знает именно состав приложения, — где лежат пакеты и где доверенный ключ.
+    /// Один объект на весь запуск: им проверяется и действующий пакет на
+    /// старте, и устанавливаемый на экране. Второй объект с другой версией
+    /// приложения или другим перечнем понятных схем разошёлся бы с первым
+    /// молча — экран принял бы пакет, который следующий запуск заблокирует.
     ///
     /// Ключ читается из файла в профиле пользователя, и для выпуска этого
     /// недостаточно — см. <see cref="ApplicationPaths.ModelTrustKeyPath"/>.
     /// </summary>
-    private static IVentricleSegmentation ChooseSegmentation(ApplicationPaths paths)
-    {
-        var package = new InstalledModelStore(paths.ModelRoot).ActivePackagePath();
-
-        if (package is null || !System.IO.File.Exists(paths.ModelTrustKeyPath))
-        {
-            return VentricleSegmentationChoice.For(activePackagePath: null, reader: null);
-        }
-
-        using var reader = new SignedModelPackageReader(
-            System.IO.File.ReadAllText(paths.ModelTrustKeyPath),
-            Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0),
-            [VolumeConforming.PreprocessingVersion],
-            [OnnxVentricleSegmentation.LabelMapVersion]);
-
-        return VentricleSegmentationChoice.For(package, reader);
-    }
+    private static SignedModelPackageReader? CreateModelPackageReader(ApplicationPaths paths) =>
+        System.IO.File.Exists(paths.ModelTrustKeyPath)
+            ? new SignedModelPackageReader(
+                System.IO.File.ReadAllText(paths.ModelTrustKeyPath),
+                Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0),
+                [VolumeConforming.PreprocessingVersion],
+                [OnnxVentricleSegmentation.LabelMapVersion])
+            : null;
 
     private static PipelineIdentity DescribePipeline(string segmentationProvenance) => new()
     {

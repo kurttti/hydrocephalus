@@ -1,3 +1,5 @@
+using Hydrocephalus.Desktop.Results;
+
 namespace Hydrocephalus.Desktop.Composition;
 
 /// <summary>
@@ -32,6 +34,21 @@ public static class PathReadout
             Environment.SpecialFolder.UserProfile,
             "%USERPROFILE%");
     }
+
+    /// <summary>
+    /// Собирает строку «что: где» с путём, пригодным для показа.
+    ///
+    /// Здесь, а не в каждом экране по отдельности: путь, показанный целиком
+    /// хотя бы в одном месте, сводит на нет псевдонимы во всех остальных.
+    /// </summary>
+    /// <param name="what">Что лежит по этому пути.</param>
+    /// <param name="path">Путь файла или каталога.</param>
+    /// <returns>Строка для показа.</returns>
+    public static ResultRow Place(string what, string path) => new()
+    {
+        Text = what + ": " + Describe(path),
+        Severity = ResultSeverity.Neutral,
+    };
 
     private static string Replace(string path, Environment.SpecialFolder folder, string name)
     {

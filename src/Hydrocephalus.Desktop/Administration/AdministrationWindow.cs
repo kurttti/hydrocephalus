@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using Hydrocephalus.Desktop.Results;
 
 namespace Hydrocephalus.Desktop.Administration;
@@ -8,10 +7,16 @@ namespace Hydrocephalus.Desktop.Administration;
 /// <summary>
 /// Окно администрирования: состояние установки и журнал аудита.
 ///
-/// Окно только показывает. Ни одной кнопки, меняющей состояние, здесь нет
-/// и не будет: журнал защищён от незаметного редактирования, и средство
+/// Журнал здесь только показывается. Ни одной кнопки, меняющей журнал, в этом
+/// окне нет и не будет: он защищён от незаметного редактирования, и средство
 /// правки журнала в самом приложении отменило бы смысл этой защиты. Уборка
 /// рабочих копий тоже не выносится сюда — она идёт по сроку, а не по команде.
+///
+/// Единственная кнопка, кроме закрытия, открывает экран модели. Сама она
+/// ничего не меняет; установка и переключение версии требуют подтверждения
+/// там, и это требование ADR 0008, а не вольность: смена модели меняет то,
+/// что приложение измеряет у всех последующих пациентов, и выполняться должна
+/// явным действием администратора.
 ///
 /// Текст приходит готовым из <see cref="AdministrationReadout"/>. Окно
 /// ничего не формулирует само и потому не может сказать о журнале больше,
@@ -19,118 +24,71 @@ namespace Hydrocephalus.Desktop.Administration;
 /// </summary>
 public sealed class AdministrationWindow : Window
 {
-    private static readonly SolidColorBrush HeadingBrush = new(Color.FromRgb(0x9A, 0x9A, 0xA6));
-
-    private static readonly SolidColorBrush NoteBrush = new(Color.FromRgb(0x86, 0x86, 0x94));
-
-    private static readonly SolidColorBrush NeutralBrush = new(Color.FromRgb(0xC8, 0xC8, 0xD2));
-
-    private static readonly SolidColorBrush WarningBrush = new(Color.FromRgb(0xE0, 0xB0, 0x50));
-
-    private static readonly SolidColorBrush BlockingBrush = new(Color.FromRgb(0xE0, 0x6A, 0x5A));
-
     /// <summary>
     /// Создаёт окно администрирования.
     /// </summary>
     /// <param name="sections">Разделы для показа.</param>
-    public AdministrationWindow(IReadOnlyList<ResultSection> sections)
+    /// <param name="openModels">
+    /// Чем открыть экран модели; <see langword="null"/>, если открывать нечем —
+    /// тогда кнопки нет. Выключенная кнопка без причины хуже её отсутствия.
+    /// </param>
+    public AdministrationWindow(
+        IReadOnlyList<ResultSection> sections,
+        Action<Window>? openModels = null)
     {
         ArgumentNullException.ThrowIfNull(sections);
 
         this.Title = "Администрирование";
         this.Width = 860;
         this.Height = 680;
-        this.Background = new SolidColorBrush(Color.FromRgb(0x10, 0x10, 0x14));
+        this.Background = SectionPanel.Background;
         this.FontSize = 13;
         this.WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var panel = new DockPanel { Margin = new Thickness(14) };
 
-        var actions = BuildActions();
+        var actions = this.BuildActions(openModels);
 
         DockPanel.SetDock(actions, Dock.Bottom);
 
         panel.Children.Add(actions);
-        panel.Children.Add(BuildBody(sections));
+        panel.Children.Add(SectionPanel.Build(sections));
 
         this.Content = panel;
     }
 
-    private static SolidColorBrush BrushFor(ResultSeverity severity) => severity switch
+    private StackPanel BuildActions(Action<Window>? openModels)
     {
-        ResultSeverity.Blocking => BlockingBrush,
-        ResultSeverity.Warning => WarningBrush,
-        _ => NeutralBrush,
-    };
-
-    private static ScrollViewer BuildBody(IReadOnlyList<ResultSection> sections)
-    {
-        var stack = new StackPanel();
-
-        foreach (var section in sections)
+        var buttons = new StackPanel
         {
-            stack.Children.Add(new TextBlock
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+
+        if (openModels is not null)
+        {
+            var models = new Button
             {
-                Text = section.Title,
-                Foreground = HeadingBrush,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 14, 0, 6),
-            });
+                Content = "_Модель…",
+                Padding = new Thickness(14, 5, 14, 5),
+                Margin = new Thickness(0, 0, 8, 0),
+            };
 
-            foreach (var row in section.Rows)
-            {
-                stack.Children.Add(new TextBlock
-                {
-                    Text = row.Text,
-                    Foreground = BrushFor(row.Severity),
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 0, 0, 2),
-                });
+            // Владельцем экрана модели становится это окно: иначе он остался бы
+            // висеть, когда администрирование закрыли.
+            models.Click += (_, _) => openModels(this);
 
-                if (row.Note is null)
-                {
-                    continue;
-                }
-
-                stack.Children.Add(new TextBlock
-                {
-                    Text = row.Note,
-                    Foreground = NoteBrush,
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 11,
-                    Margin = new Thickness(0, 0, 0, 8),
-                });
-            }
+            buttons.Children.Add(models);
         }
 
-        // Прокрутка достижима с клавиатуры: журнал длиннее экрана,
-        // а работать приложение должно без мыши (docs/windows/README.md).
-        return new ScrollViewer
-        {
-            Content = stack,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Focusable = true,
-            IsTabStop = true,
-            Margin = new Thickness(0, 0, 0, 10),
-        };
-    }
-
-    private static StackPanel BuildActions()
-    {
-        var close = new Button
+        buttons.Children.Add(new Button
         {
             Content = "_Закрыть",
             Padding = new Thickness(14, 5, 14, 5),
             IsDefault = true,
             IsCancel = true,
-        };
+        });
 
-        return new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { close },
-        };
+        return buttons;
     }
 }

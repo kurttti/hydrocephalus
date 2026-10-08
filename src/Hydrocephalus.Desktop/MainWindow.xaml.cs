@@ -368,8 +368,18 @@ public partial class MainWindow : Window
             var snapshot = await composition.OpenAdministrationAsync(CancellationToken.None)
                 .ConfigureAwait(true);
 
-            new AdministrationWindow(AdministrationReadout.Describe(snapshot)) { Owner = this }
-                .ShowDialog();
+            var administration = new AdministrationWindow(
+                AdministrationReadout.Describe(snapshot),
+                // Экран модели предлагается только тому, кто может там что-то
+                // сделать: роль задаётся установкой и в интерфейсе не меняется.
+                composition.Actor.Can(Capability.InstallModelPackage)
+                    ? owner => OpenModels(composition, owner)
+                    : null)
+            {
+                Owner = this,
+            };
+
+            administration.ShowDialog();
         }
         catch (AccessDeniedException)
         {
@@ -382,6 +392,9 @@ public partial class MainWindow : Window
             this.StatusText.Text = "Журнал не прочитан: " + ErrorReadout.Describe(exception);
         }
     }
+
+    private static void OpenModels(CompositionRoot composition, Window owner) =>
+        new ModelWindow(composition) { Owner = owner }.ShowDialog();
 
     private async void OnExportManifestClick(object sender, RoutedEventArgs e) =>
         await this.ExportAsync(

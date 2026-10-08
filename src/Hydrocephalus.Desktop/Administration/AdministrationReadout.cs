@@ -56,6 +56,7 @@ public static class AdministrationReadout
         [
             new ResultSection { Title = "Целостность журнала", Rows = DescribeIntegrity(snapshot.Journal) },
             new ResultSection { Title = "Установка", Rows = DescribeInstallation(snapshot) },
+            new ResultSection { Title = "Модель", Rows = ModelReadout.Rows(snapshot.Models) },
             new ResultSection { Title = "Хранение", Rows = DescribePaths(snapshot) },
             new ResultSection { Title = "События", Rows = DescribeRecords(snapshot.Journal) },
         ];
@@ -115,6 +116,34 @@ public static class AdministrationReadout
         if (!string.IsNullOrWhiteSpace(record.ModelVersion))
         {
             text += " · модель " + record.ModelVersion;
+        }
+
+        if (record.ModelActivation is { } activation)
+        {
+            // Обе версии: ADR 0008 требует именно «из» и «в», а запись с одной
+            // не отвечает на вопрос, что изменилось.
+            text += " · с "
+                + (activation.FromVersion.Length > 0 ? activation.FromVersion : "никакой")
+                + " на " + activation.ToVersion;
+        }
+
+        if (record.ModelPackage is { } package)
+        {
+            // Ключ и состояние подписи показываются у каждой записи о пакете:
+            // `docs/windows/README.md` требует, чтобы источник и статус подписи
+            // были видны, а `docs/security/README.md` называет подмену модели
+            // отдельной угрозой.
+            text += " · подпись " + ModelReadout.NameOf(package.Signature);
+
+            if (!string.IsNullOrWhiteSpace(package.SigningKeyId))
+            {
+                text += ", ключ " + package.SigningKeyId;
+            }
+
+            if (package.Rejection is { } rejection)
+            {
+                text += " · " + ModelReadout.NameOf(rejection) + ModelReadout.DetailOf(package.Detail);
+            }
         }
 
         return new ResultRow { Text = text, Note = NoteFor(record.Integrity), Severity = severity };
@@ -196,33 +225,19 @@ public static class AdministrationReadout
         },
         new ResultRow
         {
-            // Отсутствие пакета модели — состояние сборки, а не поломка
-            // установки: проверенного пакета пока нет (ADR 0004).
-            Text = "Пакет модели не подключён: вероятность диагноза не выдаётся.",
-            Severity = ResultSeverity.Warning,
-        },
-        new ResultRow
-        {
             Text = "Сборка приложения: " + snapshot.Pipeline.ApplicationCommitSha,
             Note = DescribePipelineGaps(snapshot.Pipeline),
-            Severity = ResultSeverity.Neutral,
-        },
-        new ResultRow
-        {
-            // Диагностики ускорителя нет, потому что нет инференса. Пустой
-            // раздел «GPU» выглядел бы как исправное отсутствие устройства.
-            Text = "Диагностика ускорителя не показывается: локального инференса в этой сборке нет.",
             Severity = ResultSeverity.Neutral,
         },
     ];
 
     private static List<ResultRow> DescribePaths(AdministrationSnapshot snapshot) =>
     [
-        Place("Рабочие копии", snapshot.WorkingCopyRoot),
-        Place("Отчёты", snapshot.ReportRoot),
-        Place("Экспортированные отчёты", snapshot.ReportExportRoot),
-        Place("Манифесты датасета", snapshot.DatasetManifestRoot),
-        Place("Журнал аудита", snapshot.AuditLogPath),
+        PathReadout.Place("Рабочие копии", snapshot.WorkingCopyRoot),
+        PathReadout.Place("Отчёты", snapshot.ReportRoot),
+        PathReadout.Place("Экспортированные отчёты", snapshot.ReportExportRoot),
+        PathReadout.Place("Манифесты датасета", snapshot.DatasetManifestRoot),
+        PathReadout.Place("Журнал аудита", snapshot.AuditLogPath),
     ];
 
     private static List<ResultRow> DescribeRecords(AuditJournal journal)
@@ -262,14 +277,6 @@ public static class AdministrationReadout
 
         return rows;
     }
-
-    private static ResultRow Place(string what, string path) => new()
-    {
-        // Путь профиля содержит имя учётной записи, а оно в клинике обычно
-        // образовано от фамилии сотрудника — рядом с псевдонимами в журнале.
-        Text = what + ": " + PathReadout.Describe(path),
-        Severity = ResultSeverity.Neutral,
-    };
 
     private static string? DescribePipelineGaps(PipelineIdentity pipeline)
     {
@@ -376,6 +383,9 @@ public static class AdministrationReadout
         AuditEventCode.WorkingCopiesSwept => "Уборка рабочих копий",
         AuditEventCode.ReportPreviewed => "Отчёт показан перед экспортом",
         AuditEventCode.MeasurementRecordedByClinician => "Врач записал измерение в отчёт",
+        AuditEventCode.ModelPackageLoaded => "Пакет модели установлен",
+        AuditEventCode.ModelPackageRefused => "Пакет модели отвергнут",
+        AuditEventCode.ModelPackageActivated => "Сменена действующая версия модели",
 
         // Код, которого нет в этой версии приложения, читается как неизвестный,
         // а не пропускается: запись, сделанная более новой версией, должна

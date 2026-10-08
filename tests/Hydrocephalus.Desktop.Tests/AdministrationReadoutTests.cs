@@ -370,7 +370,22 @@ public sealed class AdministrationReadoutTests
                 LabelMapVersion = PipelineIdentity.NotImplementedVersion,
                 ApplicationCommitSha = "0123456789abcdef",
             },
+            Models = Models,
         };
+
+    private static ModelInstallationState Models => new()
+    {
+        InstalledVersions = [],
+        ActiveVersion = null,
+        MeasuringNow = "ventricles-threshold/baseline-1.4.0",
+        ActiveManifest = null,
+        ActiveSignature = ModelPackageSignature.NotChecked,
+        ActiveRejection = null,
+        ActiveDetail = "",
+        TrustKeyConfigured = false,
+        ModelRoot = @"C:\data\models",
+        StudyOpen = false,
+    };
 
     private static AuditJournal Journal(params AuditRecord[] records) => new()
     {
