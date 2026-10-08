@@ -74,7 +74,7 @@ public sealed class ModelReadoutTests
 
         Assert.Contains("хеш файла не совпал", row.Text, StringComparison.Ordinal);
         Assert.Contains("segmentation.onnx", row.Text, StringComparison.Ordinal);
-        Assert.Contains("до решения администратора", row.Note!, StringComparison.Ordinal);
+        Assert.Contains("другим способом", row.Note!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -238,6 +238,38 @@ public sealed class ModelReadoutTests
 
         Assert.Equal(ResultSeverity.Blocking, row.Severity);
         Assert.Contains("осталась на прежней версии", row.Note!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_file_holding_another_version_names_both()
+    {
+        var row = ModelReadout.Describe(new ModelVersionActivation(
+            ModelActivationOutcome.VersionMismatch,
+            "vinn-axial-2.0.0",
+            "vinn-axial-2.1.0",
+            null,
+            "vinn-axial-1.0.0"));
+
+        Assert.Equal(ResultSeverity.Blocking, row.Severity);
+        Assert.Contains("vinn-axial-2.1.0", row.Text, StringComparison.Ordinal);
+        Assert.Contains("vinn-axial-1.0.0", row.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_refused_active_package_does_not_claim_this_run_is_blocked()
+    {
+        // Если на старте пакет проверку прошёл, веса уже в памяти и измерение
+        // продолжается прежней версией: заблокирован будет следующий запуск.
+        var rows = ModelReadout.Rows(State() with
+        {
+            ActiveVersion = "vinn-axial-2.0.0",
+            InstalledVersions = ["vinn-axial-2.0.0"],
+            ActiveRejection = ModelPackageRejection.ContentAltered,
+        });
+
+        var row = Assert.Single(rows, row => row.Severity == ResultSeverity.Blocking);
+
+        Assert.Contains("Следующий запуск заблокирует", row.Note!, StringComparison.Ordinal);
     }
 
     [Fact]

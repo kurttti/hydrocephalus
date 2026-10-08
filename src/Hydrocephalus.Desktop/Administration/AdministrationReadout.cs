@@ -144,6 +144,13 @@ public static class AdministrationReadout
             {
                 text += " · " + ModelReadout.NameOf(rejection) + ModelReadout.DetailOf(package.Detail);
             }
+            else if (!string.IsNullOrWhiteSpace(package.Detail))
+            {
+                // Уточнение без причины отказа бывает у отвергнутой активации:
+                // пакет проверку прошёл, а объявил другую версию, и показать
+                // надо именно её — иначе запись не говорит, что не сошлось.
+                text += " · в пакете объявлено " + package.Detail;
+            }
         }
 
         return new ResultRow { Text = text, Note = NoteFor(record.Integrity), Severity = severity };

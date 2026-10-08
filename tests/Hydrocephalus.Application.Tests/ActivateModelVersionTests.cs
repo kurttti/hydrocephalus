@@ -146,6 +146,48 @@ public sealed class ActivateModelVersionTests
     }
 
     [Fact]
+    public async Task A_file_holding_another_version_does_not_become_active()
+    {
+        // Версия в хранилище — это имя файла, а измеряет приложение той,
+        // которую называет объявление внутри пакета. Пока этого экрана не
+        // было, пакет клали под нужным именем руками, и разойтись эти две
+        // версии могут. Журнал сказал бы тогда одно, а отчёт — другое.
+        var audit = new RecordingAudit();
+        var store = new RecordingStore
+        {
+            Versions = { "vinn-axial-2.0.0", "vinn-axial-2.1.0" },
+            Active = "vinn-axial-2.0.0",
+        };
+
+        var useCase = new ActivateModelVersionUseCase(
+            new StubReader(new ModelPackageCheck(ManifestFor("vinn-axial-1.0.0"), null)
+            {
+                Signature = ModelPackageSignature.Valid,
+            }),
+            store,
+            audit,
+            TimeProvider.System);
+
+        var outcome = await useCase.ExecuteAsync(
+            "vinn-axial-2.1.0", Administrator, CancellationToken.None);
+
+        Assert.Equal(ModelActivationOutcome.VersionMismatch, outcome.Outcome);
+        Assert.Equal("vinn-axial-1.0.0", outcome.Detail);
+        Assert.Equal("vinn-axial-2.0.0", store.Active);
+        Assert.Empty(store.Activated);
+
+        var recorded = Assert.Single(audit.Events);
+
+        Assert.Equal(AuditEventCode.ModelPackageRefused, recorded.Code);
+        Assert.Equal("vinn-axial-2.1.0", recorded.ModelVersion);
+
+        // Причины отказа нет: пакет проверку прошёл, не сошлось объявление
+        // с именем файла, и названо оно уточнением.
+        Assert.Null(recorded.ModelPackage?.Rejection);
+        Assert.Equal("vinn-axial-1.0.0", recorded.ModelPackage?.Detail);
+    }
+
+    [Fact]
     public async Task A_clinician_may_not_switch_the_version()
     {
         var store = new RecordingStore
@@ -160,22 +202,32 @@ public sealed class ActivateModelVersionTests
     }
 
     private static ActivateModelVersionUseCase Create(IInstalledModelStore store, IAuditLog audit) =>
-        new(
-            new StubReader(new ModelPackageCheck(
-                new ModelPackageManifest(
-                    FormatVersion: "1",
-                    ModelVersion: "vinn-axial-2.1.0",
-                    MinimumApplicationVersion: "1.0.0",
-                    PreprocessingVersion: "conform-lia-256-1",
-                    LabelMapVersion: "fastsurfer-vinn-axial-2.0.0",
-                    SigningKeyId: "release-2026"),
-                null)
+        new(new PathReader(), store, audit, TimeProvider.System);
+
+    private static ModelPackageManifest ManifestFor(string version) => new(
+        FormatVersion: "1",
+        ModelVersion: version,
+        MinimumApplicationVersion: "1.0.0",
+        PreprocessingVersion: "conform-lia-256-1",
+        LabelMapVersion: "fastsurfer-vinn-axial-2.0.0",
+        SigningKeyId: "release-2026");
+
+    /// <summary>
+    /// Отвечает за тот пакет, о котором спросили.
+    ///
+    /// Один ответ на любой путь скрыл бы ровно то, что здесь проверяется:
+    /// совпадает ли объявление внутри пакета с именем, под которым он лежит.
+    /// </summary>
+    private sealed class PathReader : IModelPackageReader
+    {
+        public ModelPackageCheck Verify(string packagePath) =>
+            new(ManifestFor(Path.GetFileNameWithoutExtension(packagePath)), null)
             {
                 Signature = ModelPackageSignature.Valid,
-            }),
-            store,
-            audit,
-            TimeProvider.System);
+            };
+
+        public ModelPackageCheck Open(string packagePath) => this.Verify(packagePath);
+    }
 
     private sealed class StubReader(ModelPackageCheck check) : IModelPackageReader
     {

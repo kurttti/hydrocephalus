@@ -27,6 +27,17 @@ public enum ModelActivationOutcome
     /// а не у администратора.
     /// </summary>
     PackageRefused = 4,
+
+    /// <summary>
+    /// В файле хранилища лежит пакет другой версии, и метка не переключена.
+    ///
+    /// Версия в хранилище — это имя файла, а измеряет приложение той версией,
+    /// которую называет объявление внутри пакета. Разойтись они могут: пока
+    /// экрана установки не было, пакет кладут под нужным именем руками.
+    /// Переключиться на такую версию значило бы записать в журнал одно,
+    /// а измерять другим.
+    /// </summary>
+    VersionMismatch = 5,
 }
 
 /// <summary>
@@ -148,6 +159,38 @@ public sealed class ActivateModelVersionUseCase
                 modelVersion,
                 check.Rejection,
                 check.Detail);
+        }
+
+        // Объявление внутри пакета сверяется с именем, под которым он лежит:
+        // имя файла задаёт версию в хранилище, а измеряет приложение той,
+        // которую называет объявление. Пока этого экрана не было, пакет
+        // клали руками, и разойтись эти две версии могут. Журнал сказал бы
+        // тогда одно, а отчёт — другое.
+        var declared = check.Manifest?.ModelVersion ?? string.Empty;
+
+        if (!string.Equals(declared, modelVersion, StringComparison.Ordinal))
+        {
+            await this.auditLog.RecordAsync(
+                new AuditEvent
+                {
+                    Code = AuditEventCode.ModelPackageRefused,
+                    OccurredAt = this.timeProvider.GetUtcNow(),
+                    ModelVersion = modelVersion,
+                    PseudonymousActorId = requestedBy.PseudonymousUserId,
+
+                    // Причины отказа нет: сам пакет проверку прошёл. Не прошло
+                    // соответствие его объявления тому имени, под которым он
+                    // лежит, и названо оно уточнением.
+                    ModelPackage = new ModelPackageAudit(
+                        check.Manifest?.SigningKeyId ?? string.Empty,
+                        check.Signature,
+                        null,
+                        declared),
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            return new ModelVersionActivation(
+                ModelActivationOutcome.VersionMismatch, from, modelVersion, null, declared);
         }
 
         this.store.Activate(modelVersion);
