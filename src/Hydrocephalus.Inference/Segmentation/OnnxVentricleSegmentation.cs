@@ -23,13 +23,16 @@ namespace Hydrocephalus.Inference.Segmentation;
 /// смотрит на окрестность поперёк среза. У края стопка дополняется повтором
 /// крайнего среза.
 /// </summary>
-public sealed class OnnxVentricleSegmentation : IDisposable
+public sealed class OnnxVentricleSegmentation : IConformedVolumeLabelling, IDisposable
 {
     /// <summary>Число соседних срезов, которые сеть принимает за раз.</summary>
     public const int SliceStack = 7;
 
     /// <summary>Версия карты меток этой модели.</summary>
     public const string LabelMapVersion = "fastsurfer-vinn-axial-2.0.0";
+
+    /// <inheritdoc />
+    string IConformedVolumeLabelling.LabelMapVersion => LabelMapVersion;
 
     /// <summary>Метка желудочковой системы в выдаваемой маске.</summary>
     public static readonly AnatomicalLabel VentricularSystem = new("ventricular-system");

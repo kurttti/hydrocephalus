@@ -57,6 +57,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
     private readonly InputQualityControl qualityControl;
     private readonly IVolumeSource volumes;
     private readonly PipelineIdentity pipeline;
+    private readonly IVentricleSegmentation segmentation;
 
     /// <summary>
     /// Создаёт конвейер.
@@ -68,10 +69,17 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
     /// отчёта должен приходить от того, кто собирает приложение и знает версии,
     /// а подставленное «unknown» выглядело бы как заполненное поле.
     /// </param>
+    /// <param name="segmentation">
+    /// Способ получить маску желудочков. По умолчанию пороговый — тот, с которым
+    /// конвейер работал до появления модели (ADR 0009). Выбор принадлежит
+    /// составу приложения, а не конвейеру: конвейер не должен знать, какая
+    /// модель установлена и установлена ли вообще.
+    /// </param>
     public BaselineMeasurementEngine(
         InputQualityControl qualityControl,
         IVolumeSource volumes,
-        PipelineIdentity pipeline)
+        PipelineIdentity pipeline,
+        IVentricleSegmentation? segmentation = null)
     {
         ArgumentNullException.ThrowIfNull(qualityControl);
         ArgumentNullException.ThrowIfNull(volumes);
@@ -80,6 +88,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
         this.qualityControl = qualityControl;
         this.volumes = volumes;
         this.pipeline = pipeline;
+        this.segmentation = segmentation ?? new ThresholdVentricleSegmentation();
     }
 
     /// <summary>Сообщает версии конвейера.</summary>
@@ -246,10 +255,10 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
                 return [];
             }
 
-            var segmentation = BaselineVentricleSegmentation.Segment(
+            var segmentation = this.segmentation.Segment(
                 volume,
                 series.Weighting,
-                cancellationToken: cancellationToken);
+                cancellationToken);
 
             progress?.Report(new AnalysisProgress(AnalysisStage.Segmentation, 1.0));
             progress?.Report(new AnalysisProgress(AnalysisStage.FeatureExtraction, 0.0));
