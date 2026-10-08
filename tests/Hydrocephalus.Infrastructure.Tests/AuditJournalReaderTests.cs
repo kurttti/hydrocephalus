@@ -231,6 +231,102 @@ public sealed class AuditJournalReaderTests : IDisposable
         Assert.Equal("SomethingThisVersionHasNeverHeardOf", record.CodeName);
     }
 
+    [Fact]
+    public async Task What_the_package_check_found_is_read_back()
+    {
+        // Проверка пакета раньше собиралась сценарием и терялась при записи:
+        // в файл уходил только код события. `docs/windows/README.md` требует,
+        // чтобы был виден источник и статус подписи, а `docs/security/README.md`
+        // называет подмену модели отдельной угрозой — запись «пакет отвергнут»
+        // без причины и без ключа не отвечает ни на то, ни на другое.
+        using (var log = new HashChainAuditLog(this.Path))
+        {
+            await log.RecordAsync(
+                new AuditEvent
+                {
+                    Code = AuditEventCode.ModelPackageRefused,
+                    OccurredAt = Moment,
+                    ModelVersion = "vinn-axial-2.1.0",
+                    PseudonymousActorId = "actor-42",
+                    ModelPackage = new ModelPackageAudit(
+                        "release-2026",
+                        ModelPackageSignature.Valid,
+                        ModelPackageRejection.ContentAltered,
+                        "segmentation.onnx"),
+                },
+                CancellationToken.None);
+        }
+
+        var record = Assert.Single((await this.ReadAsync()).Records);
+
+        Assert.Equal(AuditRecordIntegrity.Verified, record.Integrity);
+        Assert.Equal("release-2026", record.ModelPackage?.SigningKeyId);
+        Assert.Equal(ModelPackageSignature.Valid, record.ModelPackage?.Signature);
+        Assert.Equal(ModelPackageRejection.ContentAltered, record.ModelPackage?.Rejection);
+        Assert.Equal("segmentation.onnx", record.ModelPackage?.Detail);
+    }
+
+    [Fact]
+    public async Task Both_versions_of_a_switch_are_read_back()
+    {
+        // ADR 0008 требует «из» и «в». Одна версия не отвечает на вопрос, что
+        // изменилось, а восстанавливать это по соседним записям значило бы
+        // полагаться на то, что ни одна из них не потеряна.
+        using (var log = new HashChainAuditLog(this.Path))
+        {
+            await log.RecordAsync(
+                new AuditEvent
+                {
+                    Code = AuditEventCode.ModelPackageActivated,
+                    OccurredAt = Moment,
+                    ModelVersion = "vinn-axial-2.1.0",
+                    PseudonymousActorId = "actor-42",
+                    ModelActivation = new ModelActivationAudit(
+                        "vinn-axial-2.0.0", "vinn-axial-2.1.0"),
+                },
+                CancellationToken.None);
+        }
+
+        var record = Assert.Single((await this.ReadAsync()).Records);
+
+        Assert.Equal(AuditEventCode.ModelPackageActivated, record.Code);
+        Assert.Equal("vinn-axial-2.0.0", record.ModelActivation?.FromVersion);
+        Assert.Equal("vinn-axial-2.1.0", record.ModelActivation?.ToVersion);
+    }
+
+    [Fact]
+    public async Task A_record_written_before_the_model_fields_existed_still_reads()
+    {
+        // Журнал не ротируется и переживает обновление приложения. Запись без
+        // новых полей — не порча: проверка считает хеш от того, что лежит
+        // в файле, а не от заново собранного события.
+        const string payload =
+            """{"code":"ModelPackageLoaded","occurredAt":"2026-03-14T09:26:53.0000000Z"}""";
+
+        var separator = ((char)0x1E).ToString();
+        var hash = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(HashChainAuditLog.GenesisHash + separator + payload)));
+
+        var line = JsonSerializer.Serialize(new
+        {
+            @event = payload,
+            previousHash = HashChainAuditLog.GenesisHash,
+            hash,
+        });
+
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(this.Path)!);
+        await File.WriteAllTextAsync(this.Path, line + Environment.NewLine, CancellationToken.None);
+
+        var record = Assert.Single((await this.ReadAsync()).Records);
+
+        Assert.Equal(AuditRecordIntegrity.Verified, record.Integrity);
+        Assert.Equal(AuditEventCode.ModelPackageLoaded, record.Code);
+
+        // Пусто, а не выдумано: о подписи такой записи сказать нечего.
+        Assert.Null(record.ModelPackage);
+        Assert.Null(record.ModelActivation);
+    }
+
     private Task<AuditJournal> ReadAsync() =>
         new AuditJournalReader(this.Path).ReadAsync(CancellationToken.None);
 

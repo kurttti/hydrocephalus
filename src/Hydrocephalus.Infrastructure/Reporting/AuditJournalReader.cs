@@ -179,6 +179,8 @@ public sealed class AuditJournalReader : IAuditJournalSource
                 PseudonymousActorId = ReadText(root, "pseudonymousActorId"),
                 ReportExportVariant = ReadVariant(root),
                 Retention = ReadRetention(root),
+                ModelPackage = ReadModelPackage(root),
+                ModelActivation = ReadModelActivation(root),
             };
         }
         catch (JsonException)
@@ -231,6 +233,41 @@ public sealed class AuditJournalReader : IAuditJournalSource
             ReadNumber(retention, "failed"),
             ReadHours(retention));
     }
+
+    private static ModelPackageAudit? ReadModelPackage(JsonElement root)
+    {
+        if (!root.TryGetProperty("modelPackage", out var package)
+            || package.ValueKind != JsonValueKind.Object)
+        {
+            // Записи, сделанные до появления поля, его не содержат. Это
+            // не порча журнала, и объявлять их нечитаемыми нельзя.
+            return null;
+        }
+
+        return new ModelPackageAudit(
+            ReadText(package, "signingKeyId") ?? string.Empty,
+
+            // Состояние, которого эта версия не знает, читается как
+            // неопределённое, а не как «не проверялась»: второе — утверждение
+            // о подписи, и выдавать за него незнание нельзя.
+            Enum.TryParse<ModelPackageSignature>(
+                ReadText(package, "signature"), ignoreCase: false, out var signature)
+                ? signature
+                : ModelPackageSignature.Unspecified,
+            Enum.TryParse<ModelPackageRejection>(
+                ReadText(package, "rejection"), ignoreCase: false, out var rejection)
+                ? rejection
+                : null,
+            ReadText(package, "detail") ?? string.Empty);
+    }
+
+    private static ModelActivationAudit? ReadModelActivation(JsonElement root) =>
+        root.TryGetProperty("modelActivation", out var activation)
+        && activation.ValueKind == JsonValueKind.Object
+            ? new ModelActivationAudit(
+                ReadText(activation, "fromVersion") ?? string.Empty,
+                ReadText(activation, "toVersion") ?? string.Empty)
+            : null;
 
     private static int ReadNumber(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) && value.TryGetInt32(out var number)

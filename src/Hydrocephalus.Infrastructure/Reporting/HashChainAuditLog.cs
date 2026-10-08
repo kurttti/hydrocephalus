@@ -256,6 +256,40 @@ public sealed class HashChainAuditLog : IAuditLog, IDisposable
                 writer.WriteNull("retention");
             }
 
+            // Проверка пакета модели записывается, а не только показывается:
+            // `docs/windows/README.md` требует, чтобы пользователь видел
+            // источник и статус подписи, а `docs/security/README.md` называет
+            // подмену модели отдельной угрозой. Запись «пакет отвергнут» без
+            // причины и без идентификатора ключа не отвечает ни на то, ни на другое.
+            if (auditEvent.ModelPackage is { } package)
+            {
+                writer.WriteStartObject("modelPackage");
+                writer.WriteString("signingKeyId", package.SigningKeyId);
+                writer.WriteString("signature", package.Signature.ToString());
+                writer.WriteString("rejection", package.Rejection?.ToString());
+                writer.WriteString("detail", package.Detail);
+                writer.WriteEndObject();
+            }
+            else
+            {
+                writer.WriteNull("modelPackage");
+            }
+
+            // Обе версии, «из» и «в»: ADR 0008 требует именно их. Одна версия
+            // не отвечает на вопрос, что изменилось, а восстанавливать это
+            // по соседним записям значило бы полагаться на их сохранность.
+            if (auditEvent.ModelActivation is { } activation)
+            {
+                writer.WriteStartObject("modelActivation");
+                writer.WriteString("fromVersion", activation.FromVersion);
+                writer.WriteString("toVersion", activation.ToVersion);
+                writer.WriteEndObject();
+            }
+            else
+            {
+                writer.WriteNull("modelActivation");
+            }
+
             writer.WriteEndObject();
         }
 

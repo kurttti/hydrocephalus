@@ -77,6 +77,19 @@ public sealed record AuditRecord
 
     /// <summary>Итог уборки рабочих копий.</summary>
     public WorkingCopyRetentionOutcome? Retention { get; init; }
+
+    /// <summary>
+    /// Итог проверки пакета модели.
+    ///
+    /// Читается, потому что записывается: `docs/windows/README.md` требует,
+    /// чтобы пользователь видел источник и статус подписи, а ADR 0008 — чтобы
+    /// установка не проходила незаметно. Запись «пакет отвергнут» без причины
+    /// и без идентификатора ключа не отвечает ни на то, ни на другое.
+    /// </summary>
+    public ModelPackageAudit? ModelPackage { get; init; }
+
+    /// <summary>Смена действующей версии модели: «из» и «в».</summary>
+    public ModelActivationAudit? ModelActivation { get; init; }
 }
 
 /// <summary>
