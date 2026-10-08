@@ -41,8 +41,11 @@ public sealed class WeightingRoutedVentricleSegmentation : IVentricleSegmentatio
     /// Оба, а не действующий на данной серии: это строка о том, как собран
     /// конвейер, и она одна на прогон (<c>PipelineIdentity</c>). Чем получена
     /// отдельная маска, сказано в самой маске — версией её карты меток.
+    ///
+    /// Латиницей, как и прочие коды: строка попадает в отчёт и сверяется между
+    /// сборками, то есть читается не только человеком.
     /// </summary>
-    public string Provenance => $"t1:{this.forT1.Provenance}|иначе:{this.forOthers.Provenance}";
+    public string Provenance => $"t1:{this.forT1.Provenance}|other:{this.forOthers.Provenance}";
 
     /// <inheritdoc />
     public VentricleSegmentationResult Segment(

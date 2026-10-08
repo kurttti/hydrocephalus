@@ -95,8 +95,8 @@ public sealed class VentricleSegmentationChoiceTests
     {
         // Модель проверена только на T1. Установка модели не должна отнимать у
         // T2 и FLAIR того, что уже считалось пороговым путём.
-        var model = new NamedSegmentation("модель");
-        var threshold = new NamedSegmentation("порог");
+        var model = new NamedSegmentation("model");
+        var threshold = new NamedSegmentation("threshold");
         var routed = new WeightingRoutedVentricleSegmentation(model, threshold);
 
         routed.Segment(new TestVolume(), SeriesWeighting.T1, "a");
@@ -112,9 +112,9 @@ public sealed class VentricleSegmentationChoiceTests
     public void Routing_names_both_ways()
     {
         var routed = new WeightingRoutedVentricleSegmentation(
-            new NamedSegmentation("модель"), new NamedSegmentation("порог"));
+            new NamedSegmentation("model"), new NamedSegmentation("threshold"));
 
-        Assert.Equal("t1:модель|иначе:порог", routed.Provenance);
+        Assert.Equal("t1:model|other:threshold", routed.Provenance);
     }
 
     private sealed class StubReader(ModelPackageCheck check) : IModelPackageReader
