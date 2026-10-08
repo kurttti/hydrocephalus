@@ -115,24 +115,6 @@ for (var index = 0; index < sources.Length; index++)
     scans.Add(await new DicomStudyScanner(importOptions).ScanAsync(sources[index], CancellationToken.None));
 }
 
-var plan = BatchPlan.ChooseOccurrences(scans);
-
-Console.WriteLine($"Уникальных исследований: {plan.Count}; в нескольких источниках: {plan.Count(item => item.Occurrences > 1)}.");
-Console.WriteLine($"Разбор занял {watch.Elapsed.TotalMinutes:0.0} мин.");
-
-if (dryRun)
-{
-    return 0;
-}
-
-Directory.CreateDirectory(output);
-
-// Рабочие копии — в обычном каталоге приложения, под ACL текущей учётной
-// записи: если прогон оборвётся, их уберёт та же уборка, что и за приложением.
-var importer = new StudyImporter(
-    importOptions,
-    new WorkingCopyOptions { RootDirectory = Path.Combine(applicationRoot, "working-copies") });
-
 // Способ разметки выбирается так же, как в приложении, и тем же кодом: прогон
 // по выборке обязан мерить тем, чем мерит программа у врача, иначе сверять
 // результаты незачем. Каталог пакетов и ключ берутся из того же профиля.
@@ -157,6 +139,24 @@ var segmentation = new CachingVentricleSegmentation(
 packageReader?.Dispose();
 
 Console.WriteLine($"Разметка желудочков: {segmentation.Provenance}.");
+
+var plan = BatchPlan.ChooseOccurrences(scans);
+
+Console.WriteLine($"Уникальных исследований: {plan.Count}; в нескольких источниках: {plan.Count(item => item.Occurrences > 1)}.");
+Console.WriteLine($"Разбор занял {watch.Elapsed.TotalMinutes:0.0} мин.");
+
+if (dryRun)
+{
+    return 0;
+}
+
+Directory.CreateDirectory(output);
+
+// Рабочие копии — в обычном каталоге приложения, под ACL текущей учётной
+// записи: если прогон оборвётся, их уберёт та же уборка, что и за приложением.
+var importer = new StudyImporter(
+    importOptions,
+    new WorkingCopyOptions { RootDirectory = Path.Combine(applicationRoot, "working-copies") });
 
 var pipeline = new PipelineIdentity
 {

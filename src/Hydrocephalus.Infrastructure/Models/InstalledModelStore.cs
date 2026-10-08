@@ -84,7 +84,7 @@ public sealed class InstalledModelStore
 
         try
         {
-            active = JsonSerializer.Deserialize<ActiveModel>(File.ReadAllBytes(marker), Format);
+            active = JsonSerializer.Deserialize<ActiveModel>(WithoutByteOrderMark(marker), Format);
         }
         catch (JsonException)
         {
@@ -151,6 +151,25 @@ public sealed class InstalledModelStore
         File.WriteAllBytes(
             Path.Combine(this.root, ActiveMarkerName),
             JsonSerializer.SerializeToUtf8Bytes(new ActiveModel(modelVersion), Format));
+    }
+
+    /// <summary>
+    /// Читает файл, отбросив метку порядка байтов, если она есть.
+    ///
+    /// Разбор JSON такую метку за данные не считает и отвергает весь файл.
+    /// Метку сюда не пишет никто: <see cref="Activate"/> кладёт байты без неё.
+    /// Но файл этот правит человек — в клинике иначе и не откатишь, пока нет
+    /// экрана, — а редакторы и оболочки Windows метку ставят по умолчанию.
+    /// Отказ в этом случае выглядел бы как «модели нет»: приложение молча
+    /// считало бы пороговым путём, и искать причину пришлось бы долго.
+    /// </summary>
+    private static byte[] WithoutByteOrderMark(string path)
+    {
+        var content = File.ReadAllBytes(path);
+
+        return content.Length >= 3 && content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF
+            ? content[3..]
+            : content;
     }
 
     /// <summary>

@@ -95,6 +95,23 @@ public sealed class InstalledModelStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_marker_written_with_a_byte_order_mark_still_counts()
+    {
+        // Метку ставят редакторы и оболочки Windows, а разбор JSON считает её
+        // мусором и отвергает файл целиком. Отказ выглядел бы как «модели нет»,
+        // и приложение молча считало бы пороговым путём. На этом я и
+        // попался, готовя прогон.
+        var store = this.Store();
+
+        store.Install(this.Package("one"), "vinn-axial-2.0.0");
+        File.WriteAllBytes(
+            Path.Combine(this.root.FullName, InstalledModelStore.ActiveMarkerName),
+            [.. new byte[] { 0xEF, 0xBB, 0xBF }, .. "{\"modelVersion\":\"vinn-axial-2.0.0\"}"u8]);
+
+        Assert.Equal("vinn-axial-2.0.0", store.ActiveVersion());
+    }
+
+    [Fact]
     public void A_broken_marker_means_nothing_is_active()
     {
         var store = this.Store();
