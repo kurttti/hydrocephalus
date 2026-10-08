@@ -18,7 +18,7 @@ namespace Hydrocephalus.Inference.Segmentation;
 /// </summary>
 public static partial class BaselineVentricleSegmentation
 {
-    private static BaselineSegmentationResult? SelectBySmoothedCores(
+    private static VentricleSegmentationResult? SelectBySmoothedCores(
         IVoxelVolume volume,
         BaselineSegmentationOptions options,
         CancellationToken cancellationToken)

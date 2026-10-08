@@ -142,12 +142,15 @@ public sealed record BaselineSegmentationOptions
 }
 
 /// <summary>
-/// Результат классической сегментации.
+/// Результат сегментации желудочковой системы — любым из двух способов,
+/// пороговым или моделью. Тип общий намеренно: индекс Эванса, объёмы и разбор
+/// для врача работают с маской, а не со способом её получения, и раздвоение
+/// типа раздвоило бы и всё, что ниже.
 /// </summary>
 /// <param name="Mask">Полученная маска.</param>
 /// <param name="Issues">Замечания к результату.</param>
 /// <param name="Quality">Достоверность признаков, полученных по этой маске.</param>
-public readonly record struct BaselineSegmentationResult(
+public readonly record struct VentricleSegmentationResult(
     VoxelMask Mask,
     IReadOnlyList<QualityIssue> Issues,
     MeasurementQuality Quality)
@@ -209,7 +212,7 @@ public static partial class BaselineVentricleSegmentation
     /// <exception cref="DomainRuleViolationException">
     /// Если взвешенность неизвестна либо объём непригоден.
     /// </exception>
-    public static BaselineSegmentationResult Segment(
+    public static VentricleSegmentationResult Segment(
         IVoxelVolume volume,
         SeriesWeighting weighting,
         BaselineSegmentationOptions? options = null,
@@ -356,9 +359,9 @@ public static partial class BaselineVentricleSegmentation
         return new DepthSelection(Finish(grid, labels, candidate, headCount, rejected, options), labels, candidate);
     }
 
-    private sealed record DepthSelection(BaselineSegmentationResult Result, byte[]? Labels, byte[] Candidate);
+    private sealed record DepthSelection(VentricleSegmentationResult Result, byte[]? Labels, byte[] Candidate);
 
-    private static BaselineSegmentationResult Finish(
+    private static VentricleSegmentationResult Finish(
         VolumeGrid grid,
         byte[] labels,
         byte[] candidate,
@@ -413,7 +416,7 @@ public static partial class BaselineVentricleSegmentation
             new LabelMap { Version = LabelMapVersion, Labels = [VentricularSystem] },
             labels);
 
-        return new BaselineSegmentationResult(
+        return new VentricleSegmentationResult(
             mask,
             Report(rejected),
 
@@ -425,7 +428,7 @@ public static partial class BaselineVentricleSegmentation
         };
     }
 
-    private static BaselineSegmentationResult Refused(
+    private static VentricleSegmentationResult Refused(
         VolumeGrid grid,
         QualityIssue reason,
         byte[]? selected,

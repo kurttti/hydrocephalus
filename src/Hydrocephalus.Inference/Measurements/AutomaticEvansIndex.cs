@@ -124,7 +124,7 @@ public static class AutomaticEvansIndex
     /// <returns>Индекс с отрезками либо причина отказа.</returns>
     public static AutomaticEvansResult Measure(
         IVoxelVolume volume,
-        BaselineSegmentationResult segmentation,
+        VentricleSegmentationResult segmentation,
         SeriesWeighting weighting,
         CancellationToken cancellationToken = default)
     {

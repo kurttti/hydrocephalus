@@ -29,7 +29,7 @@ public static class SegmentationReadout
     /// <param name="evans">Индекс Эванса, выведенный из маски; <see langword="null"/>, если не выводился.</param>
     /// <returns>Строка состояния.</returns>
     public static string Describe(
-        BaselineSegmentationResult? result,
+        VentricleSegmentationResult? result,
         AcquisitionTier tier = AcquisitionTier.Extended,
         AutomaticEvansResult? evans = null)
     {

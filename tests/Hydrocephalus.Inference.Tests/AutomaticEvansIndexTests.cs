@@ -107,7 +107,7 @@ public sealed class AutomaticEvansIndexTests
         Assert.Equal(AutomaticEvansRefusal.AxesNotAligned, result.Refusal);
     }
 
-    private static (TestVolume Volume, BaselineSegmentationResult Segmentation) Phantom(
+    private static (TestVolume Volume, VentricleSegmentationResult Segmentation) Phantom(
         Ventricles ventricles,
         bool oblique = false)
     {
@@ -162,7 +162,7 @@ public sealed class AutomaticEvansIndexTests
             Origin = default,
         };
 
-        return (new TestVolume(geometry, grid, voxels), new BaselineSegmentationResult(mask, [], MeasurementQuality.Questionable));
+        return (new TestVolume(geometry, grid, voxels), new VentricleSegmentationResult(mask, [], MeasurementQuality.Questionable));
     }
 
     private static float Head(int x, int y, int z)

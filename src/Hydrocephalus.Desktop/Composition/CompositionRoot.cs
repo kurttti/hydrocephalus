@@ -375,7 +375,7 @@ public sealed class CompositionRoot : IDisposable
         // Маска строится только когда взвешенность известна: без неё
         // baseline-сегментация отказывается работать, и это не повод
         // не показать изображение.
-        BaselineSegmentationResult? segmentation = null;
+        VentricleSegmentationResult? segmentation = null;
 
         AutomaticEvansResult? evans = null;
         var review = (VoxelMask?)null;

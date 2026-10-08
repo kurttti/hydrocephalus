@@ -133,7 +133,7 @@ public sealed class SegmentationReadoutTests
         Assert.Contains("обоих желудочков", text, StringComparison.Ordinal);
     }
 
-    private static BaselineSegmentationResult Result(MeasurementQuality quality, QualityIssue? issue, bool filled)
+    private static VentricleSegmentationResult Result(MeasurementQuality quality, QualityIssue? issue, bool filled)
     {
         var labels = new byte[4 * 4 * 4];
 
@@ -147,6 +147,6 @@ public sealed class SegmentationReadoutTests
             new LabelMap { Version = "test-1.0.0", Labels = [new AnatomicalLabel("ventricles")] },
             labels);
 
-        return new BaselineSegmentationResult(mask, issue is null ? [] : [issue], quality);
+        return new VentricleSegmentationResult(mask, issue is null ? [] : [issue], quality);
     }
 }

@@ -35,7 +35,7 @@ public sealed record OpenedStudy
     /// если она не запускалась. Нужен строке состояния: при отказе маска пуста,
     /// и без причины экран сказал бы только, что маски нет.
     /// </summary>
-    public BaselineSegmentationResult? Segmentation { get; init; }
+    public VentricleSegmentationResult? Segmentation { get; init; }
 
     /// <summary>
     /// Индекс Эванса, выведенный из маски, с отрезками; <see langword="null"/>,
