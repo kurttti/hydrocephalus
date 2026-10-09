@@ -69,6 +69,69 @@ public sealed class AnalysableSelectionTests
     }
 
     [Fact]
+    public void A_series_that_cannot_contain_the_ventricles_loses_to_one_that_can()
+    {
+        // Так выбиралось 17 исследований набора из 58, и ни одно не измерено:
+        // прицельный блок T1 обгонял аксиальную серию с покрытием 120–172 мм.
+        // По числу срезов блок и выигрывал — 24 среза по 1,5 мм это 36 мм,
+        // а 24 среза по 5 мм это 120 мм.
+        var block = Series("block", SeriesWeighting.T1, slices: 24, sliceMillimetres: 1.5);
+        var whole = Series("whole", SeriesWeighting.T2, slices: 24, sliceMillimetres: 5);
+
+        Assert.Same(whole, AnalyzeStudyUseCase.SelectAnalysableSeries(Study("s", block, whole)));
+        Assert.Same(whole, AnalyzeStudyUseCase.SelectAnalysableSeries(Study("s", whole, block)));
+    }
+
+    [Fact]
+    public void Coverage_outranks_the_acquisition_tier()
+    {
+        // Объёмный прицельный блок — именно то, что входной контроль помечает
+        // «голова обрезана кадром»: в наборе таких одиннадцать, и у каждого
+        // рядом лежит покрывающая толстосрезовая серия.
+        var volumeBlock = Series("block", SeriesWeighting.T1, slices: 64);
+        var thickWhole = Series("whole", SeriesWeighting.T1, slices: 24, sliceMillimetres: 5);
+
+        Assert.Same(thickWhole, AnalyzeStudyUseCase.SelectAnalysableSeries(
+            Study("s", volumeBlock, thickWhole)));
+    }
+
+    [Fact]
+    public void Without_a_covering_series_the_best_of_the_rest_is_still_offered()
+    {
+        // Смотреть и мерить линейно можно и там, где покрытия нет ни у одной
+        // серии: отказывать во всём означало бы отнять то, что работало.
+        var block = Series("block", SeriesWeighting.T1, slices: 40);
+        var smaller = Series("smaller", SeriesWeighting.T2, slices: 20);
+
+        Assert.Same(block, AnalyzeStudyUseCase.SelectAnalysableSeries(Study("s", block, smaller)));
+    }
+
+    [Fact]
+    public void Flair_is_preferred_over_T2()
+    {
+        // Порядок — порядок, в котором измерение определено: FLAIR принимает
+        // автоматический индекс Эванса, T2 не принимает ни он, ни модель.
+        var flair = Series("flair", SeriesWeighting.Flair, slices: 24, sliceMillimetres: 5);
+        var t2 = Series("t2", SeriesWeighting.T2, slices: 30, sliceMillimetres: 5);
+
+        Assert.Same(flair, AnalyzeStudyUseCase.SelectAnalysableSeries(Study("s", t2, flair)));
+    }
+
+    [Fact]
+    public void Among_covering_series_the_finer_sampled_one_is_taken()
+    {
+        // При обеспеченном охвате число срезов означает частоту отсчётов,
+        // а не охват: мельче шаг — меньше интерполяции при приведении входа
+        // модели к 1 мм. На одном исследовании набора обратный порядок
+        // (больший охват вперёд) сменил уже измеренную серию 288 срезов
+        // на 225 и сдвинул индекс с 0,4360 на 0,4489.
+        var finer = Series("finer", SeriesWeighting.T1, slices: 288, sliceMillimetres: 0.6);
+        var longer = Series("longer", SeriesWeighting.T1, slices: 225, sliceMillimetres: 0.8);
+
+        Assert.Same(finer, AnalyzeStudyUseCase.SelectAnalysableSeries(Study("s", longer, finer)));
+    }
+
+    [Fact]
     public void A_contrast_enhanced_series_is_never_chosen()
     {
         var enhanced = Series("enhanced", SeriesWeighting.T1, slices: 176, contrast: true);

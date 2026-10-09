@@ -255,10 +255,15 @@ public sealed class RealPipelineTests : IDisposable
         // замечание с числами, но не препятствие: анализ доходит до конца.
         this.WriteSeries(slices: 60, phantom: true);
 
+        // Вторая серия тоже короче минимума — 10 срезов по 6 мм это 60 мм, —
+        // и это условие теста, а не свойство данных: выбор серии ставит
+        // покрытие впереди уровня входа, и покрывающая аксиальная серия
+        // забрала бы выбор у фантома. Тогда замечания с числами в отчёте
+        // не возникло бы, и сравнивать байты было бы почти нечего.
         this.WriteSeries(
             sliceThickness: 6.0m,
             acquisitionType: "2D",
-            slices: 20,
+            slices: 10,
             seriesDescription: "T2 TSE",
             seriesUid: "1.2.3.12",
             filePrefix: "AX");

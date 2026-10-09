@@ -42,7 +42,7 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
     /// предупреждение; здесь — отказ. Ни одна из серий, на которых модель
     /// измеряла верно, под него не попадает: самая короткая покрывает 115 мм.
     /// </summary>
-    public const double MinCoverageMillimetres = 100.0;
+    public const double MinCoverageMillimetres = SeriesGeometry.MinVentricleCoverageMillimetres;
 
     private readonly IConformedVolumeLabelling model;
     private readonly BaselineSegmentationOptions options;
