@@ -226,18 +226,16 @@ def test_components_are_traced_through_rows() -> None:
 @pytest.mark.parametrize(
     ("degrees", "plausible"),
     [
-        (66.0, True),    # иНТГ, среднее по литературе
-        (112.0, True),   # контроли, среднее по литературе
-        (140.1, True),   # самый широкий измеренный у нас
+        (66.0, True),  # иНТГ, среднее по литературе
+        (112.0, True),  # контроли, среднее по литературе
+        (140.1, True),  # самый широкий измеренный у нас
         (163.7, False),  # клиническая серия с плоской крышей
         (170.2, False),  # она же в другом прогоне
         (29.9, False),
-        (150.0, True),   # граница включительно
+        (150.0, True),  # граница включительно
     ],
 )
-def test_the_plausible_range_matches_the_published_spread(
-    degrees: float, plausible: bool
-) -> None:
+def test_the_plausible_range_matches_the_published_spread(degrees: float, plausible: bool) -> None:
     assert is_plausible(degrees) is plausible
 
 
@@ -247,7 +245,10 @@ def test_the_range_matches_the_one_declared_in_the_measuring_code() -> None:
     # обнаруживаться сличением отчётов.
     source = (
         pathlib.Path(__file__).resolve().parents[2]
-        / "src" / "Hydrocephalus.Inference" / "Measurements" / "LinearBiomarkers.cs"
+        / "src"
+        / "Hydrocephalus.Inference"
+        / "Measurements"
+        / "LinearBiomarkers.cs"
     ).read_text(encoding="utf-8")
 
     assert "CallosalAnglePlausibleRange = new(30.0, 150.0)" in source

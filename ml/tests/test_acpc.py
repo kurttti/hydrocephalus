@@ -39,9 +39,7 @@ def test_the_commissures_of_the_template_lie_on_the_midline() -> None:
 
 def test_the_correction_levels_the_line() -> None:
     correction = level_commissures(ICBM152_2009C_AC, ICBM152_2009C_PC)
-    levelled = rotate_about_left_right_axis(
-        ICBM152_2009C_PC, correction, centre=ICBM152_2009C_AC
-    )
+    levelled = rotate_about_left_right_axis(ICBM152_2009C_PC, correction, centre=ICBM152_2009C_AC)
 
     assert correction == pytest.approx(5.49, abs=0.01)
     assert commissural_pitch(ICBM152_2009C_AC, levelled) == pytest.approx(0.0, abs=1e-9)
@@ -49,9 +47,7 @@ def test_the_correction_levels_the_line() -> None:
 
 def test_the_correction_is_a_rotation_and_keeps_the_distance() -> None:
     correction = level_commissures(ICBM152_2009C_AC, ICBM152_2009C_PC)
-    levelled = rotate_about_left_right_axis(
-        ICBM152_2009C_PC, correction, centre=ICBM152_2009C_AC
-    )
+    levelled = rotate_about_left_right_axis(ICBM152_2009C_PC, correction, centre=ICBM152_2009C_AC)
 
     def distance(a: Point, b: Point) -> float:
         return math.dist((a.x, a.y, a.z), (b.x, b.y, b.z))
@@ -101,8 +97,6 @@ def test_the_accuracy_is_bounded_by_the_landmark_itself() -> None:
 
 
 def test_rotation_leaves_the_midline_coordinate_alone() -> None:
-    moved = rotate_about_left_right_axis(
-        Point(3.0, 10.0, 5.0), 17.0, centre=Point(0.0, 0.0, 0.0)
-    )
+    moved = rotate_about_left_right_axis(Point(3.0, 10.0, 5.0), 17.0, centre=Point(0.0, 0.0, 0.0))
 
     assert moved.x == pytest.approx(3.0)

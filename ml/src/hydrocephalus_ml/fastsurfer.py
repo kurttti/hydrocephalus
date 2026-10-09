@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import torch
 
@@ -42,8 +43,7 @@ def _code_root(explicit: str | Path | None = None) -> Path:
 
     if root is None:
         raise RuntimeError(
-            "Не задан путь к коду FastSurfer: переменная FASTSURFER_CODE "
-            "или аргумент code_root."
+            "Не задан путь к коду FastSurfer: переменная FASTSURFER_CODE или аргумент code_root."
         )
 
     path = Path(root)
@@ -109,7 +109,7 @@ def load_model(
 
     class _Args:
         cfg_file = str(root / "FastSurferCNN" / "config" / f"FastSurferVINN_{plane}.yaml")
-        opts: list[str] = []
+        opts: ClassVar[list[str]] = []
 
     cfg = get_config(_Args())
     model = build_model(cfg)
@@ -186,9 +186,10 @@ def segment(
     probabilities = None
 
     for plane in planes:
+
         class _Args:
             cfg_file = str(root / "FastSurferCNN" / "config" / f"FastSurferVINN_{plane}.yaml")
-            opts: list[str] = []
+            opts: ClassVar[list[str]] = []
 
         engine = Inference(
             get_config(_Args()),
@@ -198,8 +199,10 @@ def segment(
         )
 
         if probabilities is None:
-            shape = in_lia.shape + (engine.get_num_classes(),)
-            probabilities = torch.zeros(shape, device="cpu", dtype=torch.float16, requires_grad=False)
+            shape = (*in_lia.shape, engine.get_num_classes())
+            probabilities = torch.zeros(
+                shape, device="cpu", dtype=torch.float16, requires_grad=False
+            )
 
         probabilities = engine.run(probabilities, "series", in_lia, zoom_in_lia, out=probabilities)
 
@@ -331,8 +334,6 @@ def capture_network_input(volume, zooms, affine, plane="axial", code_root=None, 
     tuple
         Тензор входа (N, 7, 256, 256) и коэффициент масштаба.
     """
-    import numpy as np  # noqa: PLC0415
-
     root = _code_root(code_root)
 
     if str(root) not in sys.path:
@@ -344,21 +345,39 @@ def capture_network_input(volume, zooms, affine, plane="axial", code_root=None, 
     original = Inference.run
 
     def patched(self, init_pred, name, data, zoom, out=None, out_res=None, batch_size=None):
-        def hook(module, inputs):
+        # Подпись задана PyTorch: у forward-pre-hook два параметра, и модуль
+        # здесь не нужен — нужен только вход.
+        def hook(_module, inputs):
             if not grabbed:
                 grabbed.append((inputs[0].detach().clone(), inputs[1].detach().clone()))
 
         handle = self.model.register_forward_pre_hook(hook)
 
         try:
-            return original(self, init_pred, name, data, zoom, out=out, out_res=out_res, batch_size=batch_size)
+            return original(
+                self,
+                init_pred,
+                name,
+                data,
+                zoom,
+                out=out,
+                out_res=out_res,
+                batch_size=batch_size,
+            )
         finally:
             handle.remove()
 
     Inference.run = patched
 
     try:
-        segment(volume, zooms, affine, planes=(plane,), code_root=code_root, weights_root=weights_root)
+        segment(
+            volume,
+            zooms,
+            affine,
+            planes=(plane,),
+            code_root=code_root,
+            weights_root=weights_root,
+        )
     finally:
         Inference.run = original
 
@@ -395,7 +414,6 @@ def compare_onnx(onnx_path, network_input, scale, plane="axial", code_root=None,
         расхождение logits и число отсчётов.
     """
     import numpy as np  # noqa: PLC0415
-
     import onnxruntime  # noqa: PLC0415
 
     model = load_model(plane, code_root, weights_root)

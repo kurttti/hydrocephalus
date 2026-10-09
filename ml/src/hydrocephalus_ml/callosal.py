@@ -202,9 +202,7 @@ def slice_spread(angles: Sequence[float | None]) -> float:
     measured = [angle for angle in angles if angle is not None]
 
     if len(measured) < 2:
-        raise ValueError(
-            f"Размах считается минимум по двум плоскостям, измерено {len(measured)}."
-        )
+        raise ValueError(f"Размах считается минимум по двум плоскостям, измерено {len(measured)}.")
 
     return max(measured) - min(measured)
 
@@ -254,8 +252,7 @@ def crosses_midline(
 
                 for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     ny, nx = y + dy, x + dx
-                    if 0 <= ny < height and 0 <= nx < width \
-                            and mask[ny][nx] and not seen[ny][nx]:
+                    if 0 <= ny < height and 0 <= nx < width and mask[ny][nx] and not seen[ny][nx]:
                         seen[ny][nx] = True
                         stack.append((ny, nx))
 

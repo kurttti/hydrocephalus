@@ -121,8 +121,6 @@ def level_commissures(ac: Point, pc: Point) -> float:
     # трогает x, поэтому наклон обязан обнуляться точно.
     residual = commissural_pitch(ac, levelled)
     if abs(residual) > 1e-9:
-        raise ArithmeticError(
-            f"Доворот на {correction:.4f}° оставил наклон {residual:.6f}°."
-        )
+        raise ArithmeticError(f"Доворот на {correction:.4f}° оставил наклон {residual:.6f}°.")
 
     return correction
