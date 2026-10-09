@@ -314,7 +314,8 @@ public sealed class DicomStudyScanner
                 this.first.GetSingleValueOrDefault(DicomTag.MRAcquisitionType, string.Empty),
                 this.first.GetSingleValueOrDefault(DicomTag.RepetitionTime, 0.0),
                 this.first.GetSingleValueOrDefault(DicomTag.EchoTime, 0.0),
-                this.first.GetSingleValueOrDefault(DicomTag.InversionTime, 0.0));
+                this.first.GetSingleValueOrDefault(DicomTag.InversionTime, 0.0),
+                this.first.GetSingleValueOrDefault(DicomTag.FlipAngle, 0.0));
         }
 
         internal ImagingSeries Build(List<SeriesFinding> findings)

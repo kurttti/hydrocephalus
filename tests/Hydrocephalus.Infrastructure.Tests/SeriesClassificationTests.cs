@@ -118,6 +118,39 @@ public sealed class SeriesClassificationTests
         Assert.Equal(expected, SeriesClassification.DetectWeighting("исследование", parameters));
     }
 
+    [Theory]
+    // Отвергаемое: градиентное эхо под 20° при TR 600 и 640 — угол Эрнста тут
+    // около 65°, и T1-взвешенности не возникает. Так сняты две серии выборки.
+    [InlineData("GR", "SS", 600.0, 15.0, 20.0, SeriesWeighting.Unknown)]
+    [InlineData("GR", "SS OSP", 640.0, 9.8, 20.0, SeriesWeighting.Unknown)]
+    // Принимаемое: те же времена под 90° — так сняты двадцать четыре серии,
+    // с которых получены почти все измерения.
+    [InlineData("GR", "SP", 511.0, 13.0, 90.0, SeriesWeighting.T1)]
+    [InlineData("GR", "SP OSP", 706.0, 13.0, 90.0, SeriesWeighting.T1)]
+    // Объёмные под малым углом: при TR 10 мс угол Эрнста около 10°, и 12°
+    // его превосходит. Правило по голому числу градусов убило бы эти серии.
+    [InlineData("GR", "SS SK", 10.0, 3.4, 12.0, SeriesWeighting.T1)]
+    [InlineData("GR", "MP", 3.1, 1.4, 8.0, SeriesWeighting.T1)]
+    // Спиновое эхо углом не распоряжается, и подготовленное намагничивание
+    // задаёт контраст подготовкой: угол Эрнста к ним неприменим.
+    [InlineData("SE", "NONE", 500.0, 12.0, 20.0, SeriesWeighting.T1)]
+    [InlineData("GR IR", "SK SP", 600.0, 15.0, 20.0, SeriesWeighting.T1)]
+    // Тега нет — поведение прежнее.
+    [InlineData("GR", "SS", 600.0, 15.0, 0.0, SeriesWeighting.T1)]
+    public void A_gradient_echo_below_the_Ernst_angle_is_not_T1(
+        string sequence, string variant,
+        double repetition, double echo, double flip, SeriesWeighting expected)
+    {
+        // Короткие TR и TE делают снимок T1-взвешенным только при достаточном
+        // угле отклонения: ниже половины угла Эрнста ткани по T1 почти не
+        // различаются, и ликвор перестаёт быть тёмным. Модель, обученная на T1,
+        // возвращала на таких сериях 0,3 мл желудочков.
+        var parameters = new SeriesClassification.AcquisitionParameters(
+            sequence, variant, "2D", repetition, echo, 0.0, flip);
+
+        Assert.Equal(expected, SeriesClassification.DetectWeighting("исследование", parameters));
+    }
+
     [Fact]
     public void The_description_wins_over_the_parameters()
     {

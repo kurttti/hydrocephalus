@@ -134,13 +134,15 @@ internal static class SeriesClassification
     /// <param name="RepetitionTimeMilliseconds">(0018,0080), 0 если тега нет.</param>
     /// <param name="EchoTimeMilliseconds">(0018,0081), 0 если тега нет.</param>
     /// <param name="InversionTimeMilliseconds">(0018,0082), 0 если тега нет.</param>
+    /// <param name="FlipAngleDegrees">(0018,1314), 0 если тега нет.</param>
     internal readonly record struct AcquisitionParameters(
         string? ScanningSequence,
         string? SequenceVariant,
         string? AcquisitionType,
         double RepetitionTimeMilliseconds,
         double EchoTimeMilliseconds,
-        double InversionTimeMilliseconds);
+        double InversionTimeMilliseconds,
+        double FlipAngleDegrees = 0.0);
 
     /// <summary>
     /// Определяет взвешенность по параметрам последовательности, когда описание
@@ -189,10 +191,89 @@ internal static class SeriesClassification
 
         if (tr < 800 && te < 30)
         {
+            // Короткие TR и TE делают снимок T1-взвешенным только при достаточном
+            // угле отклонения. У градиентного эха сигнал растёт с углом до
+            // угла Эрнста и T1-взвешенность набирает вместе с ним; при угле
+            // заметно ниже него намагниченность почти не успевает отличить
+            // ткани по T1, и получается снимок протонной плотности, где ликвор
+            // не тёмный. Спиновое эхо сюда не попадает: там угол задан
+            // последовательностью.
+            //
+            // В выборке так сняты шесть серий: три под 20° при TR 540–640 и
+            // три под 10° при TR 48 с эхом 24 мс, то есть T2*-взвешенные.
+            // Двадцать четыре серии, с которых получена почти вся выборка
+            // измерений, сняты при тех же временах под 90°.
+            //
+            // Две из шести выбирались для анализа. Приложение считало их T1,
+            // подавало обученной на T1 модели, та возвращала 0,3 мл желудочков,
+            // и отказ назывался «желудочковая система неправдоподобно мала» —
+            // правда о числе и неправда о сути.
+            if (IsProtonDensityGradientEcho(sequence, variant, tr, parameters.FlipAngleDegrees))
+            {
+                return SeriesWeighting.Unknown;
+            }
+
             return SeriesWeighting.T1;
         }
 
         return tr >= 2000 && te >= 80 ? SeriesWeighting.T2 : SeriesWeighting.Unknown;
+    }
+
+    /// <summary>
+    /// Продольное время релаксации, по которому считается угол Эрнста, мс.
+    /// Середина между белым веществом и серым на поле 1,5 Тл; точность здесь
+    /// не нужна, потому что сравнение идёт с запасом вдвое.
+    /// </summary>
+    internal const double ReferenceT1Milliseconds = 700.0;
+
+    /// <summary>
+    /// Какую долю угла Эрнста должен составлять угол отклонения, чтобы снимок
+    /// считался T1-взвешенным.
+    ///
+    /// Половина — не физическая граница, а линия, проведённая по выборке.
+    /// Выбрана она не наугад: из 51 серии, которую правило разбирает, шесть
+    /// лежат на 0,60–0,95 доли от неё, остальные сорок пять — на 2,46 и выше,
+    /// и между этими двумя группами в выборке нет ничего. Границу можно
+    /// двигать от 0,48 до 1,23 угла Эрнста, и ни одна серия не сменит
+    /// взвешенность.
+    /// </summary>
+    internal const double MinimumFlipAngleFractionOfErnst = 0.5;
+
+    /// <summary>
+    /// Градиентное эхо с углом отклонения много ниже угла Эрнста: снимок
+    /// протонной плотности, а не T1.
+    /// </summary>
+    /// <param name="sequence">Приведённое (0018,0020).</param>
+    /// <param name="variant">Приведённое (0018,0021).</param>
+    /// <param name="repetitionTimeMilliseconds">TR, мс.</param>
+    /// <param name="flipAngleDegrees">Угол отклонения, градусы; 0 — тега нет.</param>
+    /// <returns><see langword="true"/>, если T1-взвешенности ожидать не приходится.</returns>
+    private static bool IsProtonDensityGradientEcho(
+        string sequence,
+        string variant,
+        double repetitionTimeMilliseconds,
+        double flipAngleDegrees)
+    {
+        // Тега нет — поведение прежнее. Отказывать по отсутствующему значению
+        // значило бы терять серии там, где о съёмке ничего не известно.
+        if (flipAngleDegrees <= 0
+            || !sequence.Contains("gr", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Инверсия-восстановление и подготовленное намагничивание задают
+        // контраст подготовкой, а не углом: угол Эрнста к ним неприменим.
+        if (sequence.Contains("ir", StringComparison.Ordinal)
+            || variant.Contains("mp", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var ernst = Math.Acos(Math.Exp(-repetitionTimeMilliseconds / ReferenceT1Milliseconds))
+            * 180.0 / Math.PI;
+
+        return flipAngleDegrees < ernst * MinimumFlipAngleFractionOfErnst;
     }
 
     /// <summary>
