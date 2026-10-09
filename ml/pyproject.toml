@@ -71,6 +71,28 @@ strict = true
 files = ["src", "tests"]
 pretty = true
 
+# Чего проверке не из чего разрешить.
+#
+# Код FastSurfer в репозиторий не входит и в CI не появляется (ADR 0009: ни код,
+# ни веса здесь не лежат). Стек обучения — torch, numpy, onnx — в CI тоже
+# отсутствует намеренно: пакет ставится с `--no-deps`, потому что сборка
+# torch +cpu приходит из индекса PyTorch, а не с PyPI. То есть окружение, в
+# котором проверка обязана проходить, этих подписей не видит, и требовать их —
+# требовать невозможного.
+#
+# Молчание здесь не о нашем коде: подписи обёрток вокруг этих объектов
+# проставлены, и строгая проверка их по-прежнему читает.
+[[tool.mypy.overrides]]
+module = ["FastSurferCNN.*", "torch.*", "numpy.*", "onnx", "onnxruntime"]
+ignore_missing_imports = true
+
+# Наследование от `torch.nn.Module` там, где torch не установлен, выглядит как
+# наследование от Any. Запрет снят только для этого модуля и только по этой
+# причине: сам класс — три строки обёртки вокруг чужой сети.
+[[tool.mypy.overrides]]
+module = ["hydrocephalus_ml.fastsurfer"]
+disallow_subclassing_any = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

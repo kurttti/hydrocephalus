@@ -19,10 +19,22 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import torch
+
+if TYPE_CHECKING:
+    # Только для подписей: numpy в этом модуле ввозится внутри функций, и
+    # переносить ввоз на уровень модуля ради подписей значило бы менять то,
+    # когда он происходит. `from __future__ import annotations` делает подписи
+    # строками, поэтому во время работы этот ввоз не нужен.
+    #
+    # Тип отсчётов не уточняется: сюда приходит и целочисленная разметка, и
+    # вещественный объём, а сузить подпись значило бы объявить ограничение,
+    # которого в коде нет.
+    from numpy.typing import NDArray
 
 #: Метки желудочков в разметке FreeSurfer, которую выдаёт модель.
 #: Боковые желудочки, нижние рога, III и IV, плюс межжелудочковые пути.
@@ -118,17 +130,20 @@ def load_model(
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
 
-    return model
+    # Сборщик сети типов не несёт, и его результат приходит как Any. Приведение
+    # здесь — не утверждение о типе вместо проверки, а то, что проверить
+    # нечем: кода FastSurfer в репозитории нет и в CI он не появляется.
+    return cast("torch.nn.Module", model)
 
 
 def segment(
-    volume,
-    zooms,
-    affine,
+    volume: NDArray[Any],
+    zooms: Sequence[float],
+    affine: NDArray[Any],
     planes: tuple[str, ...] = ("axial",),
     code_root: str | Path | None = None,
     weights_root: str | Path | None = None,
-):
+) -> NDArray[Any]:
     """Размечает объём сетью FastSurfer и возвращает метки FreeSurfer.
 
     Повторяет порядок действий из ``run_prediction.py``: приведение к укладке
@@ -163,6 +178,12 @@ def segment(
     numpy.ndarray
         Метки FreeSurfer в исходной укладке.
     """
+    # Проверяется первым, до чтения путей и до ввоза чужого кода: пустой
+    # перечень видов — ошибка вызова, и сказать о ней надо раньше, чем
+    # потребуется установленный FastSurfer.
+    if not planes:
+        raise ValueError("Ни один вид не задан: складывать нечего.")
+
     import numpy as np  # noqa: PLC0415
 
     root = _code_root(code_root)
@@ -178,10 +199,10 @@ def segment(
     lut = du.read_classes_from_lut(root / "FastSurferCNN" / "config" / "FastSurfer_ColorLUT.tsv")
     labels = np.asarray(lut["ID"].values).copy()
 
-    zooms = np.asarray(zooms)
-    to_lia = Reorientation.from_target_orientation(affine, "soft LIA", volume.shape, zooms)
+    spacing = np.asarray(zooms)
+    to_lia = Reorientation.from_target_orientation(affine, "soft LIA", volume.shape, spacing)
     in_lia = to_lia(volume, order=1)
-    zoom_in_lia = to_lia.reorder_axes(zooms)
+    zoom_in_lia = to_lia.reorder_axes(spacing)
 
     probabilities = None
 
@@ -206,13 +227,20 @@ def segment(
 
         probabilities = engine.run(probabilities, "series", in_lia, zoom_in_lia, out=probabilities)
 
+    # Перечень видов непуст, значит цикл выполнился и вероятности собраны.
+    # Проверка нужна подписи: без неё argmax принимал `Tensor | None` и на
+    # пустом перечне падал невнятно — на складывании, а не на его отсутствии.
+    assert probabilities is not None
+
     classes = torch.argmax(probabilities, 3)
     classes = to_lia.inverse(classes, order=0)
 
-    return du.map_label2aparc_aseg(classes, labels).cpu().numpy()
+    # Перевод номеров классов в метки FreeSurfer делает код FastSurfer, и типов
+    # он не несёт.
+    return cast("NDArray[Any]", du.map_label2aparc_aseg(classes, labels).cpu().numpy())
 
 
-def ventricle_mask(labels):
+def ventricle_mask(labels: NDArray[Any]) -> NDArray[Any]:
     """Маска желудочков из разметки FreeSurfer.
 
     Берутся только метки желудочковой системы: боковые с нижними рогами, III и
@@ -256,15 +284,15 @@ class _AtOneMillimetre(torch.nn.Module):
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         scale = torch.ones(image.shape[0], 2, dtype=image.dtype, device=image.device)
 
-        return self.inner(image, scale)
+        return cast("torch.Tensor", self.inner(image, scale))
 
 
 def export_onnx(
-    destination,
+    destination: str | Path,
     plane: str = "axial",
-    code_root=None,
-    weights_root=None,
-):
+    code_root: str | Path | None = None,
+    weights_root: str | Path | None = None,
+) -> Path:
     """Переводит один вид сети в ONNX одним файлом.
 
     Нужно для поставки: Python в клиническую сборку не входит (ADR 0002), и
@@ -278,13 +306,11 @@ def export_onnx(
     Path
         Путь записанного файла.
     """
-    from pathlib import Path as _Path  # noqa: PLC0415
-
     import onnx  # noqa: PLC0415
 
     model = _AtOneMillimetre(load_model(plane, code_root, weights_root)).eval()
-    destination = _Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    target = Path(destination)
+    target.parent.mkdir(parents=True, exist_ok=True)
 
     image = torch.zeros(
         1, MODEL_INPUT_CHANNELS, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, dtype=torch.float32
@@ -299,28 +325,30 @@ def export_onnx(
     torch.onnx.export(
         model,
         (image,),
-        str(destination),
+        str(target),
         dynamo=True,
         input_names=["image"],
         output_names=["logits"],
     )
 
     # Экспорт кладёт веса в соседний файл; собираем обратно в один.
-    whole = onnx.load(str(destination))
-    onnx.save(whole, str(destination), save_as_external_data=False)
+    whole = onnx.load(str(target))
+    onnx.save(whole, str(target), save_as_external_data=False)
 
-    for leftover in destination.parent.glob(destination.name + ".data"):
+    for leftover in target.parent.glob(target.name + ".data"):
         leftover.unlink()
 
-    return destination
+    return target
 
 
-#: Наибольший отрыв первого класса от второго, при котором расхождение метки
-#: считается ничьёй, а не ошибкой перевода.
-TIE_LOGIT_MARGIN = 1.0
-
-
-def capture_network_input(volume, zooms, affine, plane="axial", code_root=None, weights_root=None):
+def capture_network_input(
+    volume: NDArray[Any],
+    zooms: Sequence[float],
+    affine: NDArray[Any],
+    plane: str = "axial",
+    code_root: str | Path | None = None,
+    weights_root: str | Path | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Перехватывает тензор, который в действительности приходит в сеть.
 
     Нужен сверке. Подавать сети срезы напрямую — значит проверять её как
@@ -341,13 +369,25 @@ def capture_network_input(volume, zooms, affine, plane="axial", code_root=None, 
 
     from FastSurferCNN.inference import Inference  # noqa: PLC0415
 
-    grabbed: list = []
+    grabbed: list[tuple[torch.Tensor, torch.Tensor]] = []
     original = Inference.run
 
-    def patched(self, init_pred, name, data, zoom, out=None, out_res=None, batch_size=None):
+    # Подписи обёртки повторяют подпись `Inference.run`, а она типов не несёт:
+    # ставить здесь что-то кроме Any значило бы объявить о чужом методе больше,
+    # чем о нём известно.
+    def patched(
+        self: Any,
+        init_pred: Any,
+        name: Any,
+        data: Any,
+        zoom: Any,
+        out: Any = None,
+        out_res: Any = None,
+        batch_size: Any = None,
+    ) -> Any:
         # Подпись задана PyTorch: у forward-pre-hook два параметра, и модуль
         # здесь не нужен — нужен только вход.
-        def hook(_module, inputs):
+        def hook(_module: Any, inputs: tuple[torch.Tensor, ...]) -> None:
             if not grabbed:
                 grabbed.append((inputs[0].detach().clone(), inputs[1].detach().clone()))
 
@@ -392,7 +432,14 @@ def capture_network_input(volume, zooms, affine, plane="axial", code_root=None, 
 TIE_LOGIT_MARGIN = 1.0
 
 
-def compare_onnx(onnx_path, network_input, scale, plane="axial", code_root=None, weights_root=None):
+def compare_onnx(
+    onnx_path: str | Path,
+    network_input: torch.Tensor,
+    scale: torch.Tensor,
+    plane: str = "axial",
+    code_root: str | Path | None = None,
+    weights_root: str | Path | None = None,
+) -> dict[str, float]:
     """Сверяет разметку ONNX с исходной моделью на перехваченном входе.
 
     ADR 0009 называет расхождение здесь блокирующей ошибкой перевода: модель,
