@@ -317,6 +317,38 @@ public sealed class BaselineSegmentationTests
     }
 
     [Fact]
+    public void Trimming_depth_by_voxel_recovers_a_ventricle_joined_to_the_surface()
+    {
+        // Обратная сторона предыдущего решения. Правило «вся компонента глубже
+        // порога» теряет полость, дотянувшуюся до поверхности, целиком, и на
+        // клинических FLAIR теряется так желудочковая система: 7 измеренных из
+        // 29 пар вместо 18 (разбор `пары-flair-против-модели-2026-10-11`).
+        // Пометка отбрасывает по глубине отсчёты, а не компоненты, и полость
+        // возвращается.
+        //
+        // По умолчанию пометка выключена, и это проверяется здесь же. Вместе
+        // с желудочками она впускает глубокий внежелудочковый ликвор, а выбор
+        // плоскости в индексе Эванса держится на том, что в маске нет ничего,
+        // кроме желудочков. Пока это не исправлено, включение решает владелец
+        // данных.
+        var volume = Phantom(csf: CsfOnT1, ventricleRadius: 6, peripheralCsf: true, thinBridge: true);
+
+        var byVoxel = BaselineVentricleSegmentation.Segment(
+            volume,
+            SeriesWeighting.T1,
+            new BaselineSegmentationOptions { TrimDepthByVoxel = true });
+
+        AssertRecovers(byVoxel.Mask, ventricleRadius: 6);
+
+        // По умолчанию тот же фантом не измеряется: соседний тест вытягивает
+        // его запасным путём по ядрам и только потому, что передаёт толщину
+        // ядра 6 мм. На клинических FLAIR ядра молчат в 16 случаях из 18.
+        Assert.Equal(
+            MeasurementQuality.Unreliable,
+            BaselineVentricleSegmentation.Segment(volume, SeriesWeighting.T1).Quality);
+    }
+
+    [Fact]
     public void A_thick_ventricle_joined_to_the_surface_by_a_thin_bridge_is_still_found()
     {
         // Так на клинике выглядели все объёмные T1 пациентов с НТГ: ликвор

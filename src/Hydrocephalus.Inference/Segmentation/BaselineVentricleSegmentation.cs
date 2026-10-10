@@ -47,6 +47,34 @@ public sealed record BaselineSegmentationOptions
     public double MinDepthMillimetres { get; init; } = 12;
 
     /// <summary>
+    /// Отсекать по глубине отсчёты, а не компоненты целиком.
+    ///
+    /// Условие «вся компонента глубже порога» верно, пока желудочковый ликвор
+    /// отделён от бороздного. На клинике он не отделён: желудочки и борозды —
+    /// одна связная компонента, доходящая до поверхности, и условие
+    /// выбрасывает её целиком вместе с желудочками. При этой пометке сначала
+    /// отбрасываются отсчёты мельче порога, и только потом считаются
+    /// компоненты.
+    ///
+    /// Выключена по умолчанию, и это не осторожность, а результат проверки на
+    /// 29 парах «FLAIR против модели по T1 у одного пациента»
+    /// (`пары-flair-против-модели-2026-10-11`): измеренных становится 18 вместо
+    /// 7, верных 13 вместо 5, но и неверных 5 вместо 2. В маску вместе с
+    /// желудочками входит глубокий внежелудочковый ликвор — базальные цистерны
+    /// и стволы сильвиевых щелей, — а выбор плоскости в индексе Эванса
+    /// держится на том, что в маске нет ничего, кроме желудочков, и съезжает
+    /// на основание черепа. Отбор компонент не помогает: индекс один и тот же,
+    /// берёшь одну компоненту или две.
+    ///
+    /// Включение — выбор между молчанием и ошибкой, и он за владельцем данных.
+    /// Включать имеет смысл либо после привязки плоскости измерения к анатомии,
+    /// либо ограничив пометку FLAIR: пороговый путь обслуживает и T1, и на IXI
+    /// он выдаёт объёмы уровня Extended, так что без ограничения нужна
+    /// посерийная сверка с `segmentation-check\2026-10-10-до`.
+    /// </summary>
+    public bool TrimDepthByVoxel { get; init; }
+
+    /// <summary>
     /// На сколько отсчётов раздувается голова перед заливкой фона снаружи.
     ///
     /// Заливка фона от края кадра проходит в голову по любой тёмной щели,
@@ -1203,24 +1231,44 @@ public static partial class BaselineVentricleSegmentation
         BaselineSegmentationOptions options,
         out int rejected)
     {
+        var connected = candidate;
+
+        if (options.TrimDepthByVoxel)
+        {
+            connected = new byte[candidate.Length];
+
+            for (var offset = 0; offset < candidate.Length; offset++)
+            {
+                connected[offset] = candidate[offset] != 0 && depth[offset] >= options.MinDepthMillimetres
+                    ? (byte)1
+                    : (byte)0;
+            }
+        }
+
         var visited = new bool[candidate.Length];
         var components = new List<List<int>>();
 
         var stack = new Stack<int>();
 
-        for (var start = 0; start < candidate.Length; start++)
+        for (var start = 0; start < connected.Length; start++)
         {
-            if (candidate[start] == 0 || visited[start])
+            if (connected[start] == 0 || visited[start])
             {
                 continue;
             }
 
-            components.Add(Flood(dimensions, candidate, visited, stack, start));
+            components.Add(Flood(dimensions, connected, visited, stack, start));
         }
 
-        var accepted = components
-            .Where(component => component.Count >= options.MinComponentVoxels)
-            .Where(component => component.Min(offset => depth[offset]) >= options.MinDepthMillimetres)
+        var deep = components
+            .Where(component => component.Count >= options.MinComponentVoxels);
+
+        if (!options.TrimDepthByVoxel)
+        {
+            deep = deep.Where(component => component.Min(offset => depth[offset]) >= options.MinDepthMillimetres);
+        }
+
+        var accepted = deep
             .OrderByDescending(component => component.Count)
             .Take(options.MaxComponents)
             .ToList();
