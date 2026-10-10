@@ -184,7 +184,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var biomarkers = await this.MeasureAsync(request, progress, cancellationToken)
+        var (biomarkers, attempt) = await this.MeasureAsync(request, progress, cancellationToken)
             .ConfigureAwait(false);
 
         // Отказ классификации наступает на проверке пакета: показывать прогресс
@@ -198,10 +198,16 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
                 Reason = new RefusalReason { Code = RefusalCode.ModelPackageUnusable },
             },
             Biomarkers = biomarkers,
+            Measurement = attempt,
         };
     }
 
-    private async Task<IReadOnlyList<Biomarker>> MeasureAsync(
+    /// <summary>Измерения вместе с рассказом о том, чем размечали и что вышло.</summary>
+    private static (IReadOnlyList<Biomarker> Biomarkers, MeasurementAttempt Attempt) Refused(
+        MeasurementRefusal refusal) =>
+        ([], new MeasurementAttempt { Refusal = refusal });
+
+    private async Task<(IReadOnlyList<Biomarker> Biomarkers, MeasurementAttempt Attempt)> MeasureAsync(
         AnalysisRequest request,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
@@ -222,7 +228,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
         // вместо ликвора и даст объём того же порядка с обратным смыслом.
         if (series.Weighting == SeriesWeighting.Unknown)
         {
-            return [];
+            return Refused(MeasurementRefusal.WeightingNotRecognised);
         }
 
         // Уровень входа решает, что именно можно измерить, а не можно ли вообще.
@@ -252,7 +258,7 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
 
             if (!looksLikeHead)
             {
-                return [];
+                return Refused(MeasurementRefusal.NotAHead);
             }
 
             var segmentation = this.segmentation.Segment(
@@ -286,11 +292,22 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
             // реальных сериях T1 — отчёт получал «0 мл, недостоверно», и число
             // выглядело как измерение. Пометка «недостоверно» этого не исправляет:
             // её читают после числа, а копируют вместе с числом не всегда.
-            return
+            IReadOnlyList<Biomarker> measured =
             [
                 .. biomarkers.Where(biomarker => biomarker.Value > 0),
                 .. evans.Biomarker is { } index ? [index] : Array.Empty<Biomarker>(),
             ];
+
+            return (measured, new MeasurementAttempt
+            {
+                // Способ называет себя сам: маршрутизация по взвешенности
+                // выбирает ветвь во время работы, и записать здесь таблицу
+                // целиком значило бы не записать ничего.
+                LabelMapVersion = segmentation.Mask.Map.Version,
+                MaskQuality = segmentation.Quality,
+                SegmentationIssues = segmentation.Issues,
+                Refusal = measured.Count > 0 ? null : Translate(evans.Refusal),
+            });
         }
         catch (Exception exception)
             when (exception is InvalidDataException
@@ -307,7 +324,26 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
             //
             // Отменa и сбои, означающие дефект (ввод-вывод, нехватка памяти),
             // сюда не попадают и проходят наверх.
-            return [];
+            return Refused(MeasurementRefusal.SeriesUnreadable);
         }
     }
+
+    /// <summary>
+    /// Переводит отказ индекса в доменный код.
+    ///
+    /// Перечисление индекса живёт в слое Inference вместе с методом, а отчёту
+    /// нужен код, не зависящий от слоя. Перевод явный и без значения
+    /// по умолчанию: новый отказ индекса обязан сломать сборку здесь, а не
+    /// молча стать «причина не названа».
+    /// </summary>
+    private static MeasurementRefusal Translate(AutomaticEvansRefusal? refusal) => refusal switch
+    {
+        AutomaticEvansRefusal.SegmentationRefused => MeasurementRefusal.SegmentationRefused,
+        AutomaticEvansRefusal.WeightingNotSupported => MeasurementRefusal.WeightingNotSupported,
+        AutomaticEvansRefusal.AxesNotAligned => MeasurementRefusal.AxesNotAligned,
+        AutomaticEvansRefusal.FrontalHornsNotFound => MeasurementRefusal.FrontalHornsNotFound,
+        AutomaticEvansRefusal.InnerSkullNotFound => MeasurementRefusal.InnerSkullNotFound,
+        null => MeasurementRefusal.Unspecified,
+        _ => MeasurementRefusal.Unspecified,
+    };
 }

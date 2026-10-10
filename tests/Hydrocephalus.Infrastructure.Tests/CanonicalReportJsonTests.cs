@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Predictions;
 using Hydrocephalus.Domain.Provenance;
 using Hydrocephalus.Domain.Quality;
@@ -212,6 +213,85 @@ public sealed class CanonicalReportJsonTests : IDisposable
         LabelMapVersion = "1.0.0",
         ApplicationCommitSha = new string('a', 40),
     };
+
+    [Fact]
+    public void An_attempt_without_a_measurement_says_why()
+    {
+        // Отчёт неизмеренного исследования прежде не говорил ничего:
+        // segmentation null, признаки пусты — и всё. Причину дважды
+        // приходилось доставать временной правкой кода.
+        var report = RefusedReport() with
+        {
+            Measurement = new MeasurementAttempt
+            {
+                LabelMapVersion = "ventricles-model/vinn-axial-2.0.0",
+                MaskQuality = MeasurementQuality.Unreliable,
+                SegmentationIssues =
+                [
+                    new QualityIssue
+                    {
+                        Code = QualityIssueCode.InconsistentGeometry,
+                        Severity = QualityIssueSeverity.Blocking,
+                        Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["reason"] = "ventricularSystemImplausiblySmall",
+                            ["millilitres"] = "0.3",
+                        },
+                    },
+                ],
+                Refusal = MeasurementRefusal.SegmentationRefused,
+            },
+        };
+
+        var measurement = Parse(report).GetProperty("measurement");
+
+        Assert.Equal("SegmentationRefused", measurement.GetProperty("refusal").GetString());
+        Assert.Equal("Unreliable", measurement.GetProperty("maskQuality").GetString());
+        Assert.Equal(
+            "ventricles-model/vinn-axial-2.0.0",
+            measurement.GetProperty("labelMapVersion").GetString());
+
+        var issue = measurement.GetProperty("segmentationIssues").EnumerateArray().Single();
+
+        Assert.Equal("InconsistentGeometry", issue.GetProperty("code").GetString());
+        Assert.Equal(
+            "ventricularSystemImplausiblySmall",
+            issue.GetProperty("parameters").GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void A_measured_study_still_names_the_method_that_produced_it()
+    {
+        // Договор IVentricleSegmentation требует, чтобы значения, полученные
+        // порогом и моделью, не смешивались неразличимо. Прежде в отчёте
+        // стояла таблица маршрутизации целиком, по которой выбранную ветвь
+        // было не восстановить.
+        var report = RefusedReport() with
+        {
+            Measurement = new MeasurementAttempt
+            {
+                LabelMapVersion = "ventricles-threshold/baseline-1.4.0",
+                MaskQuality = MeasurementQuality.Questionable,
+            },
+        };
+
+        var measurement = Parse(report).GetProperty("measurement");
+
+        Assert.Equal(
+            "ventricles-threshold/baseline-1.4.0",
+            measurement.GetProperty("labelMapVersion").GetString());
+        Assert.Equal(JsonValueKind.Null, measurement.GetProperty("refusal").ValueKind);
+    }
+
+    [Fact]
+    public void A_report_without_an_attempt_writes_the_section_as_null()
+    {
+        // Отчёт, до измерения не дошедший, обязан отличаться от отчёта,
+        // где измерение не получилось.
+        Assert.Equal(
+            JsonValueKind.Null,
+            Parse(RefusedReport()).GetProperty("measurement").ValueKind);
+    }
 
     private static AnalysisReport RefusedReport(
         (string Key, string Value)[]? parameters = null,

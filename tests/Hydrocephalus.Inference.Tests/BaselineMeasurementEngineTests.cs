@@ -52,6 +52,18 @@ public sealed class BaselineMeasurementEngineTests
     }
 
     [Fact]
+    public async Task A_measurement_names_the_method_that_produced_it_and_refuses_nothing()
+    {
+        // Способ разметки обязан доехать до отчёта и при удаче: значения,
+        // полученные порогом и моделью, несопоставимы между собой, а в
+        // отчёте прежде стояла таблица маршрутизации целиком.
+        var result = await Analyse(Series());
+
+        Assert.Null(result.Measurement?.Refusal);
+        Assert.NotEmpty(result.Measurement!.LabelMapVersion);
+    }
+
+    [Fact]
     public async Task Classification_is_still_refused()
     {
         // Измерение не превращает конвейер в диагностический: проверенного
@@ -81,6 +93,9 @@ public sealed class BaselineMeasurementEngineTests
         var result = await Analyse(Series(weighting: SeriesWeighting.Unknown));
 
         Assert.Empty(result.Biomarkers);
+        Assert.Equal(
+            MeasurementRefusal.WeightingNotRecognised,
+            result.Measurement?.Refusal);
     }
 
     [Fact]
@@ -98,6 +113,11 @@ public sealed class BaselineMeasurementEngineTests
 
         Assert.Empty(result.Biomarkers);
         Assert.IsType<AnalysisOutcome.Refused>(result.Outcome);
+
+        // И отказ обязан назвать себя: пустой список признаков сам по себе
+        // не отличает «маска негодна» от «серию не прочитали».
+        Assert.Equal(MeasurementRefusal.SegmentationRefused, result.Measurement?.Refusal);
+        Assert.NotEmpty(result.Measurement!.SegmentationIssues);
     }
 
     [Fact]
@@ -112,6 +132,7 @@ public sealed class BaselineMeasurementEngineTests
 
         Assert.Empty(result.Biomarkers);
         Assert.IsType<AnalysisOutcome.Refused>(result.Outcome);
+        Assert.Equal(MeasurementRefusal.SeriesUnreadable, result.Measurement?.Refusal);
     }
 
     [Fact]

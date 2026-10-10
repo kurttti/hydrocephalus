@@ -173,6 +173,7 @@ using var auditLog = new HashChainAuditLog(Path.Combine(output, "audit", "audit.
 var actor = Actor.Create("batch-measure", ClinicalRole.Researcher);
 
 var outcomes = new Dictionary<string, int>(StringComparer.Ordinal);
+var refusals = new Dictionary<string, int>(StringComparer.Ordinal);
 var failures = new Dictionary<string, int>(StringComparer.Ordinal);
 var qualities = new Dictionary<string, int>(StringComparer.Ordinal);
 var issues = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -259,6 +260,29 @@ for (var index = 0; index < plan.Count; index++)
             biomarker.IsOutOfRange,
         }).ToArray();
 
+        // Чем размечали и почему измерения нет. Без этого разбор неизмеренных
+        // исследований дважды требовал временной правки кода, а способ
+        // разметки в сводке по группам был неразличим.
+        record["measurement"] = report.Measurement is not { } attempt
+            ? null
+            : new
+            {
+                attempt.LabelMapVersion,
+                MaskQuality = attempt.MaskQuality.ToString(),
+                Refusal = attempt.Refusal?.ToString(),
+                SegmentationIssues = attempt.SegmentationIssues
+                    .Select(issue => issue.Code + "/" + issue.Severity
+                        + (issue.Parameters.TryGetValue("reason", out var reason)
+                            ? "/" + reason
+                            : string.Empty))
+                    .ToArray(),
+            };
+
+        if (report.Measurement?.Refusal is { } named)
+        {
+            Count(refusals, named.ToString());
+        }
+
         if (report.Biomarkers.Count > 0)
         {
             measured++;
@@ -306,6 +330,10 @@ Console.WriteLine();
 Console.WriteLine("=== Исходы ===");
 Print(outcomes);
 Console.WriteLine($"Failed: {failures.Values.Sum()}");
+
+Console.WriteLine();
+Console.WriteLine("=== Почему нет измерения ===");
+Print(refusals);
 
 Console.WriteLine();
 Console.WriteLine("=== Исключения (по типу) ===");

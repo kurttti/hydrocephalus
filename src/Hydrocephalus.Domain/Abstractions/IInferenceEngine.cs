@@ -81,6 +81,16 @@ public sealed record AnalysisResult
     /// пришло бы признаком со значением.
     /// </summary>
     public IReadOnlyList<Measurements.Biomarker> Biomarkers { get; init; } = [];
+
+    /// <summary>
+    /// Чем размечали и почему измерения нет.
+    /// <see langword="null"/>, если до попытки измерить дело не дошло.
+    ///
+    /// Пустой <see cref="Biomarkers"/> сам по себе не объясняет ничего, а
+    /// причин у него восемь: от нераспознанной взвешенности до ненайденной
+    /// границы черепа. Дважды её приходилось доставать временной правкой кода.
+    /// </summary>
+    public Measurements.MeasurementAttempt? Measurement { get; init; }
 }
 
 /// <summary>

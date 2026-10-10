@@ -329,6 +329,11 @@ public sealed class AnalyzeStudyUseCase
             // относится к прогнозу диагноза, а объём желудочков измерен
             // независимо от него (ADR 0005).
             Biomarkers = result.Biomarkers,
+
+            // Вместе с ними — рассказ о попытке: чем размечали и почему
+            // измерения нет. Пустой список признаков сам по себе не
+            // объясняет ничего (ADR 0005 требует названной причины отказа).
+            Measurement = result.Measurement,
         };
 
         return await this.StoreAsync(report, requestedBy, modelVersion, cancellationToken)

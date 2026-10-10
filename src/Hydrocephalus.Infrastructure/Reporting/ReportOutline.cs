@@ -61,6 +61,10 @@ public static class ReportOutline
         ["quality_flag"] = "Достоверность",
         ["allowedRange"] = "Допустимый диапазон",
         ["segmentation"] = "Сегментация",
+        ["measurement"] = "Попытка измерения",
+        ["maskQuality"] = "Достоверность маски",
+        ["refusal"] = "Измерение не получено",
+        ["segmentationIssues"] = "Замечания сегментации",
     };
 
     /// <summary>

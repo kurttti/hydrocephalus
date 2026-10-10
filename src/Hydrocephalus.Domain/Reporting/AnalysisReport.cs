@@ -33,6 +33,13 @@ public sealed record AnalysisReport
     public SegmentationResult? Segmentation { get; init; }
 
     /// <summary>
+    /// Чем размечали и почему измерения нет. ADR 0005 требует, чтобы отчёт
+    /// нёс факт и причину отказа; до появления этого поля отчёт
+    /// неизмеренного исследования не говорил ничего.
+    /// </summary>
+    public MeasurementAttempt? Measurement { get; init; }
+
+    /// <summary>
     /// Комментарии врача. Отдельная коллекция, а не поле внутри прогноза:
     /// ручное исправление не является выводом модели.
     /// </summary>

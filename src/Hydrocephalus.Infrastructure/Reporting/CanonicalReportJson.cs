@@ -27,7 +27,7 @@ public static class CanonicalReportJson
     /// Версия схемы отчёта. Меняется вместе с составом полей — правило связки
     /// с версионированием конвейера из CONTRIBUTING.md.
     /// </summary>
-    public const string SchemaVersion = "1.0.0";
+    public const string SchemaVersion = "1.1.0";
 
     /// <summary>
     /// Формат отметок времени: UTC с фиксированным числом знаков.
@@ -83,6 +83,7 @@ public static class CanonicalReportJson
         WriteOutcome(writer, report.Outcome);
         WriteBiomarkers(writer, report.Biomarkers);
         WriteSegmentation(writer, report);
+        WriteMeasurement(writer, report);
         WriteAnnotations(writer, report.ClinicianAnnotations);
 
         writer.WriteEndObject();
@@ -275,6 +276,43 @@ public static class CanonicalReportJson
         foreach (var label in segmentation.Labels)
         {
             writer.WriteStringValue(label.Code);
+        }
+
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    /// <summary>
+    /// Попытка измерения: чем размечали, что вышло у маски и почему измерения
+    /// нет. Пишется и при удаче: способ разметки нужен и тогда, потому что
+    /// значения, полученные порогом и моделью, несопоставимы между собой.
+    /// </summary>
+    private static void WriteMeasurement(Utf8JsonWriter writer, AnalysisReport report)
+    {
+        if (report.Measurement is not { } measurement)
+        {
+            writer.WriteNull("measurement");
+            return;
+        }
+
+        writer.WriteStartObject("measurement");
+        writer.WriteString("labelMapVersion", measurement.LabelMapVersion);
+        writer.WriteString("maskQuality", measurement.MaskQuality.ToString());
+
+        if (measurement.Refusal is { } refusal)
+        {
+            writer.WriteString("refusal", refusal.ToString());
+        }
+        else
+        {
+            writer.WriteNull("refusal");
+        }
+
+        writer.WriteStartArray("segmentationIssues");
+
+        foreach (var issue in measurement.SegmentationIssues)
+        {
+            WriteIssue(writer, issue);
         }
 
         writer.WriteEndArray();
