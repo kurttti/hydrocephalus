@@ -40,6 +40,22 @@ public sealed record SeriesGeometry
     public const double ExtendedTierMaxSliceThicknessMillimetres = 1.5;
 
     /// <summary>
+    /// Допуск при сравнении шага выборки с порогом расширенного уровня, мм.
+    ///
+    /// Нужен потому, что шаг приходит не из тега, а выводится из положений
+    /// срезов, и арифметика с плавающей точкой даёт хвост. В выборке нашлись
+    /// две объёмные T1 по 104 среза толщиной ровно 1,5 мм, у которых шаг вышел
+    /// 1,5000000000000675 — строгое сравнение относило их к базовому уровню, и
+    /// обе теряли объёмный конвейер из-за семи десятых пикометра.
+    ///
+    /// Величина выбрана заведомо ниже всего, что может что-то значить: нанометр
+    /// на порядки больше наблюдаемого хвоста (7·10⁻¹¹ мм) и на порядки меньше
+    /// любой разницы, различимой томографом. Это поправка на арифметику, а не
+    /// послабление порога: серия с шагом 1,51 мм остаётся базовой.
+    /// </summary>
+    public const double TierSamplingToleranceMillimetres = 1e-6;
+
+    /// <summary>
     /// Наименьшая протяжённость съёмки, при которой желудочки могут попасть
     /// в кадр целиком, мм.
     ///
@@ -110,7 +126,8 @@ public sealed record SeriesGeometry
             // толщиной среза: 3D-серия с тонкими срезами, но большим шагом
             // не даёт данных для объёмных признаков.
             return AcquisitionType == MrAcquisitionType.ThreeDimensional
-                && EffectiveSliceSamplingMillimetres <= ExtendedTierMaxSliceThicknessMillimetres
+                && EffectiveSliceSamplingMillimetres
+                    <= ExtendedTierMaxSliceThicknessMillimetres + TierSamplingToleranceMillimetres
                     ? AcquisitionTier.Extended
                     : AcquisitionTier.Baseline;
         }

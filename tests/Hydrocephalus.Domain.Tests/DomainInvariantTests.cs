@@ -197,6 +197,29 @@ public sealed class DomainInvariantTests
         Assert.Equal(42.0, biomarker.Value);
     }
 
+    /// <summary>
+    /// Шаг выводится из положений срезов, и арифметика даёт хвост: в выборке
+    /// нашлись две объёмные T1 толщиной ровно 1,5 мм, у которых шаг вышел
+    /// 1,5000000000000675. Строгое сравнение относило их к базовому уровню, то
+    /// есть лишало объёмного конвейера из-за семи десятых пикометра.
+    /// </summary>
+    [Theory]
+    [InlineData(1.5, AcquisitionTier.Extended)]
+    [InlineData(1.5000000000000675, AcquisitionTier.Extended)]
+    [InlineData(1.5 + 1e-9, AcquisitionTier.Extended)]
+    // Допуск — поправка на арифметику, а не послабление порога.
+    [InlineData(1.51, AcquisitionTier.Baseline)]
+    [InlineData(1.6, AcquisitionTier.Baseline)]
+    public void The_tier_threshold_tolerates_arithmetic_but_not_a_thicker_slice(
+        double spacing, AcquisitionTier expected)
+    {
+        var geometry = Geometry(MrAcquisitionType.ThreeDimensional, sliceThickness: 1.5)
+            with
+        { SliceSpacingMillimetres = spacing };
+
+        Assert.Equal(expected, geometry.Tier);
+    }
+
     private static SeriesGeometry Geometry(MrAcquisitionType acquisitionType, double sliceThickness) => new()
     {
         AcquisitionType = acquisitionType,
