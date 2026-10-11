@@ -64,8 +64,14 @@ public readonly record struct QueuedStudy(
 /// при работе с другой машины; выведенное состояние не расходится никогда и
 /// само себя исправляет.
 ///
-/// Порядок — тот, в котором исследования лежат в манифесте, то есть порядок
-/// сборки набора: устойчивый между запусками и не зависящий от файловой системы.
+/// **Порядок — по псевдониму исследования, а не по манифесту.** Манифест
+/// сложен по группам: в замороженном наборе сначала лежат все 31 исследование
+/// иНТГ, потом все 26 контрольных. Обход в этом порядке означает, что вся группа
+/// больных измерена до первого контроля, — а значит дрейф руки и навыка между
+/// первым и последним измерением ложится прямо на различие групп, и врач по
+/// одному номеру в очереди знает, кого меряет. Псевдоним — солёный хэш, то есть
+/// порядок по нему группу не выдаёт, перемешивает её (28 чередований вместо
+/// двух) и при этом устойчив между запусками и не зависит от файловой системы.
 /// </summary>
 public sealed class MeasurementWorklist
 {
@@ -128,6 +134,7 @@ public sealed class MeasurementWorklist
                 study.DirectoryIn(datasetRoot),
                 Find(study, measured.Manual),
                 Find(study, measured.CallosalAngle)))
+            .OrderBy(study => KeyOf(study.Study), StringComparer.Ordinal)
             .ToList();
 
         return new MeasurementWorklist(datasetRoot, studies);
@@ -196,6 +203,16 @@ public sealed class MeasurementWorklist
 
         return null;
     }
+
+    /// <summary>
+    /// Ключ порядка обхода: производный псевдоним, а при его отсутствии исходный.
+    ///
+    /// Производный берётся первым потому, что он есть у всякого исследования
+    /// набора; исходный остаётся запасным, чтобы порядок был определён и на
+    /// манифесте, собранном без производных псевдонимов.
+    /// </summary>
+    private static string KeyOf(DatasetStudy study) =>
+        study.DerivedStudyId ?? study.PseudonymousStudyId;
 
     private static T? Find<T>(DatasetStudy study, IReadOnlyDictionary<string, T> measured)
         where T : struct

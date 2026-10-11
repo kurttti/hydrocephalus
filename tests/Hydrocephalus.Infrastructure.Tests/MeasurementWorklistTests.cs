@@ -252,6 +252,27 @@ public sealed class MeasurementWorklistTests : IDisposable
                 .Value.Study.PseudonymousStudyId);
     }
 
+    [Fact]
+    public async Task The_walk_order_mixes_the_groups_instead_of_following_the_manifest()
+    {
+        // Манифест сложен по группам: в наборе сначала все исследования иНТГ,
+        // потом все контрольные. Обход в этом порядке означает, что вся группа
+        // больных измерена до первого контроля, то есть дрейф руки между первым
+        // и последним измерением ложится прямо на различие групп, а врач по
+        // номеру в очереди знает, кого меряет. Псевдоним — солёный хэш: порядок
+        // по нему группу не выдаёт и перемешивает её.
+        await this.WriteManifestAsync(
+            ("иНТГ", "subject-1", "s1", "d3"),
+            ("иНТГ", "subject-2", "s2", "d1"),
+            ("Контроли", "subject-3", "s3", "d2"));
+
+        var worklist = await this.OpenAsync();
+
+        Assert.Equal(
+            ["s2", "s3", "s1"],
+            worklist!.Studies.Select(study => study.Study.PseudonymousStudyId));
+    }
+
     private string Reports => Path.Combine(this.root.FullName, "reports");
 
     private string Dataset => Path.Combine(this.root.FullName, "dataset");

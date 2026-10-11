@@ -571,6 +571,17 @@ public partial class MainWindow : Window
 
         this.StatusText.Text = SegmentationReadout.Describe(opened.Segmentation, opened.Analysed.Analysed.Tier, opened.Evans);
 
+        // Обход очереди углов открывает исследование на той серии, которую
+        // выбрало ранжирование, — а она аксиальная, и разметка угла на ней
+        // выключена. Выключенный переключатель подсказку не показывает (WPF не
+        // выводит её на недоступных органах управления), то есть без этой
+        // строки врач видел бы только серое поле без причины — пятьдесят раз.
+        if (this.QueueKind == MeasurementKind.CallosalAngle && this.CoronalSurface() is null)
+        {
+            this.StatusText.Text +=
+                " Для угла мозолистого тела выберите корональную серию в списке «Серия».";
+        }
+
         foreach (var surface in this.surfaces)
         {
             surface.Redraw();
