@@ -277,6 +277,38 @@ public sealed class RecordManualMeasurementTests
         AllowedRange = new MeasurementRange(0.0, 45.0),
     };
 
+    [Fact]
+    public async Task The_recorded_version_keeps_the_series_the_measurement_was_made_on()
+    {
+        // Ручной угол мозолистого тела меряется на корональной серии, индекс —
+        // на аксиальной, и у одного исследования это разные версии отчёта.
+        // Потеряйся здесь блок `series`, и сводная таблица не сказала бы, на
+        // чём сделано измерение, — ровно то, ради чего он и появился в схеме
+        // 1.2.0.
+        var store = new RecordingReportStore();
+
+        var analysed = Report() with
+        {
+            Series = new AnalysedSeries
+            {
+                PseudonymousSeriesId = "series-0007",
+                Weighting = SeriesWeighting.Flair,
+                Plane = ImagingPlane.Coronal,
+                Tier = AcquisitionTier.Baseline,
+            },
+        };
+
+        var recorded = await UseCase(store).ExecuteAsync(
+            analysed,
+            [Measurement(0.33)],
+            Clinician,
+            CancellationToken.None);
+
+        Assert.NotNull(recorded.Series);
+        Assert.Equal("series-0007", recorded.Series.PseudonymousSeriesId);
+        Assert.Equal(ImagingPlane.Coronal, recorded.Series.Plane);
+    }
+
     private static AnalysisReport Report(bool withVolume = false) => new()
     {
         PseudonymousStudyId = "study-1",

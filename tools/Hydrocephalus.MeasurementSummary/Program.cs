@@ -1,3 +1,4 @@
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Infrastructure.Dataset;
 using Hydrocephalus.Infrastructure.Reporting;
 
@@ -190,6 +191,24 @@ if (angleRows.Count > 0)
     }
 }
 
+// Проверка, которая стала возможной со схемой отчёта 1.2.0: на какой
+// плоскости в самом деле отмечено каждое измерение. Индекс Эванса определён на
+// аксиальной, угол мозолистого тела — на корональной, и отмеченное не на своей
+// плоскости даёт число того же вида и другого смысла. Прежде отчёт серию не
+// называл, то есть проверить это было нечем.
+Console.WriteLine();
+Console.WriteLine("=== Плоскости измерений ===");
+
+Describe(
+    "индекс Эванса",
+    nameof(ImagingPlane.Axial),
+    rows.Select(row => row.Measurement!.Value.Series));
+
+Describe(
+    "угол мозолистого тела",
+    nameof(ImagingPlane.Coronal),
+    angleRows.Select(row => row.Angle!.Value.Series));
+
 var pairs = rows
     .Where(row => row.Automatic is not null)
     .Select(row => (Manual: row.Measurement!.Value.EvansIndex, Automatic: row.Automatic!.Value))
@@ -217,6 +236,51 @@ else
 }
 
 return 0;
+
+static void Describe(string what, string expected, IEnumerable<MeasuredSeries?> series)
+{
+    var all = series.ToList();
+
+    if (all.Count == 0)
+    {
+        return;
+    }
+
+    var known = all.Where(item => item is not null).Select(item => item!.Value).ToList();
+    var unknown = all.Count - known.Count;
+
+    Console.WriteLine($"{what}: измерений {all.Count}");
+
+    if (unknown > 0)
+    {
+        // Схема до 1.2.0 серию не называла. Это «неизвестно», а не «та,
+        // которую выбрало бы ранжирование»: правило выбора с тех пор менялось.
+        Console.WriteLine($"   серия не записана (схема отчёта до 1.2.0): {unknown}");
+    }
+
+    foreach (var plane in known
+        .GroupBy(item => item.Plane, StringComparer.Ordinal)
+        .OrderBy(group => group.Key, StringComparer.Ordinal))
+    {
+        var mark = string.Equals(plane.Key, expected, StringComparison.Ordinal) ? "ожидаемая" : "НЕ ТА";
+
+        Console.WriteLine($"   плоскость {plane.Key}: {plane.Count()} — {mark}");
+    }
+
+    var distinct = known
+        .Select(item => item.PseudonymousSeriesId)
+        .Distinct(StringComparer.Ordinal)
+        .Count();
+
+    Console.WriteLine($"   разных серий: {distinct}");
+
+    foreach (var weighting in known
+        .GroupBy(item => item.Weighting, StringComparer.Ordinal)
+        .OrderBy(group => group.Key, StringComparer.Ordinal))
+    {
+        Console.WriteLine($"   взвешенность {weighting.Key}: {weighting.Count()}");
+    }
+}
 
 string? Argument(string name)
 {

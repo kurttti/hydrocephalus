@@ -6,21 +6,43 @@ namespace Hydrocephalus.Infrastructure.Reporting;
 /// <summary>Ручное измерение одного исследования.</summary>
 /// <param name="EvansIndex">Индекс Эванса, отмеченный врачом.</param>
 /// <param name="HeadRotationDegrees">Поворот головы при измерении; null, если не записан.</param>
+/// <param name="Series">Серия, по которой составлена версия отчёта; null в отчётах схемы до 1.2.0.</param>
 /// <param name="RecordedAt">Момент версии отчёта, из которой взято измерение.</param>
 public readonly record struct ManualMeasurement(
     double EvansIndex,
     double? HeadRotationDegrees,
+    MeasuredSeries? Series,
     DateTimeOffset RecordedAt);
+
+/// <summary>
+/// Серия версии отчёта, в которой лежит измерение.
+///
+/// Читается из блока <c>series</c>, появившегося в схеме 1.2.0. В отчётах
+/// прежних версий блока нет, и здесь стоит <see langword="null"/> — это
+/// «неизвестно», а не «та, которую выбрало бы ранжирование»: правило выбора с
+/// тех пор менялось четыре раза (docs/roadmap.md).
+/// </summary>
+/// <param name="PseudonymousSeriesId">Псевдонимный идентификатор серии.</param>
+/// <param name="Weighting">Взвешенность, как её назвал отчёт.</param>
+/// <param name="Plane">Плоскость получения, как её назвал отчёт.</param>
+/// <param name="Tier">Уровень входа, как его назвал отчёт.</param>
+public readonly record struct MeasuredSeries(
+    string PseudonymousSeriesId,
+    string Weighting,
+    string Plane,
+    string Tier);
 
 /// <summary>Ручной угол мозолистого тела одного исследования.</summary>
 /// <param name="Degrees">Угол, отмеченный врачом.</param>
 /// <param name="PlanePitchDegrees">Наклон плоскости разметки вперёд-назад; null, если не записан.</param>
 /// <param name="PlaneYawDegrees">Поворот плоскости разметки влево-вправо; null, если не записан.</param>
+/// <param name="Series">Серия, по которой составлена версия отчёта; null в отчётах схемы до 1.2.0.</param>
 /// <param name="RecordedAt">Момент версии отчёта, из которой взято измерение.</param>
 public readonly record struct ManualAngle(
     double Degrees,
     double? PlanePitchDegrees,
     double? PlaneYawDegrees,
+    MeasuredSeries? Series,
     DateTimeOffset RecordedAt);
 
 /// <summary>
@@ -119,7 +141,11 @@ public static class ManualMeasurementIndex
                     && (!manual.TryGetValue(studyId, out var known)
                         || version.CreatedAt > known.RecordedAt))
                 {
-                    manual[studyId] = new ManualMeasurement(evans, version.Rotation, version.CreatedAt);
+                    manual[studyId] = new ManualMeasurement(
+                        evans,
+                        version.Rotation,
+                        version.Series,
+                        version.CreatedAt);
                 }
 
                 if (version.Automatic is { } value)
@@ -135,6 +161,7 @@ public static class ManualMeasurementIndex
                         angle,
                         version.Pitch,
                         version.Yaw,
+                        version.Series,
                         version.CreatedAt);
                 }
             }
@@ -156,6 +183,18 @@ public static class ManualMeasurementIndex
                 out var parsed)
             ? parsed
             : DateTimeOffset.MinValue;
+
+        MeasuredSeries? series = null;
+
+        if (root.TryGetProperty("series", out var described)
+            && described.ValueKind == JsonValueKind.Object)
+        {
+            series = new MeasuredSeries(
+                Text(described, "pseudonymousSeriesId"),
+                Text(described, "weighting"),
+                Text(described, "plane"),
+                Text(described, "tier"));
+        }
 
         double? manual = null;
         double? automatic = null;
@@ -201,8 +240,13 @@ public static class ManualMeasurementIndex
             }
         }
 
-        return new Version(moment, manual, automatic, rotation, angle, pitch, yaw);
+        return new Version(moment, manual, automatic, rotation, angle, pitch, yaw, series);
     }
+
+    private static string Text(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
 
     private readonly record struct Version(
         DateTimeOffset CreatedAt,
@@ -211,7 +255,8 @@ public static class ManualMeasurementIndex
         double? Rotation,
         double? Angle,
         double? Pitch,
-        double? Yaw);
+        double? Yaw,
+        MeasuredSeries? Series);
 }
 
 /// <summary>Что нашлось в хранилище отчётов.</summary>

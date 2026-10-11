@@ -17,6 +17,16 @@ public sealed record AnalysisReport
     /// <summary>Момент формирования отчёта.</summary>
     public required DateTimeOffset CreatedAt { get; init; }
 
+    /// <summary>
+    /// Серия, по которой составлен отчёт; <see langword="null"/>, если пригодной
+    /// серии в исследовании не нашлось и анализ отказал до её выбора.
+    ///
+    /// Требование ADR 0005 («идентификаторы серий, псевдонимные»), не
+    /// выполнявшееся до версии схемы 1.2.0. Почему одного исследования не
+    /// хватает — в <see cref="AnalysedSeries"/>.
+    /// </summary>
+    public AnalysedSeries? Series { get; init; }
+
     /// <summary>Результат входного контроля качества.</summary>
     public required QualityAssessment Quality { get; init; }
 

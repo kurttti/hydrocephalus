@@ -231,6 +231,7 @@ public sealed class AnalyzeStudyUseCase
         {
             return await this.RefuseAsync(
                     study,
+                    series: null,
                     pipeline,
                     QualityAssessment.Clean(),
                     new RefusalReason { Code = RefusalCode.InsufficientAcquisitionTier },
@@ -260,6 +261,7 @@ public sealed class AnalyzeStudyUseCase
         {
             return await this.RefuseAsync(
                     study,
+                    AnalysedSeries.Of(series),
                     pipeline,
                     quality,
                     RefusalReason.FromFailedQualityControl(quality),
@@ -321,6 +323,12 @@ public sealed class AnalyzeStudyUseCase
         {
             PseudonymousStudyId = study.PseudonymousStudyId,
             CreatedAt = this.timeProvider.GetUtcNow(),
+
+            // Серия называется в отчёте, а не выводится задним числом из
+            // правила выбора: правило менялось, выбор врача его перебивает, а
+            // ручные измерения разных признаков идут по разным сериям одного
+            // исследования (ADR 0005, AnalysedSeries).
+            Series = AnalysedSeries.Of(series),
             Quality = quality,
             Outcome = outcome,
             Pipeline = pipeline,
@@ -448,6 +456,7 @@ public sealed class AnalyzeStudyUseCase
 
     private async Task<AnalysisReport> RefuseAsync(
         ImagingStudy study,
+        AnalysedSeries? series,
         Domain.Provenance.PipelineIdentity pipeline,
         QualityAssessment quality,
         RefusalReason reason,
@@ -465,6 +474,11 @@ public sealed class AnalyzeStudyUseCase
         {
             PseudonymousStudyId = study.PseudonymousStudyId,
             CreatedAt = this.timeProvider.GetUtcNow(),
+
+            // При отказе серия называется тоже: «входной контроль отклонил
+            // это исследование» и «отклонил эту его серию» — разные
+            // утверждения, и второе проверяемо, а первое нет.
+            Series = series,
             Quality = quality,
             Outcome = new AnalysisOutcome.Refused { Reason = reason },
             Pipeline = pipeline,

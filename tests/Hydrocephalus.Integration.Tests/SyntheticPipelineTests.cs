@@ -444,6 +444,125 @@ public sealed class SyntheticPipelineTests
     }
 
     /// <summary>Исследование из двух серий: одну выбирает приложение, другую — врач.</summary>
+    [Fact]
+    public async Task The_report_names_the_series_it_was_made_from()
+    {
+        // ADR 0005 требует псевдонимных идентификаторов серий в каноническом
+        // слое, и до схемы 1.2.0 отчёт их не нёс. Без них в одном исследовании
+        // рядом лежат версии по разным сериям — ручной угол мозолистого тела
+        // меряется на корональной, а для анализа выбирается аксиальная, — и
+        // различить их нечем.
+        var store = new RecordingReportStore();
+
+        var useCase = UseCase(
+            Synthetic.Study(),
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            store,
+            new RecordingAuditLog());
+
+        var report = await useCase.ExecuteAsync(
+            "source/study-0001",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.NotNull(report.Series);
+
+        var series = report.Series;
+
+        Assert.Equal("series-0001", series.PseudonymousSeriesId);
+        Assert.Equal(SeriesWeighting.T1, series.Weighting);
+        Assert.Equal(ImagingPlane.Axial, series.Plane);
+        Assert.Equal(AcquisitionTier.Extended, series.Tier);
+    }
+
+    [Fact]
+    public async Task The_report_names_the_series_the_clinician_chose_and_not_the_ranked_one()
+    {
+        // Выбор врача перебивает ранжирование, значит и в отчёте должна стоять
+        // выбранная серия. Иначе отчёт описывал бы ту, которую приложение
+        // предложило, а измерение было бы сделано по другой.
+        var importer = new StubImporter(TwoSeries());
+        var store = new RecordingReportStore();
+
+        var useCase = Build(
+            importer,
+            new StubInferenceEngine(QualityAssessment.Clean(), Completed()),
+            store,
+            new RecordingAuditLog());
+
+        var workingCopy = await importer.ImportAsync("source/study-0001", CancellationToken.None);
+
+        var report = await useCase.AnalyseSeriesAsync(
+            workingCopy,
+            "series-0002",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.NotNull(report.Series);
+        Assert.Equal("series-0002", report.Series.PseudonymousSeriesId);
+    }
+
+    [Fact]
+    public async Task A_refusal_names_the_series_it_refused()
+    {
+        // «Входной контроль отклонил это исследование» и «отклонил эту его
+        // серию» — разные утверждения, и второе проверяемо.
+        var blocked = new QualityAssessment
+        {
+            Issues =
+            [
+                new QualityIssue
+                {
+                    Code = QualityIssueCode.MotionArtefact,
+                    Severity = QualityIssueSeverity.Blocking,
+                },
+            ],
+        };
+
+        var useCase = UseCase(
+            Synthetic.Study(),
+            new StubInferenceEngine(blocked),
+            new RecordingReportStore(),
+            new RecordingAuditLog());
+
+        var report = await useCase.ExecuteAsync(
+            "source/study-0001",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
+        Assert.NotNull(report.Series);
+        Assert.Equal("series-0001", report.Series.PseudonymousSeriesId);
+    }
+
+    [Fact]
+    public async Task A_study_without_an_analysable_series_names_none()
+    {
+        // Отказ случился до выбора серии: называть нечего, и пустой блок
+        // соврал бы, что серия была.
+        var study = Synthetic.Study();
+
+        var useCase = UseCase(
+            study with { Series = [] },
+            new StubInferenceEngine(QualityAssessment.Clean()),
+            new RecordingReportStore(),
+            new RecordingAuditLog());
+
+        var report = await useCase.ExecuteAsync(
+            "source/study-0001",
+            Synthetic.Clinician(),
+            progress: null,
+            CancellationToken.None);
+
+        var refused = Assert.IsType<AnalysisOutcome.Refused>(report.Outcome);
+
+        Assert.Equal(RefusalCode.InsufficientAcquisitionTier, refused.Reason.Code);
+        Assert.Null(report.Series);
+    }
+
     private static ImagingStudy TwoSeries()
     {
         var study = Synthetic.Study();

@@ -273,6 +273,45 @@ public sealed class MeasurementWorklistTests : IDisposable
             worklist!.Studies.Select(study => study.Study.PseudonymousStudyId));
     }
 
+    [Fact]
+    public async Task A_measurement_carries_the_series_of_its_report_version()
+    {
+        // Ради этого серия и попала в отчёт схемы 1.2.0: угол мозолистого тела
+        // меряется на корональной серии, а индекс — на аксиальной, и в одном
+        // исследовании это разные версии отчёта. Без блока `series` сводная
+        // таблица не могла бы сказать, на чём сделано измерение, и проверить,
+        // что плоскость та, на которой признак вообще определён.
+        this.WriteReport(
+            "s1",
+            "2026-09-30T10:00:00.0000000Z",
+            evans: null,
+            angle: 68.4,
+            seriesId: "series-0007",
+            plane: "Coronal");
+
+        var readout = await ManualMeasurementIndex.ReadAsync(this.Reports, CancellationToken.None);
+
+        var series = Assert.Contains("s1", readout.CallosalAngle).Series;
+
+        Assert.NotNull(series);
+        Assert.Equal("series-0007", series.Value.PseudonymousSeriesId);
+        Assert.Equal("Coronal", series.Value.Plane);
+        Assert.Equal("Flair", series.Value.Weighting);
+    }
+
+    [Fact]
+    public async Task A_report_of_an_older_schema_leaves_the_series_unknown()
+    {
+        // До схемы 1.2.0 блока `series` не было. «Неизвестно» — не то же, что
+        // «та, которую выбрало бы ранжирование»: правило выбора с тех пор
+        // менялось, и подставить его задним числом значило бы выдумать.
+        this.WriteReport("s1", "2026-09-30T10:00:00.0000000Z", evans: 0.31);
+
+        var readout = await ManualMeasurementIndex.ReadAsync(this.Reports, CancellationToken.None);
+
+        Assert.Null(Assert.Contains("s1", readout.Manual).Series);
+    }
+
     private string Reports => Path.Combine(this.root.FullName, "reports");
 
     private string Dataset => Path.Combine(this.root.FullName, "dataset");
@@ -309,7 +348,9 @@ public sealed class MeasurementWorklistTests : IDisposable
         double? evans,
         bool outOfRange = false,
         double? angle = null,
-        double? pitch = null)
+        double? pitch = null,
+        string? seriesId = null,
+        string plane = "Axial")
     {
         var directory = Path.Combine(this.Reports, studyId);
 
@@ -349,8 +390,18 @@ public sealed class MeasurementWorklistTests : IDisposable
 
         var biomarkers = JsonSerializer.Serialize(written);
 
+        var series = seriesId is null
+            ? "null"
+            : JsonSerializer.Serialize(new
+            {
+                pseudonymousSeriesId = seriesId,
+                weighting = "Flair",
+                plane,
+                tier = "Baseline",
+            });
+
         File.WriteAllText(
             Path.Combine(directory, moment.Replace(":", string.Empty, StringComparison.Ordinal) + ".json"),
-            $$"""{"createdAt":"{{moment}}","biomarkers":{{biomarkers}}}""");
+            $$"""{"createdAt":"{{moment}}","series":{{series}},"biomarkers":{{biomarkers}}}""");
     }
 }

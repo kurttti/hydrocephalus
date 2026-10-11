@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Predictions;
 using Hydrocephalus.Domain.Provenance;
@@ -291,6 +292,43 @@ public sealed class CanonicalReportJsonTests : IDisposable
         Assert.Equal(
             JsonValueKind.Null,
             Parse(RefusedReport()).GetProperty("measurement").ValueKind);
+    }
+
+    [Fact]
+    public void The_series_the_report_was_made_from_is_named()
+    {
+        // Требование ADR 0005 о псевдонимных идентификаторах серий, не
+        // выполнявшееся до схемы 1.2.0. Взвешенность, плоскость и уровень
+        // входа стоят рядом с идентификатором потому, что каждое из трёх
+        // иначе требует повторного обхода набора, а плоскость вдобавок решает,
+        // определено ли вообще измерение, лежащее в этом же отчёте.
+        var json = Parse(RefusedReport() with
+        {
+            Series = new AnalysedSeries
+            {
+                PseudonymousSeriesId = "series-0007",
+                Weighting = SeriesWeighting.Flair,
+                Plane = ImagingPlane.Coronal,
+                Tier = AcquisitionTier.Baseline,
+            },
+        });
+
+        var series = json.GetProperty("series");
+
+        Assert.Equal("series-0007", series.GetProperty("pseudonymousSeriesId").GetString());
+        Assert.Equal(nameof(SeriesWeighting.Flair), series.GetProperty("weighting").GetString());
+        Assert.Equal(nameof(ImagingPlane.Coronal), series.GetProperty("plane").GetString());
+        Assert.Equal(nameof(AcquisitionTier.Baseline), series.GetProperty("tier").GetString());
+    }
+
+    [Fact]
+    public void A_report_made_before_a_series_was_chosen_says_so_instead_of_leaving_the_field_out()
+    {
+        // Отказ случился до выбора серии. Пустой объект соврал бы, что серия
+        // была, а пропущенное поле не отличалось бы от отчёта прежней схемы.
+        var json = Parse(RefusedReport());
+
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("series").ValueKind);
     }
 
     private static AnalysisReport RefusedReport(

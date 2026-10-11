@@ -26,8 +26,14 @@ public static class CanonicalReportJson
     /// <summary>
     /// Версия схемы отчёта. Меняется вместе с составом полей — правило связки
     /// с версионированием конвейера из CONTRIBUTING.md.
+    ///
+    /// 1.2.0 добавляет блок <c>series</c>: требование ADR 0005 о псевдонимных
+    /// идентификаторах серий, не выполнявшееся прежде. Прежние отчёты остаются
+    /// читаемыми — поле новое, а не переименованное, — но серии не называют,
+    /// и для них она неизвестна, а не совпадает с выбором ранжирования: выбор
+    /// с тех пор менялся.
     /// </summary>
-    public const string SchemaVersion = "1.1.0";
+    public const string SchemaVersion = "1.2.0";
 
     /// <summary>
     /// Формат отметок времени: UTC с фиксированным числом знаков.
@@ -78,6 +84,7 @@ public static class CanonicalReportJson
         writer.WriteString("pseudonymousStudyId", report.PseudonymousStudyId);
         writer.WriteString("createdAt", Timestamp(report.CreatedAt));
 
+        WriteSeries(writer, report.Series);
         WritePipeline(writer, report.Pipeline);
         WriteQuality(writer, report.Quality);
         WriteOutcome(writer, report.Outcome);
@@ -86,6 +93,24 @@ public static class CanonicalReportJson
         WriteMeasurement(writer, report);
         WriteAnnotations(writer, report.ClinicianAnnotations);
 
+        writer.WriteEndObject();
+    }
+
+    private static void WriteSeries(Utf8JsonWriter writer, AnalysedSeries? series)
+    {
+        if (series is null)
+        {
+            // Пригодной серии не нашлось: отказ случился до её выбора, и
+            // назвать нечего. Пустой объект соврал бы, что серия была.
+            writer.WriteNull("series");
+            return;
+        }
+
+        writer.WriteStartObject("series");
+        writer.WriteString("pseudonymousSeriesId", series.PseudonymousSeriesId);
+        writer.WriteString("weighting", series.Weighting.ToString());
+        writer.WriteString("plane", series.Plane.ToString());
+        writer.WriteString("tier", series.Tier.ToString());
         writer.WriteEndObject();
     }
 
