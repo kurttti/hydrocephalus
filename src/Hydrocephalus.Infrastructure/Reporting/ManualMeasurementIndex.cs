@@ -19,12 +19,13 @@ public readonly record struct ManualMeasurement(
 ///
 /// Читается из блока <c>series</c>, появившегося в схеме 1.2.0. В отчётах
 /// прежних версий блока нет, и здесь стоит <see langword="null"/> — это
-/// «неизвестно», а не «та, которую выбрало бы ранжирование»: правило выбора с
-/// тех пор менялось четыре раза (docs/roadmap.md).
+/// «неизвестно», а не «та, которую выбрало бы ранжирование»: само правило
+/// выбора с тех пор менялось (docs/roadmap.md, октябрьские правки порядка
+/// ключей и определителя взвешенности).
 /// </summary>
 /// <param name="PseudonymousSeriesId">Псевдонимный идентификатор серии.</param>
 /// <param name="Weighting">Взвешенность, как её назвал отчёт.</param>
-/// <param name="Plane">Плоскость получения, как её назвал отчёт.</param>
+/// <param name="Plane">Плоскость получения серии, как её назвал отчёт; не плоскость разметки.</param>
 /// <param name="Tier">Уровень входа, как его назвал отчёт.</param>
 public readonly record struct MeasuredSeries(
     string PseudonymousSeriesId,

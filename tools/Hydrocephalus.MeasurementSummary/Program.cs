@@ -1,4 +1,3 @@
-using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Infrastructure.Dataset;
 using Hydrocephalus.Infrastructure.Reporting;
 
@@ -191,23 +190,20 @@ if (angleRows.Count > 0)
     }
 }
 
-// Проверка, которая стала возможной со схемой отчёта 1.2.0: на какой
-// плоскости в самом деле отмечено каждое измерение. Индекс Эванса определён на
-// аксиальной, угол мозолистого тела — на корональной, и отмеченное не на своей
-// плоскости даёт число того же вида и другого смысла. Прежде отчёт серию не
-// называл, то есть проверить это было нечем.
+// Чем в самом деле измерено, по блоку `series` схемы отчёта 1.2.0. Прежде
+// отчёт серию не называл, и сказать, на какой из серий исследования сделано
+// измерение, было нечем.
+//
+// Плоскость здесь — плоскость **получения** серии, а не разметки: на объёмной
+// серии показаны все три вида, и размечают по реформату. Сверять по ней, на
+// своей ли плоскости сделано измерение, нельзя — и не нужно: на чужой
+// плоскости разметка отказывает названной причиной, то есть измерения с
+// неверной плоскостью не существует.
 Console.WriteLine();
-Console.WriteLine("=== Плоскости измерений ===");
+Console.WriteLine("=== Чем измерено ===");
 
-Describe(
-    "индекс Эванса",
-    nameof(ImagingPlane.Axial),
-    rows.Select(row => row.Measurement!.Value.Series));
-
-Describe(
-    "угол мозолистого тела",
-    nameof(ImagingPlane.Coronal),
-    angleRows.Select(row => row.Angle!.Value.Series));
+Describe("индекс Эванса", rows.Select(row => row.Measurement!.Value.Series));
+Describe("угол мозолистого тела", angleRows.Select(row => row.Angle!.Value.Series));
 
 var pairs = rows
     .Where(row => row.Automatic is not null)
@@ -237,7 +233,7 @@ else
 
 return 0;
 
-static void Describe(string what, string expected, IEnumerable<MeasuredSeries?> series)
+static void Describe(string what, IEnumerable<MeasuredSeries?> series)
 {
     var all = series.ToList();
 
@@ -262,9 +258,7 @@ static void Describe(string what, string expected, IEnumerable<MeasuredSeries?> 
         .GroupBy(item => item.Plane, StringComparer.Ordinal)
         .OrderBy(group => group.Key, StringComparer.Ordinal))
     {
-        var mark = string.Equals(plane.Key, expected, StringComparison.Ordinal) ? "ожидаемая" : "НЕ ТА";
-
-        Console.WriteLine($"   плоскость {plane.Key}: {plane.Count()} — {mark}");
+        Console.WriteLine($"   серия получена в плоскости {plane.Key}: {plane.Count()}");
     }
 
     var distinct = known
