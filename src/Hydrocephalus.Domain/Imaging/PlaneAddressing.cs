@@ -126,6 +126,32 @@ public static class PlaneAddressing
         };
 
     /// <summary>
+    /// Возвращает нормаль к плоскости, то есть направление, вдоль которого
+    /// плоскости перелистываются.
+    ///
+    /// Нужна тем, кто проверяет, что́ плоскость режет: по нормали определяется,
+    /// аксиальная она, корональная или сагиттальная, и насколько отклонена от
+    /// анатомической. Определение одно и живёт здесь, рядом с адресацией:
+    /// повторённое у вызывающих, оно разошлось бы с <see cref="DirectionsOf"/>,
+    /// а эти двое обязаны описывать одну и ту же плоскость.
+    /// </summary>
+    /// <param name="geometry">Геометрия получения серии.</param>
+    /// <param name="axis">Ось перелистывания.</param>
+    /// <returns>Направление поперёк плоскости.</returns>
+    public static SpatialVector NormalOf(SeriesGeometry geometry, VolumeAxis axis)
+    {
+        ArgumentNullException.ThrowIfNull(geometry);
+
+        return axis switch
+        {
+            VolumeAxis.AcrossSlices => geometry.SliceNormal,
+            VolumeAxis.AcrossRows => geometry.ColumnDirection,
+            VolumeAxis.AcrossColumns => geometry.RowDirection,
+            _ => throw new ArgumentOutOfRangeException(nameof(axis)),
+        };
+    }
+
+    /// <summary>
     /// Возвращает направления, вдоль которых идут оси плоскости.
     /// </summary>
     /// <param name="geometry">Геометрия получения серии.</param>

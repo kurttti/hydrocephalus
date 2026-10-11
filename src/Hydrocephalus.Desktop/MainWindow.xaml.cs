@@ -14,6 +14,7 @@ using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Measurements;
 using Hydrocephalus.Domain.Reporting;
 using Hydrocephalus.Inference.Measurements;
+using Hydrocephalus.Infrastructure.Dataset;
 using Hydrocephalus.Infrastructure.Volumes;
 using Microsoft.Win32;
 
@@ -57,10 +58,20 @@ public partial class MainWindow : Window
     // к оси показанной аксиальной плоскости.
     private ManualEvansMarking? marking;
 
+    // Разметка угла мозолистого тела: то же, но на корональной плоскости.
+    // Инструмента два, а не один с переключателем вида: точек у них разное
+    // число, порядок значит разное, и плоскости тоже разные.
+    private ManualCallosalAngleMarking? angleMarking;
+
     // Измерение, готовое к записи: непустое только когда отмечены все четыре
     // точки и значение индекса правдоподобно. Признаков два — индекс и поворот
     // головы: он выводится из заданной врачом оси и больше нигде не сохраняется.
     private IReadOnlyList<Biomarker>? recorded;
+
+    // То же для угла: угол вместе с наклоном и поворотом плоскости разметки.
+    // Эти двое из геометрии серии, которая в отчёт не идёт, и без них значения
+    // угла между исследованиями несравнимы.
+    private IReadOnlyList<Biomarker>? recordedAngle;
 
     // Состав показанного исследования: нужен, чтобы перерисовать экран результата
     // после записи измерения, не открывая исследование заново.
@@ -151,13 +162,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (worklist.NextUnmeasured(this.openedDirectory) is not { } study)
+        var kind = this.QueueKind;
+
+        if (worklist.NextUnmeasured(kind, this.openedDirectory) is not { } study)
         {
             this.WorklistText.Text = string.Create(
                 CultureInfo.CurrentCulture,
-                $"измерено {worklist.MeasuredCount} из {worklist.Studies.Count} — всё");
+                $"{NameOf(kind)}: измерено {worklist.CountOf(kind)} из {worklist.Studies.Count} — всё");
 
-            this.StatusText.Text = "Неизмеренных исследований в наборе не осталось.";
+            this.StatusText.Text = $"Исследований без измерения «{NameOf(kind)}» в наборе не осталось.";
 
             return;
         }
@@ -184,7 +197,37 @@ public partial class MainWindow : Window
             ? string.Empty
             : string.Create(
                 CultureInfo.CurrentCulture,
-                $"измерено {worklist.MeasuredCount} из {worklist.Studies.Count}");
+                $"{NameOf(this.QueueKind)}: измерено {worklist.CountOf(this.QueueKind)} из {worklist.Studies.Count}");
+    }
+
+    /// <summary>
+    /// Какое измерение считает выполненным обход набора.
+    ///
+    /// Очередей две, потому что это два разных обхода: индекс Эванса меряется
+    /// на аксиальном срезе, угол мозолистого тела — на корональном, и пригодные
+    /// исследования у них разные. Одна очередь на оба признака считала бы
+    /// готовым исследование, у которого сделана половина.
+    /// </summary>
+    private MeasurementKind QueueKind => this.QueueKindSelector.SelectedIndex == 1
+        ? MeasurementKind.CallosalAngle
+        : MeasurementKind.EvansIndex;
+
+    private static string NameOf(MeasurementKind kind) => kind switch
+    {
+        MeasurementKind.CallosalAngle => "угол",
+        _ => "индекс",
+    };
+
+    private async void OnQueueKindChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // До окончания разбора разметки счётчика на экране ещё нет, а выбор
+        // по умолчанию задаётся там же: обращение к нему уронило бы окно.
+        if (!this.IsInitialized)
+        {
+            return;
+        }
+
+        await this.RefreshWorklistAsync().ConfigureAwait(true);
     }
 
     private async Task OpenAsync(string directory)
@@ -260,13 +303,7 @@ public partial class MainWindow : Window
     private void OfferOtherStudies(CompositionRoot composition)
     {
         this.study = null;
-        this.marking = null;
-        this.RulerToggle.IsChecked = false;
-        this.RulerToggle.IsEnabled = false;
-        this.RulerText.Visibility = Visibility.Collapsed;
-        this.RulerUndo.IsEnabled = false;
-        this.RulerReset.IsEnabled = false;
-        this.RulerRecord.IsEnabled = false;
+        this.ResetMarkingTools(axialShown: false, coronalShown: false);
         this.surfaces.Clear();
         this.PlaneGrid.Children.Clear();
         this.SeriesSelector.ItemsSource = null;
@@ -522,13 +559,9 @@ public partial class MainWindow : Window
 
         // Разметка от прошлого исследования не переносится: её точки — отсчёты
         // другой сетки, и молча пережившая показ линейка мерила бы не то.
-        this.marking = null;
-        this.RulerToggle.IsChecked = false;
-        this.RulerToggle.IsEnabled = this.AxialSurface() is not null;
-        this.RulerText.Visibility = Visibility.Collapsed;
-        this.RulerUndo.IsEnabled = false;
-        this.RulerReset.IsEnabled = false;
-        this.RulerRecord.IsEnabled = false;
+        this.ResetMarkingTools(
+            axialShown: this.AxialSurface() is not null,
+            coronalShown: this.CoronalSurface() is not null);
 
         this.ConfigureWindowSliders(view);
         this.ConfigureStudySelector(opened);
@@ -886,6 +919,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Инструменты исключают друг друга: точки принимает тот, который
+        // включён, и два включённых разошлись бы по одному нажатию на разных
+        // плоскостях, не сказав об этом.
+        this.AngleToggle.IsChecked = false;
+
         this.marking = new ManualEvansMarking(axial.View.Axis);
         this.RulerText.Visibility = Visibility.Visible;
         this.ShowMarkingState("Отметьте два конца внутреннего диаметра черепа — они задают ось, — затем два конца ширины передних рогов.");
@@ -916,13 +954,25 @@ public partial class MainWindow : Window
     /// <summary>
     /// Принимает отмеченную точку.
     ///
-    /// Нажатие приходит с любой поверхности, но мерить индекс Эванса можно только
-    /// на аксиальной: определение признака плоскостью не безразлично, и точка,
-    /// поставленная на корональном виде, дала бы число того же вида и другого смысла.
+    /// Нажатие приходит с любой поверхности, но плоскость выбирает не врач, а
+    /// определение признака: индекс Эванса меряется только на аксиальной,
+    /// угол мозолистого тела — только на корональной. Точка, принятая не на
+    /// своей плоскости, дала бы число того же вида и другого смысла.
     /// </summary>
     private void OnSurfacePressed(PlaneSurface surface, int x, int y)
     {
-        if (this.study is null || this.marking is null || surface.View.Plane != ImagingPlane.Axial)
+        if (this.study is null)
+        {
+            return;
+        }
+
+        var measuresIndex = this.marking is not null
+            && surface.View.Plane == ImagingPlane.Axial;
+
+        var measuresAngle = this.angleMarking is not null
+            && surface.View.Plane == ImagingPlane.Coronal;
+
+        if (!measuresIndex && !measuresAngle)
         {
             return;
         }
@@ -934,14 +984,26 @@ public partial class MainWindow : Window
             return;
         }
 
-        var outcome = this.marking.Add(voxel.Value);
+        if (measuresIndex)
+        {
+            this.ShowMarkingState(this.marking!.Add(voxel.Value) switch
+            {
+                MarkingOutcome.RestartedOnAnotherPlane =>
+                    "Срез сменился — разметка начата заново с этой точки.",
+                MarkingOutcome.AlreadyComplete =>
+                    "Все четыре точки уже отмечены; снимите точку или сбросьте разметку.",
+                _ => null,
+            });
 
-        this.ShowMarkingState(outcome switch
+            return;
+        }
+
+        this.ShowAngleState(this.angleMarking!.Add(voxel.Value) switch
         {
             MarkingOutcome.RestartedOnAnotherPlane =>
                 "Срез сменился — разметка начата заново с этой точки.",
             MarkingOutcome.AlreadyComplete =>
-                "Все четыре точки уже отмечены; снимите точку или сбросьте разметку.",
+                "Все три точки уже отмечены; снимите точку или сбросьте разметку.",
             _ => null,
         });
     }
@@ -1061,6 +1123,197 @@ public partial class MainWindow : Window
 
         this.RulerRecord.IsEnabled = this.recorded is not null;
     }
+
+    private void OnAngleChanged(object sender, RoutedEventArgs e)
+    {
+        var coronal = this.CoronalSurface();
+
+        if (this.AngleToggle.IsChecked != true || coronal is null)
+        {
+            this.angleMarking = null;
+            this.recordedAngle = null;
+            this.AngleText.Visibility = Visibility.Collapsed;
+            this.AngleUndo.IsEnabled = false;
+            this.AngleReset.IsEnabled = false;
+            this.AngleRecord.IsEnabled = false;
+
+            return;
+        }
+
+        this.RulerToggle.IsChecked = false;
+
+        this.angleMarking = new ManualCallosalAngleMarking(coronal.View.Axis);
+        this.AngleText.Visibility = Visibility.Visible;
+        this.ShowAngleState("Отметьте вершину угла на средней линии, затем по одной точке на крыше каждого бокового желудочка. Порядок крыш не важен.");
+    }
+
+    private void OnAngleUndo(object sender, RoutedEventArgs e)
+    {
+        if (this.angleMarking is null)
+        {
+            return;
+        }
+
+        this.ShowAngleState(
+            this.angleMarking.UndoLast() ? "Последняя точка снята." : "Снимать нечего.");
+    }
+
+    private void OnAngleReset(object sender, RoutedEventArgs e)
+    {
+        if (this.angleMarking is null)
+        {
+            return;
+        }
+
+        this.angleMarking.Reset();
+        this.ShowAngleState("Разметка сброшена.");
+    }
+
+    private async void OnAngleRecord(object sender, RoutedEventArgs e)
+    {
+        var composition = Current.Composition;
+
+        if (this.recordedAngle is not { } measurements || composition is null || this.analysed is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var report = await composition
+                .RecordMeasurementAsync(measurements, CancellationToken.None)
+                .ConfigureAwait(true);
+
+            this.recordedAngle = null;
+            this.AngleRecord.IsEnabled = false;
+
+            this.AngleText.Foreground = NeutralBrush;
+            this.AngleText.Text = string.Create(
+                CultureInfo.CurrentCulture,
+                $"Угол мозолистого тела {measurements[0].Value:0.#}° записан в отчёт "
+                + $"вместе с наклоном плоскости {measurements[1].Value:0.#}°.");
+
+            this.ShowResult(ResultReadout.Describe(report, this.analysed));
+
+            await this.RefreshWorklistAsync().ConfigureAwait(true);
+        }
+        catch (Exception error) when (error is Hydrocephalus.Domain.DomainRuleViolationException
+            or AccessDeniedException
+            or System.IO.IOException
+            or InvalidOperationException)
+        {
+            this.AngleText.Foreground = BlockingBrush;
+            this.AngleText.Text = "Записать не удалось. " + ErrorReadout.Describe(error);
+        }
+    }
+
+    private PlaneSurface? CoronalSurface() =>
+        this.surfaces.FirstOrDefault(surface => surface.View.Plane == ImagingPlane.Coronal);
+
+    /// <summary>
+    /// Возвращает оба инструмента разметки в исходное состояние.
+    ///
+    /// Одним методом на двоих потому, что расходиться им нельзя: разметку
+    /// сбрасывают показ исследования, смена серии и неудачное открытие, и
+    /// пропущенный сброс оставил бы живыми точки другой сетки.
+    /// </summary>
+    /// <param name="axialShown">Показана ли аксиальная плоскость.</param>
+    /// <param name="coronalShown">Показана ли корональная плоскость.</param>
+    private void ResetMarkingTools(bool axialShown, bool coronalShown)
+    {
+        this.marking = null;
+        this.recorded = null;
+        this.RulerToggle.IsChecked = false;
+        this.RulerToggle.IsEnabled = axialShown;
+        this.RulerText.Visibility = Visibility.Collapsed;
+        this.RulerUndo.IsEnabled = false;
+        this.RulerReset.IsEnabled = false;
+        this.RulerRecord.IsEnabled = false;
+
+        this.angleMarking = null;
+        this.recordedAngle = null;
+        this.AngleToggle.IsChecked = false;
+        this.AngleToggle.IsEnabled = coronalShown;
+        this.AngleText.Visibility = Visibility.Collapsed;
+        this.AngleUndo.IsEnabled = false;
+        this.AngleReset.IsEnabled = false;
+        this.AngleRecord.IsEnabled = false;
+    }
+
+    /// <summary>
+    /// Показывает, что отмечено для угла и что из этого вышло.
+    /// </summary>
+    /// <param name="note">Пояснение к последнему действию либо <see langword="null"/>.</param>
+    private void ShowAngleState(string? note)
+    {
+        if (this.study is null || this.angleMarking is null)
+        {
+            return;
+        }
+
+        this.AngleUndo.IsEnabled = this.angleMarking.Points.Count > 0;
+        this.AngleReset.IsEnabled = this.angleMarking.Points.Count > 0;
+        this.AngleRecord.IsEnabled = false;
+        this.recordedAngle = null;
+
+        var counted = string.Create(
+            CultureInfo.CurrentCulture,
+            $"Отмечено точек: {this.angleMarking.Points.Count} из {ManualCallosalAngleMarking.RequiredPoints}.");
+
+        if (!this.angleMarking.IsComplete)
+        {
+            this.AngleText.Foreground = NeutralBrush;
+            this.AngleText.Text = note is null ? counted : counted + " " + note;
+
+            return;
+        }
+
+        var result = this.angleMarking.Measure(this.study.Volume);
+
+        if (result.Refusal is { } refusal)
+        {
+            this.AngleText.Foreground = BlockingBrush;
+            this.AngleText.Text = counted + " " + DescribeAngleRefusal(refusal);
+
+            return;
+        }
+
+        var degrees = result.Biomarker!.Value;
+
+        this.AngleText.Foreground = result.Biomarker.IsOutOfRange ? WarningBrush : NeutralBrush;
+
+        // Наклон плоскости показывается вместе с углом, а не только пишется в
+        // отчёт: именно он объясняет, почему два измерения одного пациента на
+        // разных сериях разойдутся, и врач должен видеть его до записи.
+        var tilt = result.PitchDegrees is { } pitch
+            ? string.Create(
+                CultureInfo.CurrentCulture,
+                $"; наклон плоскости {pitch:+0.#;-0.#;0}°, поворот {result.YawDegrees:+0.#;-0.#;0}°")
+            : string.Empty;
+
+        this.AngleText.Text = string.Create(
+            CultureInfo.CurrentCulture,
+            $"Угол мозолистого тела: {degrees:0.#}°{tilt}{(result.Biomarker.IsOutOfRange
+                ? " — вне правдоподобного диапазона, проверьте постановку точек"
+                : " — можно записать в отчёт")}");
+
+        this.recordedAngle = result.Measurements.Count == 0
+            || result.Measurements.Any(item => item.IsOutOfRange)
+                ? null
+                : result.Measurements;
+
+        this.AngleRecord.IsEnabled = this.recordedAngle is not null;
+    }
+
+    private static string DescribeAngleRefusal(ManualCallosalAngleRefusal refusal) => refusal switch
+    {
+        ManualCallosalAngleRefusal.PointsIncomplete => "Отмечены не все три точки.",
+        ManualCallosalAngleRefusal.PointsOnDifferentPlanes => "Точки лежат на разных срезах.",
+        ManualCallosalAngleRefusal.RayHasZeroLength => "Точка на крыше совпала с вершиной: угла нет.",
+        ManualCallosalAngleRefusal.PlaneIsNotCoronal =>
+            "Срез не корональный: угол мозолистого тела определён только на нём.",
+        _ => "Измерение не выполнено.",
+    };
 
     private static string DescribeRefusal(ManualEvansRefusal refusal) => refusal switch
     {

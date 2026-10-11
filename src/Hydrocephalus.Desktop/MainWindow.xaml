@@ -69,6 +69,16 @@
                        Margin="0,6,0,0"
                        Visibility="Collapsed" />
 
+            <!-- Своя строка, а не общая с линейкой: инструменты исключают друг
+                 друга, но подсказка одного не должна исчезать от того, что
+                 врач тронул другой. -->
+            <TextBlock x:Name="AngleText"
+                       DockPanel.Dock="Bottom"
+                       Foreground="#C8C8D2"
+                       TextWrapping="Wrap"
+                       Margin="0,6,0,0"
+                       Visibility="Collapsed" />
+
             <!-- Перенос строк, а не одна строка: органов управления больше,
                  чем помещается рядом с экспортом, и не поместившиеся иначе
                  уходили за край окна вместе со списком серий и окном/уровнем. -->
@@ -92,6 +102,21 @@
                         IsEnabled="False"
                         Click="OnNextStudyClick"
                         ToolTip="Открыть следующее неизмеренное исследование набора." />
+
+                <!-- Очередей две: индекс Эванса меряется на аксиальном срезе,
+                     угол — на корональном, и пригодные исследования у них
+                     разные. Одна очередь на оба считала бы готовым то, у
+                     которого сделана половина. -->
+                <ComboBox x:Name="QueueKindSelector"
+                          Width="190"
+                          Margin="8,0,0,0"
+                          VerticalAlignment="Center"
+                          SelectedIndex="0"
+                          SelectionChanged="OnQueueKindChanged"
+                          ToolTip="Какое измерение считать выполненным при обходе набора.">
+                    <ComboBoxItem Content="очередь: индекс Эванса" />
+                    <ComboBoxItem Content="очередь: угол" />
+                </ComboBox>
 
                 <TextBlock x:Name="WorklistText"
                            Foreground="#9A9AA6"
@@ -181,6 +206,47 @@
                         IsEnabled="False"
                         Click="OnRulerRecord"
                         ToolTip="Сохранить измерение новой версией отчёта. Недоступно, пока значение вне правдоподобного диапазона: точки нужно поставить заново, а не записывать заведомо неверное число." />
+
+                <!-- Угол мозолистого тела. Второй признак плана M3 и
+                     единственный, который отличает иНТГ от заместительной
+                     гидроцефалии: индекс Эванса растёт и там и там. Меряется на
+                     корональном срезе, а корональная серия с покрытием есть
+                     почти у всего набора — в отличие от объёмной. -->
+                <CheckBox x:Name="AngleToggle"
+                          Content="_Угол мозолистого тела"
+                          Margin="12,0,0,0"
+                          VerticalAlignment="Center"
+                          Foreground="#E6E6EA"
+                          IsChecked="False"
+                          IsEnabled="False"
+                          Checked="OnAngleChanged"
+                          Unchecked="OnAngleChanged"
+                          ToolTip="Отметить три точки на корональном срезе: сначала вершину угла на средней линии, затем по одной точке на крыше каждого бокового желудочка. Порядок крыш не важен, поворот кадра на угол не влияет. Измерение помечается сомнительным: определение требует среза через заднюю спайку перпендикулярно линии AC-PC, а приложение их не ищет." />
+
+                <Button x:Name="AngleUndo"
+                        Content="Отменить точку"
+                        Margin="8,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center"
+                        IsEnabled="False"
+                        Click="OnAngleUndo" />
+
+                <Button x:Name="AngleReset"
+                        Content="Сбросить"
+                        Margin="6,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center"
+                        IsEnabled="False"
+                        Click="OnAngleReset" />
+
+                <Button x:Name="AngleRecord"
+                        Content="Записать _угол"
+                        Margin="6,0,0,0"
+                        Padding="8,2"
+                        VerticalAlignment="Center"
+                        IsEnabled="False"
+                        Click="OnAngleRecord"
+                        ToolTip="Сохранить угол и наклон плоскости новой версией отчёта. Недоступно, пока значение вне правдоподобного диапазона." />
 
                 <TextBlock Text="Центр" Foreground="#9A9AA6" Margin="24,0,6,0" VerticalAlignment="Center" />
                 <Slider x:Name="CenterSlider" Width="150" VerticalAlignment="Center"

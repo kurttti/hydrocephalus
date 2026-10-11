@@ -2,17 +2,52 @@ using Hydrocephalus.Infrastructure.Reporting;
 
 namespace Hydrocephalus.Infrastructure.Dataset;
 
-/// <summary>Исследование набора вместе с тем, измерено ли оно.</summary>
+/// <summary>
+/// Какое измерение считать выполненным.
+///
+/// Очередей две потому, что это два разных обхода набора по разным сериям:
+/// индекс Эванса меряется на аксиальном срезе, угол мозолистого тела — на
+/// корональном, и наборы пригодных исследований у них разные (корональная серия
+/// есть у 55 из 57, аксиальная пригодная — у 36). Одна очередь на оба признака
+/// считала бы готовым исследование, у которого сделана половина.
+/// </summary>
+public enum MeasurementKind
+{
+    /// <summary>Индекс Эванса, четыре точки на аксиальном срезе.</summary>
+    EvansIndex = 0,
+
+    /// <summary>Угол мозолистого тела, три точки на корональном срезе.</summary>
+    CallosalAngle = 1,
+}
+
+/// <summary>Исследование набора вместе с тем, что по нему измерено.</summary>
 /// <param name="Study">Запись манифеста.</param>
 /// <param name="Directory">Каталог исследования внутри набора.</param>
-/// <param name="Measurement">Ручное измерение либо null, если его нет.</param>
+/// <param name="Measurement">Ручной индекс Эванса либо null, если его нет.</param>
+/// <param name="Angle">Ручной угол мозолистого тела либо null, если его нет.</param>
 public readonly record struct QueuedStudy(
     DatasetStudy Study,
     string Directory,
-    ManualMeasurement? Measurement)
+    ManualMeasurement? Measurement,
+    ManualAngle? Angle = null)
 {
-    /// <summary>Измерено ли исследование.</summary>
+    /// <summary>Измерен ли индекс Эванса.</summary>
     public bool IsMeasured => this.Measurement is not null;
+
+    /// <summary>Измерен ли угол мозолистого тела.</summary>
+    public bool HasAngle => this.Angle is not null;
+
+    /// <summary>
+    /// Выполнено ли измерение названного вида.
+    /// </summary>
+    /// <param name="kind">Вид измерения.</param>
+    /// <returns><see langword="true"/>, если измерение есть.</returns>
+    public bool Has(MeasurementKind kind) => kind switch
+    {
+        MeasurementKind.EvansIndex => this.IsMeasured,
+        MeasurementKind.CallosalAngle => this.HasAngle,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
 }
 
 /// <summary>
@@ -48,8 +83,15 @@ public sealed class MeasurementWorklist
     /// <summary>Все исследования списка в порядке манифеста.</summary>
     public IReadOnlyList<QueuedStudy> Studies => this.studies;
 
-    /// <summary>Сколько исследований уже измерено.</summary>
-    public int MeasuredCount => this.studies.Count(study => study.IsMeasured);
+    /// <summary>Сколько исследований уже измерено по индексу Эванса.</summary>
+    public int MeasuredCount => this.CountOf(MeasurementKind.EvansIndex);
+
+    /// <summary>
+    /// Сколько исследований уже измерено названным видом измерения.
+    /// </summary>
+    /// <param name="kind">Вид измерения.</param>
+    /// <returns>Число исследований с таким измерением.</returns>
+    public int CountOf(MeasurementKind kind) => this.studies.Count(study => study.Has(kind));
 
     /// <summary>
     /// Собирает список по набору и хранилищу отчётов.
@@ -84,7 +126,8 @@ public sealed class MeasurementWorklist
             .Select(study => new QueuedStudy(
                 study,
                 study.DirectoryIn(datasetRoot),
-                Measurement(measured, study)))
+                Find(study, measured.Manual),
+                Find(study, measured.CallosalAngle)))
             .ToList();
 
         return new MeasurementWorklist(datasetRoot, studies);
@@ -109,7 +152,20 @@ public sealed class MeasurementWorklist
     /// то же самое, пока врач не запишет измерение.
     /// </param>
     /// <returns>Исследование либо <see langword="null"/>, если неизмеренных нет.</returns>
-    public QueuedStudy? NextUnmeasured(string? afterDirectory)
+    public QueuedStudy? NextUnmeasured(string? afterDirectory) =>
+        this.NextUnmeasured(MeasurementKind.EvansIndex, afterDirectory);
+
+    /// <summary>
+    /// Находит следующее исследование без измерения названного вида.
+    /// </summary>
+    /// <param name="kind">Вид измерения.</param>
+    /// <param name="afterDirectory">
+    /// Каталог, после которого искать; null — искать с начала. Открытое сейчас
+    /// исследование пропускается даже неизмеренным: иначе «следующее» вернуло бы
+    /// то же самое, пока врач не запишет измерение.
+    /// </param>
+    /// <returns>Исследование либо <see langword="null"/>, если неизмеренных нет.</returns>
+    public QueuedStudy? NextUnmeasured(MeasurementKind kind, string? afterDirectory)
     {
         var start = 0;
 
@@ -132,7 +188,7 @@ public sealed class MeasurementWorklist
         {
             var study = this.studies[(start + step) % this.studies.Count];
 
-            if (!study.IsMeasured)
+            if (!study.Has(kind))
             {
                 return study;
             }
@@ -141,13 +197,14 @@ public sealed class MeasurementWorklist
         return null;
     }
 
-    private static ManualMeasurement? Measurement(MeasurementReadout readout, DatasetStudy study)
+    private static T? Find<T>(DatasetStudy study, IReadOnlyDictionary<string, T> measured)
+        where T : struct
     {
         // Псевдонимов у исследования два: измерение с оригинала лежит под
         // исходным, из набора — под производным.
         foreach (var key in study.ReportKeys())
         {
-            if (readout.Manual.TryGetValue(key, out var measurement))
+            if (measured.TryGetValue(key, out var measurement))
             {
                 return measurement;
             }

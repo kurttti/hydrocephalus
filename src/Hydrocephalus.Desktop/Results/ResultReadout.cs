@@ -95,6 +95,9 @@ public static class ResultReadout
         ["evans-index-manual"] = "Индекс Эванса, измерен врачом",
         ["head-rotation-in-plane"] = "Поворот головы в кадре",
         ["callosal-angle"] = "Каллозальный угол",
+        ["callosal-angle-manual"] = "Угол мозолистого тела, измерен врачом",
+        ["coronal-plane-pitch"] = "Наклон плоскости измерения вперёд-назад",
+        ["coronal-plane-yaw"] = "Поворот плоскости измерения влево-вправо",
     };
 
     private static readonly Dictionary<string, string> StructureNames = new(StringComparer.Ordinal)

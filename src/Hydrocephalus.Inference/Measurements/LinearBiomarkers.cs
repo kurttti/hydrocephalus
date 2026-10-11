@@ -55,6 +55,39 @@ public static class LinearBiomarkers
     /// <summary>Код метода для угла мозолистого тела.</summary>
     public const string CallosalAngleCode = "callosal-angle";
 
+    /// <summary>
+    /// Код метода для угла мозолистого тела, отмеченного врачом вручную.
+    ///
+    /// Отдельный код по той же причине, что и у индекса Эванса: величина та же,
+    /// способ получения другой. Здесь он нужен ещё и потому, что
+    /// автоматический путь уже существует в исследовательском контуре
+    /// (`hydrocephalus_ml.callosal`, docs/ml/README.md) и после переноса в
+    /// приложение писал бы в отчёт код <see cref="CallosalAngleCode"/>.
+    /// </summary>
+    public const string ManualCallosalAngleCode = "callosal-angle-manual";
+
+    /// <summary>
+    /// Код метода для наклона плоскости разметки вперёд-назад.
+    ///
+    /// Свойство протокола, а не пациента, и в отчёте стоит особняком — как
+    /// поворот головы у индекса Эванса. Записывается потому, что без него
+    /// значения угла несравнимы между собой: отклонение плоскости от истинной
+    /// корональной на ±5–10° значимо меняет угол у больных иНТГ и незначимо у
+    /// здоровых (docs/ml/README.md), а в геометрии серии, которая в отчёт не
+    /// идёт, это число больше нигде не сохраняется.
+    /// </summary>
+    public const string CoronalPlanePitchCode = "coronal-plane-pitch";
+
+    /// <summary>
+    /// Код метода для поворота плоскости разметки влево-вправо.
+    ///
+    /// Второй угол записывается отдельно, а не сворачивается с наклоном в одно
+    /// полное отклонение: чувствительность угла мозолистого тела зависит от оси
+    /// поворота, и сложенные вместе числа обратно уже не разделить. Полное
+    /// отклонение из этих двух выводится, обратное неверно.
+    /// </summary>
+    public const string CoronalPlaneYawCode = "coronal-plane-yaw";
+
     /// <summary>Версия определения методов.</summary>
     public const string DefinitionVersion = "1.0.0";
 
@@ -85,6 +118,17 @@ public static class LinearBiomarkers
     /// отклонения) принадлежит модели и протоколу валидации, а не измерителю.
     /// </summary>
     private static readonly MeasurementRange CallosalAnglePlausibleRange = new(30.0, 150.0);
+
+    /// <summary>
+    /// Правдоподобный наклон плоскости разметки в градусах.
+    ///
+    /// Границы проверочные, а не анатомические: плоскость, отклонённая от
+    /// корональной больше чем на 45°, корональной уже не является, и такую
+    /// отвергает сама проверка плоскости. Диапазон знаковый — сторона наклона
+    /// анатомически определена (нормаль разворачивается назад) и для разбора
+    /// смещения значений нужна.
+    /// </summary>
+    internal static readonly MeasurementRange CoronalPlaneTiltPlausibleRange = new(-45.0, 45.0);
 
     /// <summary>
     /// Вычисляет индекс Эванса: отношение наибольшей ширины передних рогов
@@ -226,7 +270,49 @@ public static class LinearBiomarkers
         // по значению невозможно.
         RequirePlane(volume, ImagingPlane.Coronal, CallosalAngleCode);
 
-        RequireSameSlice(CallosalAngleCode, vertex, first, second);
+        return CallosalAngle(volume, VolumeAxis.AcrossSlices, vertex, first, second, quality);
+    }
+
+    /// <summary>
+    /// Вычисляет угол мозолистого тела на корональной плоскости, лежащей
+    /// поперёк заданной оси объёма.
+    ///
+    /// Нужна по той же причине, что и такая же перегрузка индекса Эванса:
+    /// объёмная серия не обязана быть получена коронально, и сагиттальная 3D T1
+    /// содержит корональные плоскости так же, как корональная, только поперёк
+    /// другой оси сетки.
+    /// </summary>
+    /// <param name="volume">Объём.</param>
+    /// <param name="coronalAcross">Ось объёма, поперёк которой лежит корональная плоскость.</param>
+    /// <param name="vertex">Вершина угла.</param>
+    /// <param name="first">Точка на первом луче.</param>
+    /// <param name="second">Точка на втором луче.</param>
+    /// <param name="quality">Оценка достоверности измерения.</param>
+    /// <returns>Признак с углом в градусах.</returns>
+    /// <exception cref="DomainRuleViolationException">
+    /// Если ось не ведёт вперёд-назад, точки лежат на разных плоскостях либо
+    /// луч вырожден в точку.
+    /// </exception>
+    public static Biomarker CallosalAngle(
+        IVoxelVolume volume,
+        VolumeAxis coronalAcross,
+        VoxelPosition vertex,
+        VoxelPosition first,
+        VoxelPosition second,
+        MeasurementQuality quality = MeasurementQuality.Reliable)
+    {
+        ArgumentNullException.ThrowIfNull(volume);
+
+        var direction = PatientOrientation.Of(
+            PlaneAddressing.NormalOf(volume.Geometry, coronalAcross));
+
+        if (direction is not (AnatomicalDirection.Anterior or AnatomicalDirection.Posterior))
+        {
+            throw new DomainRuleViolationException(
+                $"Biomarker '{CallosalAngleCode}' is defined on the coronal plane, but the planes across {coronalAcross} are not coronal.");
+        }
+
+        RequireSamePlane(CallosalAngleCode, coronalAcross, vertex, first, second);
 
         return Biomarker.Create(
             new MeasurementMethod
@@ -253,9 +339,6 @@ public static class LinearBiomarkers
         }
     }
 
-    private static void RequireSameSlice(string code, params VoxelPosition[] positions) =>
-        RequireSamePlane(code, VolumeAxis.AcrossSlices, positions);
-
     private static void RequireSamePlane(string code, VolumeAxis axis, params VoxelPosition[] positions)
     {
         var plane = CoordinateAlong(positions[0], axis);
@@ -280,11 +363,6 @@ public static class LinearBiomarkers
         _ => throw new ArgumentOutOfRangeException(nameof(axis)),
     };
 
-    private static SpatialVector DirectionAcross(SeriesGeometry geometry, VolumeAxis axis) => axis switch
-    {
-        VolumeAxis.AcrossSlices => geometry.SliceNormal,
-        VolumeAxis.AcrossRows => geometry.ColumnDirection,
-        VolumeAxis.AcrossColumns => geometry.RowDirection,
-        _ => throw new ArgumentOutOfRangeException(nameof(axis)),
-    };
+    private static SpatialVector DirectionAcross(SeriesGeometry geometry, VolumeAxis axis) =>
+        PlaneAddressing.NormalOf(geometry, axis);
 }

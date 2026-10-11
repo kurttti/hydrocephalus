@@ -12,6 +12,17 @@ public readonly record struct ManualMeasurement(
     double? HeadRotationDegrees,
     DateTimeOffset RecordedAt);
 
+/// <summary>Ручной угол мозолистого тела одного исследования.</summary>
+/// <param name="Degrees">Угол, отмеченный врачом.</param>
+/// <param name="PlanePitchDegrees">Наклон плоскости разметки вперёд-назад; null, если не записан.</param>
+/// <param name="PlaneYawDegrees">Поворот плоскости разметки влево-вправо; null, если не записан.</param>
+/// <param name="RecordedAt">Момент версии отчёта, из которой взято измерение.</param>
+public readonly record struct ManualAngle(
+    double Degrees,
+    double? PlanePitchDegrees,
+    double? PlaneYawDegrees,
+    DateTimeOffset RecordedAt);
+
 /// <summary>
 /// Что уже измерено врачом, по хранилищу отчётов.
 ///
@@ -39,6 +50,15 @@ public static class ManualMeasurementIndex
     /// <summary>Код метода поворота головы в отчёте.</summary>
     public const string HeadRotationCode = "head-rotation-in-plane";
 
+    /// <summary>Код метода ручного угла мозолистого тела в отчёте.</summary>
+    public const string ManualCallosalAngleCode = "callosal-angle-manual";
+
+    /// <summary>Код метода наклона плоскости разметки вперёд-назад в отчёте.</summary>
+    public const string CoronalPlanePitchCode = "coronal-plane-pitch";
+
+    /// <summary>Код метода поворота плоскости разметки влево-вправо в отчёте.</summary>
+    public const string CoronalPlaneYawCode = "coronal-plane-yaw";
+
     /// <summary>
     /// Читает хранилище отчётов.
     /// </summary>
@@ -46,8 +66,13 @@ public static class ManualMeasurementIndex
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>
     /// Ручные и автоматические измерения по псевдониму исследования. Если
-    /// хранилища нет, оба словаря пусты: измерений ещё не было — это утверждение,
+    /// хранилища нет, словари пусты: измерений ещё не было — это утверждение,
     /// а не отсутствие сведений.
+    ///
+    /// Угол мозолистого тела отслеживается **отдельно от индекса Эванса**, а не
+    /// полем в той же записи. Он меряется на другой серии — корональной, а
+    /// ранжирование выбирает для анализа аксиальную, — то есть ложится другой
+    /// версией отчёта, и самой свежей версии с индексом в ней может не быть.
     /// </returns>
     public static async Task<MeasurementReadout> ReadAsync(
         string reportRoot,
@@ -57,11 +82,12 @@ public static class ManualMeasurementIndex
 
         var manual = new Dictionary<string, ManualMeasurement>(StringComparer.Ordinal);
         var automatic = new Dictionary<string, double>(StringComparer.Ordinal);
+        var angles = new Dictionary<string, ManualAngle>(StringComparer.Ordinal);
         var unreadable = 0;
 
         if (!Directory.Exists(reportRoot))
         {
-            return new MeasurementReadout(manual, automatic, unreadable);
+            return new MeasurementReadout(manual, automatic, angles, unreadable);
         }
 
         foreach (var studyDirectory in Directory.EnumerateDirectories(reportRoot))
@@ -100,10 +126,21 @@ public static class ManualMeasurementIndex
                 {
                     automatic[studyId] = value;
                 }
+
+                if (version.Angle is { } angle
+                    && (!angles.TryGetValue(studyId, out var measured)
+                        || version.CreatedAt > measured.RecordedAt))
+                {
+                    angles[studyId] = new ManualAngle(
+                        angle,
+                        version.Pitch,
+                        version.Yaw,
+                        version.CreatedAt);
+                }
             }
         }
 
-        return new MeasurementReadout(manual, automatic, unreadable);
+        return new MeasurementReadout(manual, automatic, angles, unreadable);
     }
 
     private static Version Read(byte[] content)
@@ -123,6 +160,9 @@ public static class ManualMeasurementIndex
         double? manual = null;
         double? automatic = null;
         double? rotation = null;
+        double? angle = null;
+        double? pitch = null;
+        double? yaw = null;
 
         if (root.TryGetProperty("biomarkers", out var biomarkers))
         {
@@ -146,27 +186,41 @@ public static class ManualMeasurementIndex
                     case HeadRotationCode:
                         rotation = value;
                         break;
+                    case ManualCallosalAngleCode:
+                        angle = value;
+                        break;
+                    case CoronalPlanePitchCode:
+                        pitch = value;
+                        break;
+                    case CoronalPlaneYawCode:
+                        yaw = value;
+                        break;
                     default:
                         break;
                 }
             }
         }
 
-        return new Version(moment, manual, automatic, rotation);
+        return new Version(moment, manual, automatic, rotation, angle, pitch, yaw);
     }
 
     private readonly record struct Version(
         DateTimeOffset CreatedAt,
         double? Evans,
         double? Automatic,
-        double? Rotation);
+        double? Rotation,
+        double? Angle,
+        double? Pitch,
+        double? Yaw);
 }
 
 /// <summary>Что нашлось в хранилище отчётов.</summary>
-/// <param name="Manual">Ручные измерения по псевдониму исследования.</param>
+/// <param name="Manual">Ручные индексы Эванса по псевдониму исследования.</param>
 /// <param name="Automatic">Автоматические индексы по псевдониму исследования.</param>
+/// <param name="CallosalAngle">Ручные углы мозолистого тела по псевдониму исследования.</param>
 /// <param name="UnreadableReports">Сколько файлов отчётов прочитать не удалось.</param>
 public sealed record MeasurementReadout(
     IReadOnlyDictionary<string, ManualMeasurement> Manual,
     IReadOnlyDictionary<string, double> Automatic,
+    IReadOnlyDictionary<string, ManualAngle> CallosalAngle,
     int UnreadableReports);

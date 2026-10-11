@@ -4,8 +4,12 @@ using Hydrocephalus.Infrastructure.Reporting;
 // Сведение ручных измерений по группам сравнения.
 //
 // Отвечает на вопрос, ради которого собиралась выборка: различаются ли группы по
-// индексу Эванса. И на второй, не менее нужный: насколько автоматический индекс
-// сходится с измеренным врачом — на тех исследованиях, где есть оба.
+// индексу Эванса и по углу мозолистого тела. И на второй, не менее нужный:
+// насколько автоматический индекс сходится с измеренным врачом — на тех
+// исследованиях, где есть оба.
+//
+// Угол сводится отдельной таблицей, а не колонкой в таблице индекса: он меряется
+// на другой серии, и наборы измеренных исследований у них разные.
 //
 // Чтение набора и чтение отчётов живут в инфраструктуре: тем же кодом ведёт
 // рабочий список измерений просмотрщик, и две копии правил разошлись бы молча.
@@ -37,6 +41,7 @@ var readout = await ManualMeasurementIndex.ReadAsync(reportRoot, CancellationTok
 Console.WriteLine($"в наборе исследований: {manifest.Studies.Count}");
 Console.WriteLine($"исследований с ручным измерением: {readout.Manual.Count}");
 Console.WriteLine($"исследований с автоматическим индексом: {readout.Automatic.Count}");
+Console.WriteLine($"исследований с ручным углом мозолистого тела: {readout.CallosalAngle.Count}");
 
 if (readout.UnreadableReports > 0)
 {
@@ -103,6 +108,86 @@ if (rotations.Count > 0)
     Console.WriteLine(
         $"n {rotations.Count}, медиана {Quantile(rotations, 0.50):0.0}, "
         + $"P95 {Quantile(rotations, 0.95):0.0}, максимум {rotations[^1]:0.0}");
+}
+
+// Угол: свой набор строк по той же причине, по которой он отслеживается
+// отдельно в хранилище — измеренные по углу и по индексу исследования не
+// совпадают, и строка с пустым углом сдвинула бы медианы индекса.
+var angleRows = manifest.Studies
+    .Select(study => (
+        Study: study,
+        Angle: Find<ManualAngle>(
+            study,
+            key => readout.CallosalAngle.TryGetValue(key, out var found) ? found : null)))
+    .Where(row => row.Angle is not null)
+    .ToList();
+
+if (angleRows.Count > 0)
+{
+    Console.WriteLine();
+    Console.WriteLine("=== Угол мозолистого тела по группам, градусы ===");
+    Console.WriteLine("группа            n   медиана   P25     P75     мин     макс    ≤90°");
+
+    foreach (var group in angleRows
+        .GroupBy(row => row.Study.Group, StringComparer.Ordinal)
+        .OrderBy(group => group.Key, StringComparer.Ordinal))
+    {
+        var perSubject = group
+            .GroupBy(row => row.Study.PseudonymousSubjectId, StringComparer.Ordinal)
+            .Select(subject => subject
+                .OrderByDescending(row => row.Angle!.Value.RecordedAt)
+                .First()
+                .Angle!.Value.Degrees)
+            .OrderBy(value => value)
+            .ToList();
+
+        Console.WriteLine(
+            $"{group.Key,-16} {perSubject.Count,3}   "
+            + $"{Quantile(perSubject, 0.50),-8:0.0}{Quantile(perSubject, 0.25),-8:0.0}"
+            + $"{Quantile(perSubject, 0.75),-8:0.0}{perSubject[0],-8:0.0}"
+            + $"{perSubject[^1],-8:0.0}{perSubject.Count(value => value <= 90.0),3}");
+    }
+
+    // Наклон плоскости печатается рядом с углом, а не прячется в отчётах:
+    // отклонение от истинной корональной на ±5-10 градусов значимо меняет угол
+    // у больных иНТГ и незначимо у здоровых, а по описи серий набора медиана
+    // отклонения различается между группами (docs/ml/README.md). Без этой
+    // таблицы разность медиан угла нельзя отличить от разности протоколов.
+    var tilts = angleRows
+        .Where(row => row.Angle!.Value.PlanePitchDegrees is not null)
+        .ToList();
+
+    if (tilts.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Наклон плоскости измерения по модулю, градусы ===");
+        Console.WriteLine("группа            n   медиана   макс    свыше 10°");
+
+        foreach (var group in tilts
+            .GroupBy(row => row.Study.Group, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal))
+        {
+            // По пациенту, а не по исследованию: счёт здесь обязан совпадать
+            // с таблицей угла, иначе два n в одном выводе значат разное.
+            var values = group
+                .GroupBy(row => row.Study.PseudonymousSubjectId, StringComparer.Ordinal)
+                .Select(subject => subject
+                    .OrderByDescending(row => row.Angle!.Value.RecordedAt)
+                    .First())
+                .Select(row => Math.Abs(row.Angle!.Value.PlanePitchDegrees!.Value))
+                .OrderBy(value => value)
+                .ToList();
+
+            Console.WriteLine(
+                $"{group.Key,-16} {values.Count,3}   "
+                + $"{Quantile(values, 0.50),-8:0.0}{values[^1],-8:0.0}"
+                + $"{values.Count(value => value > 10.0),3}");
+        }
+
+        Console.WriteLine(
+            "Сравнивать углы между группами можно только с учётом этой таблицы: "
+            + "порог отклонения назначается до счёта, а не после.");
+    }
 }
 
 var pairs = rows

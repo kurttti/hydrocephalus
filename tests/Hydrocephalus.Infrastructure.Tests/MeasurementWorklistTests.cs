@@ -177,6 +177,81 @@ public sealed class MeasurementWorklistTests : IDisposable
         Assert.Null(worklist!.NextUnmeasured(afterDirectory: null));
     }
 
+    [Fact]
+    public async Task The_angle_is_found_even_when_the_index_lies_in_another_version()
+    {
+        // Так и будет на деле: угол меряется на корональной серии, а для анализа
+        // ранжирование выбирает аксиальную, то есть версии отчёта разные.
+        // Хранить угол полем в записи индекса значило бы терять его всякий раз,
+        // когда свежая версия несёт только индекс.
+        this.WriteReport("s1", "2026-09-30T10:00:00.0000000Z", evans: null, angle: 68.4, pitch: -11.2);
+        this.WriteReport("s1", "2026-09-30T11:00:00.0000000Z", evans: 0.33);
+
+        var readout = await ManualMeasurementIndex.ReadAsync(this.Reports, CancellationToken.None);
+
+        var measured = Assert.Contains("s1", readout.CallosalAngle);
+
+        Assert.Equal(68.4, measured.Degrees, precision: 9);
+        Assert.Equal(-11.2, measured.PlanePitchDegrees!.Value, precision: 9);
+        Assert.Equal(0.33, Assert.Contains("s1", readout.Manual).EvansIndex, precision: 9);
+    }
+
+    [Fact]
+    public async Task The_latest_angle_wins_independently_of_the_index()
+    {
+        this.WriteReport("s1", "2026-09-30T10:00:00.0000000Z", evans: null, angle: 70.0);
+        this.WriteReport("s1", "2026-09-30T12:00:00.0000000Z", evans: null, angle: 66.0);
+        this.WriteReport("s1", "2026-09-30T11:00:00.0000000Z", evans: null, angle: 68.0);
+
+        var readout = await ManualMeasurementIndex.ReadAsync(this.Reports, CancellationToken.None);
+
+        Assert.Equal(66.0, Assert.Contains("s1", readout.CallosalAngle).Degrees, precision: 9);
+    }
+
+    [Fact]
+    public async Task An_implausible_angle_is_not_a_measurement()
+    {
+        this.WriteReport(
+            "s1",
+            "2026-09-30T10:00:00.0000000Z",
+            evans: null,
+            outOfRange: true,
+            angle: 170.2);
+
+        var readout = await ManualMeasurementIndex.ReadAsync(this.Reports, CancellationToken.None);
+
+        Assert.Empty(readout.CallosalAngle);
+    }
+
+    [Fact]
+    public async Task The_two_queues_run_separately()
+    {
+        // Очередей две потому, что это два обхода набора по разным сериям, и
+        // пригодные исследования у них разные. Одна очередь на оба признака
+        // считала бы готовым исследование, у которого сделана половина.
+        await this.WriteManifestAsync(
+            ("A", "subject-1", "s1", "d1"),
+            ("A", "subject-2", "s2", "d2"));
+
+        this.WriteReport("s1", "2026-09-30T10:00:00.0000000Z", evans: 0.25);
+        this.WriteReport("s2", "2026-09-30T10:00:00.0000000Z", evans: null, angle: 72.0);
+
+        var worklist = await this.OpenAsync();
+
+        Assert.Equal(1, worklist!.CountOf(MeasurementKind.EvansIndex));
+        Assert.Equal(1, worklist.CountOf(MeasurementKind.CallosalAngle));
+
+        Assert.Equal(
+            "s2",
+            worklist.NextUnmeasured(MeasurementKind.EvansIndex, afterDirectory: null)!
+                .Value.Study.PseudonymousStudyId);
+
+        Assert.Equal(
+            "s1",
+            worklist.NextUnmeasured(MeasurementKind.CallosalAngle, afterDirectory: null)!
+                .Value.Study.PseudonymousStudyId);
+    }
+
     private string Reports => Path.Combine(this.root.FullName, "reports");
 
     private string Dataset => Path.Combine(this.root.FullName, "dataset");
@@ -207,23 +282,51 @@ public sealed class MeasurementWorklistTests : IDisposable
         await manifest.WriteAsync(this.Dataset, CancellationToken.None);
     }
 
-    private void WriteReport(string studyId, string moment, double? evans, bool outOfRange = false)
+    private void WriteReport(
+        string studyId,
+        string moment,
+        double? evans,
+        bool outOfRange = false,
+        double? angle = null,
+        double? pitch = null)
     {
         var directory = Path.Combine(this.Reports, studyId);
 
         Directory.CreateDirectory(directory);
 
-        var biomarkers = evans is null
-            ? "[]"
-            : JsonSerializer.Serialize(new[]
+        var written = new List<object>();
+
+        if (evans is not null)
+        {
+            written.Add(new
             {
-                new
-                {
-                    code = ManualMeasurementIndex.ManualEvansCode,
-                    value = evans.Value,
-                    outOfRange,
-                },
+                code = ManualMeasurementIndex.ManualEvansCode,
+                value = evans.Value,
+                outOfRange,
             });
+        }
+
+        if (angle is not null)
+        {
+            written.Add(new
+            {
+                code = ManualMeasurementIndex.ManualCallosalAngleCode,
+                value = angle.Value,
+                outOfRange,
+            });
+        }
+
+        if (pitch is not null)
+        {
+            written.Add(new
+            {
+                code = ManualMeasurementIndex.CoronalPlanePitchCode,
+                value = pitch.Value,
+                outOfRange = false,
+            });
+        }
+
+        var biomarkers = JsonSerializer.Serialize(written);
 
         File.WriteAllText(
             Path.Combine(directory, moment.Replace(":", string.Empty, StringComparison.Ordinal) + ".json"),
