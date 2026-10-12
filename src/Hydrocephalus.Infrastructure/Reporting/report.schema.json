@@ -3,6 +3,7 @@
   "$id": "https://github.com/kurttti/hydrocephalus/report.schema.json",
   "title": "Канонический отчёт анализа (ADR 0005)",
   "description": "Схема описывает версию 1.2.0 и только её. Отчёты прежних схем ей не соответствуют и не должны: поля в них другие, а восстанавливать отменённые схемы задним числом значило бы объявить действующим то, чего больше нет. Версия схемы меняется вместе с составом полей — правило связки с версионированием конвейера из CONTRIBUTING.md.",
+  "$comment": "Ограничения сверх формы записи поставлены только там, где их держит домен: вероятность класса обязана лежать в [0,1] (Prediction.Create), а отметка времени — быть в UTC с фиксированным числом знаков (формат задан записью). Длина идентификаторов, вид SHA-256 пакета и диапазон уровня доверия доменом не проверяются, и схема их не выдумывает: иначе она была бы договором строже того, что система способна соблюсти.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,7 +21,7 @@
   ],
   "properties": {
     "schemaVersion": { "const": "1.2.0" },
-    "pseudonymousStudyId": { "type": "string", "minLength": 1 },
+    "pseudonymousStudyId": { "type": "string" },
     "createdAt": { "$ref": "#/$defs/timestamp" },
     "series": {
       "oneOf": [
@@ -30,7 +31,7 @@
           "additionalProperties": false,
           "required": ["pseudonymousSeriesId", "weighting", "plane", "tier"],
           "properties": {
-            "pseudonymousSeriesId": { "type": "string", "minLength": 1 },
+            "pseudonymousSeriesId": { "type": "string" },
             "weighting": { "$ref": "#/$defs/seriesWeighting" },
             "plane": { "$ref": "#/$defs/imagingPlane" },
             "tier": { "$ref": "#/$defs/acquisitionTier" }
@@ -199,7 +200,7 @@
           "properties": {
             "name": { "type": "string" },
             "version": { "type": "string" },
-            "packageSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "packageSha256": { "type": "string" },
             "calibrationVersion": { "type": ["string", "null"] },
             "supportedClasses": {
               "type": "array",
@@ -226,7 +227,7 @@
           "properties": {
             "lowerBound": { "type": "number" },
             "upperBound": { "type": "number" },
-            "confidenceLevel": { "type": "number", "minimum": 0, "maximum": 1 }
+            "confidenceLevel": { "type": "number" }
           }
         }
       }
@@ -247,7 +248,7 @@
         "sourceLabels"
       ],
       "properties": {
-        "code": { "type": "string", "minLength": 1 },
+        "code": { "type": "string" },
         "definitionVersion": { "type": "string" },
         "requiredTier": { "$ref": "#/$defs/acquisitionTier" },
         "reference": { "type": ["string", "null"] },
