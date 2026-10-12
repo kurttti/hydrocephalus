@@ -36,6 +36,19 @@ public static class CanonicalReportJson
     public const string SchemaVersion = "1.2.0";
 
     /// <summary>
+    /// Схема канонического слоя, которой обязан соответствовать каждый
+    /// записанный отчёт (ADR 0005). Лежит ресурсом в этой же сборке: файл
+    /// рядом с ней разъехался бы с кодом записи незаметно.
+    ///
+    /// Описывает действующую версию и только её. Отчёты прежних схем ей не
+    /// соответствуют и не должны — поля в них другие.
+    ///
+    /// Не public: наружу схема пока не нужна никому, а соответствие ей
+    /// проверяется тестом внутри решения.
+    /// </summary>
+    internal static string SchemaJson { get; } = ReadSchema();
+
+    /// <summary>
     /// Формат отметок времени: UTC с фиксированным числом знаков.
     /// Локальное время сделало бы отчёт зависящим от машины, на которой он собран.
     /// </summary>
@@ -364,4 +377,17 @@ public static class CanonicalReportJson
 
     private static string Timestamp(DateTimeOffset value) =>
         value.ToUniversalTime().ToString(TimestampFormat, CultureInfo.InvariantCulture);
+
+    private static string ReadSchema()
+    {
+        const string Name = "Hydrocephalus.Infrastructure.Reporting.report.schema.json";
+
+        using var stream = typeof(CanonicalReportJson).Assembly.GetManifestResourceStream(Name)
+            ?? throw new InvalidOperationException(
+                $"The report schema resource '{Name}' is missing from the assembly.");
+
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+
+        return reader.ReadToEnd();
+    }
 }

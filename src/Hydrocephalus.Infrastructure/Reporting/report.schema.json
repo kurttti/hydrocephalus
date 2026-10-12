@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kurttti/hydrocephalus/report.schema.json",
+  "title": "Канонический отчёт анализа (ADR 0005)",
+  "description": "Схема описывает версию 1.2.0 и только её. Отчёты прежних схем ей не соответствуют и не должны: поля в них другие, а восстанавливать отменённые схемы задним числом значило бы объявить действующим то, чего больше нет. Версия схемы меняется вместе с составом полей — правило связки с версионированием конвейера из CONTRIBUTING.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "pseudonymousStudyId",
+    "createdAt",
+    "series",
+    "pipeline",
+    "quality",
+    "outcome",
+    "biomarkers",
+    "segmentation",
+    "measurement",
+    "clinicianAnnotations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.2.0" },
+    "pseudonymousStudyId": { "type": "string", "minLength": 1 },
+    "createdAt": { "$ref": "#/$defs/timestamp" },
+    "series": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pseudonymousSeriesId", "weighting", "plane", "tier"],
+          "properties": {
+            "pseudonymousSeriesId": { "type": "string", "minLength": 1 },
+            "weighting": { "$ref": "#/$defs/seriesWeighting" },
+            "plane": { "$ref": "#/$defs/imagingPlane" },
+            "tier": { "$ref": "#/$defs/acquisitionTier" }
+          }
+        }
+      ]
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preprocessingVersion",
+        "featureSchemaVersion",
+        "labelMapVersion",
+        "applicationCommitSha"
+      ],
+      "properties": {
+        "preprocessingVersion": { "type": "string" },
+        "featureSchemaVersion": { "type": "string" },
+        "labelMapVersion": { "type": "string" },
+        "applicationCommitSha": { "type": "string" }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptable", "issues"],
+      "properties": {
+        "acceptable": { "type": "boolean" },
+        "issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } }
+      }
+    },
+    "outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "prediction"],
+          "properties": {
+            "kind": { "const": "completed" },
+            "prediction": { "$ref": "#/$defs/prediction" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "refusal"],
+          "properties": {
+            "kind": { "const": "refused" },
+            "refusal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "contributingIssues"],
+              "properties": {
+                "code": { "$ref": "#/$defs/refusalCode" },
+                "contributingIssues": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/issue" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "biomarkers": { "type": "array", "items": { "$ref": "#/$defs/biomarker" } },
+    "segmentation": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "labelMapVersion",
+            "maskReference",
+            "passedGeometricQualityControl",
+            "labels"
+          ],
+          "properties": {
+            "labelMapVersion": { "type": "string" },
+            "maskReference": { "type": "string" },
+            "passedGeometricQualityControl": { "type": "boolean" },
+            "labels": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "measurement": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "labelMapVersion",
+            "maskQuality",
+            "refusal",
+            "segmentationIssues"
+          ],
+          "properties": {
+            "labelMapVersion": { "type": "string" },
+            "maskQuality": { "$ref": "#/$defs/measurementQuality" },
+            "refusal": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/measurementRefusal" }
+              ]
+            },
+            "segmentationIssues": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/issue" }
+            }
+          }
+        }
+      ]
+    },
+    "clinicianAnnotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pseudonymousAuthorId", "createdAt", "text"],
+        "properties": {
+          "pseudonymousAuthorId": { "type": "string" },
+          "createdAt": { "$ref": "#/$defs/timestamp" },
+          "text": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "description": "UTC с фиксированным числом знаков. Проверяется образцом, а не ключевым словом format: в версии 2020-12 format по умолчанию только аннотация и не проверяет ничего, то есть локальное время прошло бы.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{7}Z$"
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "parameters"],
+      "properties": {
+        "code": { "$ref": "#/$defs/qualityIssueCode" },
+        "severity": { "$ref": "#/$defs/qualityIssueSeverity" },
+        "parameters": {
+          "description": "Единственный объект с незакрытым составом ключей: набор параметров зависит от проблемы и перечислению не подлежит. Значения — строки: отчёт несёт коды и величины как записаны, а не разобранные числа.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "probabilities", "uncertainty"],
+      "properties": {
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "packageSha256",
+            "calibrationVersion",
+            "supportedClasses"
+          ],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "packageSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "calibrationVersion": { "type": ["string", "null"] },
+            "supportedClasses": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "probabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["class", "value"],
+            "properties": {
+              "class": { "type": "string" },
+              "value": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "uncertainty": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lowerBound", "upperBound", "confidenceLevel"],
+          "properties": {
+            "lowerBound": { "type": "number" },
+            "upperBound": { "type": "number" },
+            "confidenceLevel": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "biomarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "definitionVersion",
+        "requiredTier",
+        "reference",
+        "value",
+        "unit",
+        "quality",
+        "allowedRange",
+        "outOfRange",
+        "sourceLabels"
+      ],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "definitionVersion": { "type": "string" },
+        "requiredTier": { "$ref": "#/$defs/acquisitionTier" },
+        "reference": { "type": ["string", "null"] },
+        "value": { "type": "number" },
+        "unit": { "$ref": "#/$defs/measurementUnit" },
+        "quality": { "$ref": "#/$defs/measurementQuality" },
+        "allowedRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum"],
+          "properties": {
+            "minimum": { "type": "number" },
+            "maximum": { "type": "number" }
+          }
+        },
+        "outOfRange": { "type": "boolean" },
+        "sourceLabels": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "seriesWeighting": { "enum": ["Unknown", "T1", "T2", "Flair"] },
+    "imagingPlane": { "enum": ["Unknown", "Axial", "Coronal", "Sagittal"] },
+    "acquisitionTier": { "enum": ["Unusable", "Baseline", "Extended"] },
+    "measurementQuality": {
+      "enum": ["Unspecified", "Reliable", "Questionable", "Unreliable"]
+    },
+    "measurementUnit": {
+      "enum": ["Unspecified", "Millimetre", "Millilitre", "Degree", "Ratio"]
+    },
+    "measurementRefusal": {
+      "enum": [
+        "Unspecified",
+        "WeightingNotRecognised",
+        "NotAHead",
+        "SeriesUnreadable",
+        "SegmentationRefused",
+        "WeightingNotSupported",
+        "AxesNotAligned",
+        "FrontalHornsNotFound",
+        "InnerSkullNotFound"
+      ]
+    },
+    "qualityIssueCode": {
+      "enum": [
+        "Unspecified",
+        "InconsistentGeometry",
+        "UnsupportedVoxelGeometry",
+        "AcquisitionTierTooLow",
+        "MotionArtefact",
+        "HeadTruncated",
+        "ContrastEnhancedSeries",
+        "BurnedInAnnotation",
+        "ImplausibleMetadata",
+        "OutOfDistribution",
+        "NotAHeadStudy"
+      ]
+    },
+    "qualityIssueSeverity": { "enum": ["Unspecified", "Warning", "Blocking"] },
+    "refusalCode": {
+      "enum": [
+        "Unspecified",
+        "QualityControlFailed",
+        "InsufficientAcquisitionTier",
+        "OutOfDistribution",
+        "ModelPackageUnusable",
+        "CancelledByUser"
+      ]
+    }
+  }
+}
