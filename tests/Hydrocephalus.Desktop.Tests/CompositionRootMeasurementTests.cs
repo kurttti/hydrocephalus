@@ -142,9 +142,13 @@ public sealed class CompositionRootMeasurementTests : IDisposable
         var index = await this.composition!
             .RecordMeasurementAsync(Index(opened.View.Volume), CancellationToken.None);
 
+        // Сверка с показанной серией, а не с серией отчёта: отчёт здесь —
+        // прежний, с дописанным измерением, и сравнение его с самим собой
+        // прошло бы при любой серии.
         Assert.Equal(
-            opened.Report.Series!.PseudonymousSeriesId,
+            opened.Analysed.Analysed.PseudonymousSeriesId,
             index.Series!.PseudonymousSeriesId);
+        Assert.Equal(ImagingPlane.Axial, index.Series.Plane);
 
         var coronal = await this.ShowCoronalAsync();
 
@@ -154,6 +158,20 @@ public sealed class CompositionRootMeasurementTests : IDisposable
                 item.Method.Code,
                 LinearBiomarkers.ManualEvansIndexCode,
                 StringComparison.Ordinal));
+
+        // И на диске — тоже за аксиальной: переключение серии прежнюю версию
+        // отчёта не правит.
+        var readout = await ManualMeasurementIndex.ReadAsync(
+            ApplicationPaths.UnderRoot(this.root.FullName).ReportRoot,
+            CancellationToken.None);
+
+        var stored = Assert.Contains(opened.Report.PseudonymousStudyId, readout.Manual);
+
+        Assert.NotNull(stored.Series);
+        Assert.Equal(
+            opened.Analysed.Analysed.PseudonymousSeriesId,
+            stored.Series!.Value.PseudonymousSeriesId);
+        Assert.Equal(nameof(ImagingPlane.Axial), stored.Series.Value.Plane);
     }
 
     private async Task<OpenedStudy> OpenAsync()
