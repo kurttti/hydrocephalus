@@ -158,12 +158,23 @@ public sealed class CompositionRoot : IDisposable
     /// </summary>
     /// <param name="paths">Расположение локальных каталогов.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
+    /// <param name="settingsDirectory">
+    /// Каталог с файлами настроек установки — ролью и сроком хранения.
+    /// По умолчанию каталог исполняемого файла, как и задумано: настройки
+    /// пишет тот, кто разворачивает приложение. Параметр существует ради
+    /// сценарных тестов: иначе проверить сборку целиком можно было бы, только
+    /// подложив файл роли рядом со сборкой тестов, то есть сделав результат
+    /// одного теста зависящим от соседних.
+    /// </param>
     /// <returns>Собранное приложение.</returns>
     public static async Task<CompositionRoot> CreateAsync(
         ApplicationPaths paths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? settingsDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
+
+        var settings = settingsDirectory ?? AppContext.BaseDirectory;
 
         // Соль читается или создаётся до всего остального: без неё импорт
         // не может построить ни одного псевдонима, и запускаться незачем.
@@ -215,7 +226,7 @@ public sealed class CompositionRoot : IDisposable
 
         // Срок хранения задаёт тот, кто разворачивает приложение, — рядом
         // с ролью и тем же способом. Значение по умолчанию остаётся 24 часа.
-        var retention = RetentionSettings.Read(AppContext.BaseDirectory);
+        var retention = RetentionSettings.Read(settings);
 
         // Уборка до начала любой новой работы: осиротевшие рабочие копии
         // от прерванных сеансов сами не исчезнут — сеанс, который должен был
@@ -283,7 +294,7 @@ public sealed class CompositionRoot : IDisposable
         // Файл настроек лежит рядом с исполняемым файлом, а не в профиле
         // пользователя: роль задаёт тот, кто разворачивает приложение, и она
         // не должна меняться от того, под кем оно запущено.
-        var actor = ActorSettings.Read(AppContext.BaseDirectory);
+        var actor = ActorSettings.Read(settings);
 
         return new CompositionRoot(
             useCase,
