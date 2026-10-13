@@ -28,6 +28,16 @@ namespace Hydrocephalus.Desktop;
 /// </summary>
 public partial class MainWindow : Window
 {
+    /// <summary>
+    /// Во сколько раз шире прочих показывается плоскость разметки. Два: при
+    /// трёх видах размечаемый занимает половину ширины, а соседние остаются
+    /// достаточно крупными, чтобы по ним читать уровень среза.
+    /// </summary>
+    private const double MarkedPlaneShare = 2.0;
+
+    /// <summary>Разметки нет — выделять нечего.</summary>
+    private const int NoColumn = -1;
+
     private static readonly SolidColorBrush HeadingBrush = new(Color.FromRgb(0x9A, 0x9A, 0xA6));
 
     private static readonly SolidColorBrush NoteBrush = new(Color.FromRgb(0x86, 0x86, 0x94));
@@ -926,6 +936,7 @@ public partial class MainWindow : Window
             this.RulerUndo.IsEnabled = false;
             this.RulerReset.IsEnabled = false;
             this.RulerRecord.IsEnabled = false;
+            this.EmphasiseMarkedPlane();
 
             return;
         }
@@ -936,6 +947,7 @@ public partial class MainWindow : Window
         this.AngleToggle.IsChecked = false;
 
         this.marking = new ManualEvansMarking(axial.View.Axis);
+        this.EmphasiseMarkedPlane();
         this.RulerText.Visibility = Visibility.Visible;
         this.ShowMarkingState("Отметьте два конца внутреннего диаметра черепа — они задают ось, — затем два конца ширины передних рогов.");
     }
@@ -1147,6 +1159,7 @@ public partial class MainWindow : Window
             this.AngleUndo.IsEnabled = false;
             this.AngleReset.IsEnabled = false;
             this.AngleRecord.IsEnabled = false;
+            this.EmphasiseMarkedPlane();
 
             return;
         }
@@ -1154,6 +1167,7 @@ public partial class MainWindow : Window
         this.RulerToggle.IsChecked = false;
 
         this.angleMarking = new ManualCallosalAngleMarking(coronal.View.Axis);
+        this.EmphasiseMarkedPlane();
         this.AngleText.Visibility = Visibility.Visible;
         this.ShowAngleState("Отметьте вершину угла на средней линии, затем по одной точке на крыше каждого бокового желудочка. Порядок крыш не важен.");
     }
@@ -1222,6 +1236,35 @@ public partial class MainWindow : Window
         this.surfaces.FirstOrDefault(surface => surface.View.Plane == ImagingPlane.Coronal);
 
     /// <summary>
+    /// Отдаёт плоскости, на которой размечают, больше места; без включённого
+    /// инструмента виды снова делят ширину поровну.
+    ///
+    /// Точку ставят по пикселю, и цена промаха задаётся масштабом показа.
+    /// Остальные виды не убираются и не сворачиваются: по ним видно, на каком
+    /// уровне лежит размечаемый срез, и без них точка ставится вслепую.
+    ///
+    /// Толстосрезовая серия не трогается: там показан один вид во всю ширину,
+    /// делить нечего.
+    /// </summary>
+    private void EmphasiseMarkedPlane()
+    {
+        var marked = this.marking is not null
+            ? this.AxialSurface()
+            : this.angleMarking is not null ? this.CoronalSurface() : null;
+
+        var emphasised = marked is null || this.study?.IsThickSliced == true
+            ? NoColumn
+            : Grid.GetColumn(marked.Root);
+
+        for (var column = 0; column < this.PlaneGrid.ColumnDefinitions.Count; column++)
+        {
+            this.PlaneGrid.ColumnDefinitions[column].Width = new GridLength(
+                column == emphasised ? MarkedPlaneShare : 1.0,
+                GridUnitType.Star);
+        }
+    }
+
+    /// <summary>
     /// Возвращает оба инструмента разметки в исходное состояние.
     ///
     /// Одним методом на двоих потому, что расходиться им нельзя: разметку
@@ -1249,6 +1292,10 @@ public partial class MainWindow : Window
         this.AngleUndo.IsEnabled = false;
         this.AngleReset.IsEnabled = false;
         this.AngleRecord.IsEnabled = false;
+
+        // Снятые переключатели события не дают, если они и так были сняты,
+        // поэтому доли возвращаются здесь, а не только обработчиками.
+        this.EmphasiseMarkedPlane();
     }
 
     /// <summary>
