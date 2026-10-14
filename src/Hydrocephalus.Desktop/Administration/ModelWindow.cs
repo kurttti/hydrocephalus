@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Hydrocephalus.Application;
@@ -64,6 +64,8 @@ public sealed class ModelWindow : Window
         this.Background = SectionPanel.Background;
         this.FontSize = 13;
         this.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        DarkTitleBar.ApplyWhenShown(this);
 
         this.versions = new ListBox
         {

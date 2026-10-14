@@ -25,13 +25,20 @@ internal static class DarkTitleBar
     private const int UseImmersiveDarkModeBefore20H1 = 19;
 
     /// <summary>
-    /// Применяет тёмный заголовок к окну.
+    /// Затемняет заголовок окна, как только у окна появится дескриптор.
     ///
-    /// Вызывать после создания дескриптора окна (<c>OnSourceInitialized</c>):
-    /// до этого дескриптора нет, а менять нечего.
+    /// Вызывается из конструктора окна: до показа дескриптора ещё нет, и
+    /// менять нечего, а после показа белый заголовок успел бы моргнуть.
     /// </summary>
     /// <param name="window">Окно, заголовок которого затемняется.</param>
-    internal static void Apply(Window window)
+    internal static void ApplyWhenShown(Window window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        window.SourceInitialized += (_, _) => Apply(window);
+    }
+
+    private static void Apply(Window window)
     {
         var handle = new WindowInteropHelper(window).Handle;
 

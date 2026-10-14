@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Hydrocephalus.Infrastructure.Reporting;
@@ -39,6 +39,8 @@ public sealed class ReportPreviewWindow : Window
         this.Background = new SolidColorBrush(Color.FromRgb(0x10, 0x10, 0x14));
         this.FontSize = 13;
         this.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        DarkTitleBar.ApplyWhenShown(this);
 
         var panel = new DockPanel { Margin = new Thickness(14) };
 

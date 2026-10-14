@@ -2,8 +2,63 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:Hydrocephalus.Desktop"
+             ThemeMode="Dark"
              StartupUri="MainWindow.xaml">
+
+    <!-- Тёмное оформление берётся готовым (ThemeMode): кнопки, списки,
+         переключатели и полосы прокрутки WPF рисует по светлой теме, и на
+         тёмном окне они выглядели накладкой из другого приложения. Своя
+         разметка этих органов управления — это шаблоны на сотни строк, в
+         которых легко потерять то, чего никто не проверяет глазами:
+         подчёркнутые буквы (Alt), рамку фокуса, вид выключенной кнопки.
+
+         Снимок при этом остаётся самым ярким местом экрана: органы управления
+         приглушены, и ничто рядом с изображением не светится.
+
+         Высококонтрастная тема системы этим не поддерживается — но она и
+         раньше не поддерживалась: цвета окна, панели и подписей заданы в
+         разметке числами. Требование «контрастные состояния»
+         (docs/windows/README.md) закрыто тем, что выключенное, обычное и
+         наведённое состояния различимы; настоящая поддержка высокого
+         контраста — отдельная работа, и делать вид, что она есть, хуже,
+         чем назвать её отсутствие. -->
+
     <Application.Resources>
-         
+
+        <!-- Цвет выделения берётся не системный. Системный здесь розовый, и
+             дело не во вкусе: розовым и малиновым на снимке нарисован
+             внутренний диаметр черепа, а оранжевым и зелёным — разбор метода.
+             Цвет, которым подсвечен флажок, не должен значить то же, что цвет
+             на изображении. Приглушённый синий отличается и от яркого синего
+             маркера ширины рогов (80,160,255), и от жёлтого предупреждения,
+             и от красного препятствия. -->
+        <!-- Названы и общие ключи, и частные. Общего мало: тема раздаёт цвет
+             флажку и ползунку своими ключами, и подменять приходится их, а не
+             один корневой. -->
+        <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#4C7C9B" />
+        <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#5B8CAC" />
+        <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#3F6A85" />
+        <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#36363F" />
+
+        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#4C7C9B" />
+        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#5B8CAC" />
+        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="#3F6A85" />
+        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeChecked" Color="#4C7C9B" />
+        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPointerOver" Color="#5B8CAC" />
+        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPressed" Color="#3F6A85" />
+
+        <SolidColorBrush x:Key="SliderThumbBackground" Color="#4C7C9B" />
+        <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#5B8CAC" />
+        <SolidColorBrush x:Key="SliderOuterThumbBackground" Color="#4C7C9B" />
+        <SolidColorBrush x:Key="SliderTrackFill" Color="#4C7C9B" />
+        <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="#5B8CAC" />
+
+        <SolidColorBrush x:Key="ComboBoxItemPillFillBrush" Color="#4C7C9B" />
+
+        <!-- Рамка фокуса светлая: по ней ведут клавиатурную навигацию, а
+             требование работать без мыши стоит в docs/windows/README.md.
+             Цветной рамке пришлось бы соперничать за внимание со снимком. -->
+        <SolidColorBrush x:Key="FocusStrokeColorOuterBrush" Color="#E6E6EA" />
+
     </Application.Resources>
 </Application>

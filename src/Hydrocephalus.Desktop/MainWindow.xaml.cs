@@ -95,17 +95,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         this.InitializeComponent();
-    }
 
-    /// <summary>
-    /// Затемняет системный заголовок, как только у окна появился дескриптор.
-    /// </summary>
-    /// <param name="e">Сведения о событии.</param>
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-
-        DarkTitleBar.Apply(this);
+        DarkTitleBar.ApplyWhenShown(this);
     }
 
     private static App Current => (App)System.Windows.Application.Current;
