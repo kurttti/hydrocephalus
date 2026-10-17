@@ -30,6 +30,8 @@
 | [0006](0006-local-encryption-retention.md) | Локальное шифрование и политика удаления | proposed |
 | [0007](0007-viewer-rendering.md) | Визуализатор серий и оверлеев | proposed |
 | [0008](0008-model-update-rollback.md) | Стратегия обновления model package и rollback | proposed |
+| [0009](0009-pretrained-ventricle-model.md) | Внешняя предобученная модель сегментации желудочков | accepted (19.09.2026) |
+| [0010](0010-thick-slice-feature-set.md) | Признаки классификатора на рутинных сериях, объёмные — необязательный слой | proposed |
 
 Все восемь находятся в статусе `proposed` и требуют утверждения: ADR 0003 и 0006 дополнительно проходят privacy review, ADR 0005, 0007 и 0008 — согласование с клинической командой.
 
