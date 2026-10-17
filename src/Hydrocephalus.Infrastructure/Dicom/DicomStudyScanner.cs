@@ -221,6 +221,13 @@ public sealed class DicomStudyScanner
     {
         var byStudy = new Dictionary<(string StudyUid, string SubjectId), List<ImagingSeries>>();
 
+        // Возраст и пол стоят в каждом файле, но не всегда и не везде одинаково:
+        // берётся первое названное значение по исследованию, а не значение
+        // первой серии, иначе серия с пустым тегом обнулила бы ковариату на всё
+        // исследование.
+        var characteristics =
+            new Dictionary<(string StudyUid, string SubjectId), PatientCharacteristics>();
+
         foreach (var builder in builders)
         {
             var series = builder.Build(findings);
@@ -233,6 +240,12 @@ public sealed class DicomStudyScanner
             }
 
             list.Add(series);
+
+            var known = characteristics.GetValueOrDefault(key, PatientCharacteristics.None);
+
+            characteristics[key] = new PatientCharacteristics(
+                known.AgeYears ?? builder.Characteristics.AgeYears,
+                known.Sex ?? builder.Characteristics.Sex);
         }
 
         return byStudy
@@ -241,6 +254,8 @@ public sealed class DicomStudyScanner
                 PseudonymousStudyId = entry.Key.StudyUid,
                 PseudonymousSubjectId = entry.Key.SubjectId,
                 Series = entry.Value,
+                PatientAgeYears = characteristics[entry.Key].AgeYears,
+                PatientSex = characteristics[entry.Key].Sex,
             })
             .ToList();
     }
@@ -275,11 +290,18 @@ public sealed class DicomStudyScanner
                 first.GetSingleValueOrDefault(DicomTag.PatientName, string.Empty),
                 first.GetSingleValueOrDefault(DicomTag.PatientBirthDate, string.Empty),
                 first.GetSingleValueOrDefault(DicomTag.StudyInstanceUID, string.Empty));
+
+            // Читается здесь, на исходном файле: дату рождения обезличивание
+            // удаляет, а дату исследования сдвигает, и по копии возраст
+            // восстановить уже нечем.
+            this.Characteristics = PatientCharacteristics.Read(first);
         }
 
         internal string StudyInstanceUid { get; }
 
         internal string PseudonymousSubjectId { get; }
+
+        internal PatientCharacteristics Characteristics { get; }
 
         internal string PseudonymousSeriesId => Pseudonyms.Derive(
             this.options.PseudonymSalt,

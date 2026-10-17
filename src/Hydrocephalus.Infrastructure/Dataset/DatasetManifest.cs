@@ -98,6 +98,20 @@ public sealed record DatasetStudy
     /// <summary>Псевдоним исследования, который выходит при разборе самой копии.</summary>
     public required string? DerivedStudyId { get; init; }
 
+    /// <summary>
+    /// Полных лет на момент исследования либо <see langword="null"/>, если
+    /// источник возраста не называл; 90 означает «столько или больше».
+    ///
+    /// Поле необязательное: манифесты, собранные до 2026-10-17, его не имеют, и
+    /// читаться они должны по-прежнему. Возраст привязан к исследованию, а не к
+    /// пациенту: у части пациентов иНТГ исследований несколько, и сделаны они в
+    /// разные годы.
+    /// </summary>
+    public int? AgeYears { get; init; }
+
+    /// <summary>Пол: «M», «F», «O» либо <see langword="null"/>.</summary>
+    public string? Sex { get; init; }
+
     /// <summary>Серии, вошедшие в набор.</summary>
     public required IReadOnlyList<DatasetSeries> Series { get; init; }
 

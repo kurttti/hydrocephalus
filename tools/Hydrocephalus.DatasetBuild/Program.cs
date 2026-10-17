@@ -41,7 +41,8 @@ var groups = new List<(string Group, string Root)>();
 
 foreach (var argument in args)
 {
-    if (string.Equals(argument, "--overwrite", StringComparison.Ordinal))
+    if (string.Equals(argument, "--overwrite", StringComparison.Ordinal)
+        || string.Equals(argument, "--demographics-only", StringComparison.Ordinal))
     {
         continue;
     }
@@ -82,6 +83,141 @@ var datasetRoot = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
     "Hydrocephalus",
     "dataset");
+
+// Возраст и пол — отдельный проход по тем же источникам, без записи файлов.
+//
+// Зачем отдельно. Поля нужны как ковариаты сравнения групп (возраст — главный
+// конфаундер размера желудочков), а пересборка набора ради них обошлась бы
+// дороже, чем стоит: она вернула бы исключённые решениями владельца данных
+// исследования, переписала бы все хеши файлов и оборвала бы ссылки папки
+// просмотра. Поэтому проход читает источник, ничего не пишет в файлы набора и
+// дополняет только манифест, сводя записи по исходному псевдониму исследования.
+//
+// В сами файлы возраст и пол не попадают: профиль обезличивания удаляет
+// (0010,1010) и (0010,0040) по-прежнему.
+if (args.Contains("--demographics-only", StringComparer.Ordinal))
+{
+    var existing = await DatasetManifest.ReadAsync(datasetRoot, CancellationToken.None);
+
+    if (existing is null)
+    {
+        Console.Error.WriteLine("Манифеста рядом с набором нет: дополнять нечего.");
+
+        return 2;
+    }
+
+    var scanOptions = new DicomImportOptions
+    {
+        PseudonymSalt = salt,
+        MaxFileCount = 1_000_000,
+    };
+
+    var found = new Dictionary<string, (int? Age, string? Sex)>(StringComparer.Ordinal);
+    var unreadable = 0;
+
+    foreach (var (group, root) in groups)
+    {
+        var patients = Directory.EnumerateDirectories(root)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        Console.WriteLine($"{group}: каталогов пациентов {patients.Count}");
+
+        foreach (var folder in patients)
+        {
+            DicomScanResult result;
+
+            try
+            {
+                result = await new DicomStudyScanner(scanOptions)
+                    .ScanAsync(folder, CancellationToken.None);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                unreadable++;
+                continue;
+            }
+
+            foreach (var study in result.Studies)
+            {
+                // Источники пересекаются: одно и то же исследование лежит в
+                // нескольких папках. Первое названное значение и остаётся.
+                var known = found.GetValueOrDefault(study.PseudonymousStudyId);
+
+                found[study.PseudonymousStudyId] = (
+                    known.Age ?? study.PatientAgeYears,
+                    known.Sex ?? study.PatientSex);
+            }
+        }
+    }
+
+    var filled = existing.Studies
+        .Select(study =>
+        {
+            var characteristics = found.GetValueOrDefault(study.PseudonymousStudyId);
+
+            return study with
+            {
+                AgeYears = study.AgeYears ?? characteristics.Age,
+                Sex = study.Sex ?? characteristics.Sex,
+            };
+        })
+        .ToList();
+
+    await (existing with { Studies = filled }).WriteAsync(datasetRoot, CancellationToken.None);
+
+    Console.WriteLine();
+    Console.WriteLine("=== Дополнено ===");
+    Console.WriteLine($"исследований в манифесте: {filled.Count}");
+    Console.WriteLine($"из них найдено в источнике: {filled.Count(study => found.ContainsKey(study.PseudonymousStudyId))}");
+    Console.WriteLine($"возраст известен: {filled.Count(study => study.AgeYears is not null)}");
+    Console.WriteLine($"пол известен: {filled.Count(study => study.Sex is not null)}");
+
+    foreach (var group in filled.Select(study => study.Group).Distinct(StringComparer.Ordinal))
+    {
+        var studies = filled.Where(study =>
+            string.Equals(study.Group, group, StringComparison.Ordinal)).ToList();
+
+        var ages = studies
+            .Where(study => study.AgeYears is not null)
+            .Select(study => study.AgeYears!.Value)
+            .Order()
+            .ToList();
+
+        Console.WriteLine();
+        Console.WriteLine($"{group,-28} исследований {studies.Count,3}  с возрастом {ages.Count,3}");
+
+        if (ages.Count > 0)
+        {
+            var median = ages.Count % 2 == 1
+                ? ages[ages.Count / 2]
+                : (ages[(ages.Count / 2) - 1] + ages[ages.Count / 2]) / 2.0;
+
+            Console.WriteLine(
+                $"{string.Empty,-28} возраст: медиана {median.ToString("0.#", CultureInfo.InvariantCulture)}, "
+                + $"от {ages[0]} до {ages[^1]}");
+        }
+
+        foreach (var sex in studies
+            .Select(study => study.Sex ?? "не указан")
+            .GroupBy(value => value, StringComparer.Ordinal)
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"{string.Empty,-28} пол {sex.Key}: {sex.Count()}");
+        }
+    }
+
+    if (unreadable > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"каталогов не прочитано: {unreadable}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Манифест дополнен; файлы набора не менялись.");
+
+    return 0;
+}
 
 // Набор целиком выводится из источника, но существующий не дополняется молча:
 // прогон с другими именами групп оставил бы прежние рядом, и одни и те же
@@ -195,6 +331,8 @@ foreach (var (group, root) in groups)
                     PseudonymousStudyId = study.PseudonymousStudyId,
                     DerivedSubjectId = derived?.PseudonymousSubjectId,
                     DerivedStudyId = derived?.PseudonymousStudyId,
+                    AgeYears = study.PatientAgeYears,
+                    Sex = study.PatientSex,
                     Series = [.. copy.Study.Series.Select(series => new DatasetSeries
                     {
                         PseudonymousSeriesId = series.PseudonymousSeriesId,
