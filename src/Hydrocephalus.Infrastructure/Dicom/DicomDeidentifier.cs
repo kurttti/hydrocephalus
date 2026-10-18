@@ -79,11 +79,26 @@ internal sealed class DicomDeidentifier
         var secrets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var descriptive = new HashSet<string>(StringComparer.Ordinal);
         var identifying = new HashSet<string>(StringComparer.Ordinal);
+        var technical = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        CollectSecrets(source, secrets, descriptive, identifying, sources);
+        CollectSecrets(source, secrets, descriptive, identifying, technical, sources);
 
         descriptive.ExceptWith(identifying);
+
+        // Значение, которое **и в источнике** стоит в сохраняемом техническом
+        // поле, прощается при дословном повторе — даже если то же слово нашлось
+        // в поле пациента. Его присутствие в копии объясняется сохранённым
+        // тегом, а не удалённым, и уликой против обезличивания не является.
+        //
+        // Случай не выдуманный: исследование 2026-10-18 не прошло аудит из-за
+        // слова «HEAD», стоявшего разом в PatientComments (0010,4000) и в
+        // BodyPartExamined (0018,0015). Комментарий удалён, область тела
+        // сохраняется по профилю, и «HEAD» в копии — её значение.
+        //
+        // Решение владельца данных 2026-10-18; тот же довод, по которому из
+        // поиска исключены рост и вес.
+        descriptive.UnionWith(technical);
 
         var instanceId = Pseudonyms.Derive(
             this.options.PseudonymSalt,
@@ -118,6 +133,7 @@ internal sealed class DicomDeidentifier
         HashSet<string> secrets,
         HashSet<string> descriptive,
         HashSet<string> identifying,
+        HashSet<string> technical,
         Dictionary<string, string> sources)
     {
         foreach (var item in dataset)
@@ -126,7 +142,7 @@ internal sealed class DicomDeidentifier
             {
                 foreach (var child in sequence.Items)
                 {
-                    CollectSecrets(child, secrets, descriptive, identifying, sources);
+                    CollectSecrets(child, secrets, descriptive, identifying, technical, sources);
                 }
 
                 continue;
@@ -148,6 +164,29 @@ internal sealed class DicomDeidentifier
 
             if (!isSecret)
             {
+                // Запоминаются значения **только кодовых** полей (VR CS):
+                // стандарт задаёт для них перечень терминов — HEAD, BRAIN, MR,
+                // HFS, — и совпадение с таким словом ничего не раскрывает.
+                //
+                // Свободный текст (SH, LO, ST) сюда не идёт, и это не
+                // осторожность, а опыт: именно в название катушки и в имя
+                // станции операторы вписывают фамилии, и прощать дословный
+                // повтор такого значения значило бы простить саму утечку.
+                // Даты и UID не идут тоже: первые сдвигаются, вторые
+                // переписываются, их исходные значения обязаны проверяться.
+                if (item.ValueRepresentation == DicomVR.CS)
+                {
+                    foreach (var value in ReadStrings(dataset, item.Tag))
+                    {
+                        var trimmed = value.Trim();
+
+                        if (trimmed.Length >= MinimumSecretLength)
+                        {
+                            _ = technical.Add(trimmed);
+                        }
+                    }
+                }
+
                 continue;
             }
 

@@ -142,6 +142,56 @@ public sealed class DeidentificationTests
     }
 
     [Fact]
+    public void A_patient_field_repeating_a_retained_technical_value_is_not_a_leak()
+    {
+        // Случай 2026-10-18: исследование не прошло аудит из-за слова «HEAD»,
+        // стоявшего разом в PatientComments и в BodyPartExamined. Комментарий
+        // удаляется, область тела сохраняется по профилю, и «HEAD» в копии —
+        // её значение, а не след удалённого поля.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.BodyPartExamined, "HEAD");
+                dataset.AddOrUpdate(DicomTag.PatientComments, "HEAD");
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.DoesNotContain(
+            DeidentificationAudit.Inspect(
+                result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm",
+                result.DescriptiveOnlySecrets, result.SecretSources),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
+    [Fact]
+    public void A_patient_comment_of_its_own_is_still_a_leak()
+    {
+        // Послабление касается только значений, которые и в источнике стоят в
+        // сохраняемом техническом поле. Своё значение комментария, пережившее
+        // обработку, по-прежнему нарушение.
+        var source = SyntheticDicom.BuildSlice(
+            studyUid: "1.2.3.1",
+            seriesUid: "1.2.3.11",
+            customize: dataset =>
+            {
+                dataset.AddOrUpdate(DicomTag.BodyPartExamined, "HEAD");
+                dataset.AddOrUpdate(DicomTag.PatientComments, "ОПЕРИРОВАН В 2019");
+                dataset.AddOrUpdate(DicomTag.ManufacturerModelName, "ОПЕРИРОВАН В 2019");
+            });
+
+        var result = Deidentifier().Deidentify(source, Subject);
+
+        Assert.Contains(
+            DeidentificationAudit.Inspect(
+                result.Dataset, fileMetaInfo: null, result.SourceSecrets, "series/instance.dcm",
+                result.DescriptiveOnlySecrets, result.SecretSources),
+            violation => violation.Code == DeidentificationViolationCode.ResidualSourceValue);
+    }
+
+    [Fact]
     public void A_short_identifier_copied_into_text_is_still_a_leak()
     {
         // Отдельное число ищется по-прежнему: идентификатор, вписанный
