@@ -32,7 +32,16 @@ using Hydrocephalus.Infrastructure.Dicom;
 if (args.Length == 0)
 {
     Console.Error.WriteLine(
-        "Использование: Hydrocephalus.DatasetBuild <группа>=<каталог> [<группа>=<каталог>...]");
+        """
+        Использование:
+          Hydrocephalus.DatasetBuild <группа>=<каталог> [<группа>=<каталог>...] [--overwrite]
+              собрать набор заново;
+          Hydrocephalus.DatasetBuild --demographics-only <группа>=<каталог>...
+              дополнить манифест возрастом и полом, не трогая файлы набора;
+          Hydrocephalus.DatasetBuild --exclude=<таблица.csv> [--apply]
+              вынести из набора исследования, помеченные в таблице решений;
+              без --apply только печатает, что будет сделано.
+        """);
 
     return 2;
 }
@@ -42,7 +51,9 @@ var groups = new List<(string Group, string Root)>();
 foreach (var argument in args)
 {
     if (string.Equals(argument, "--overwrite", StringComparison.Ordinal)
-        || string.Equals(argument, "--demographics-only", StringComparison.Ordinal))
+        || string.Equals(argument, "--demographics-only", StringComparison.Ordinal)
+        || string.Equals(argument, "--apply", StringComparison.Ordinal)
+        || argument.StartsWith("--exclude=", StringComparison.Ordinal))
     {
         continue;
     }
@@ -83,6 +94,165 @@ var datasetRoot = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
     "Hydrocephalus",
     "dataset");
+
+// Вынос исследований из набора по таблице решений владельца данных.
+//
+// Почему утилитой, а не руками. Исключение затрагивает три места сразу: каталоги
+// набора, манифест и знаменатели всех пересчётов. Пока оно держится списком в
+// документе, каждый пересчёт обязан этот список применять сам — и однажды не
+// применит. Утилита делает вынос один раз и оставляет след: копию манифеста до
+// правки и причину по каждому пациенту.
+//
+// Данные не удаляются: каталоги переносятся в dataset-исключённые\<дата>, то есть
+// решение обратимо. Место решения — таблица, которую заполнял владелец данных,
+// а не довод командной строки.
+var excludeArgument = args.FirstOrDefault(argument =>
+    argument.StartsWith("--exclude=", StringComparison.Ordinal));
+
+if (excludeArgument is not null)
+{
+    var tablePath = excludeArgument["--exclude=".Length..];
+
+    if (!File.Exists(tablePath))
+    {
+        Console.Error.WriteLine("Таблица решений не найдена.");
+
+        return 2;
+    }
+
+    var current = await DatasetManifest.ReadAsync(datasetRoot, CancellationToken.None);
+
+    if (current is null)
+    {
+        Console.Error.WriteLine("Манифеста рядом с набором нет: выносить нечего.");
+
+        return 2;
+    }
+
+    var decisions = ReadDecisions(tablePath);
+
+    if (decisions.Count == 0)
+    {
+        Console.Error.WriteLine("В таблице нет строк с «исключено» = 1: выносить нечего.");
+
+        return 2;
+    }
+
+    // Сверка с набором идёт до любого переноса: решение по пациенту, которого в
+    // наборе нет, означает, что таблица и набор разошлись, и тогда неизвестно,
+    // что именно выносится. Такое останавливает проход целиком.
+    var known = current.Studies
+        .GroupBy(study => (study.Group, study.PseudonymousSubjectId))
+        .ToDictionary(group => group.Key, group => group.ToList());
+
+    var unknown = decisions
+        .Where(decision => !known.ContainsKey((decision.Group, decision.Subject)))
+        .ToList();
+
+    if (unknown.Count > 0)
+    {
+        Console.Error.WriteLine($"В наборе нет {unknown.Count} из {decisions.Count} помеченных:");
+
+        foreach (var decision in unknown)
+        {
+            Console.Error.WriteLine($"  {decision.Group}/{Head(decision.Subject)}");
+        }
+
+        return 2;
+    }
+
+    var apply = args.Contains("--apply", StringComparer.Ordinal);
+
+    Console.WriteLine(apply ? "=== Вынос ===" : "=== Что будет сделано (--apply не задан) ===");
+
+    var movedStudies = 0;
+
+    foreach (var decision in decisions.OrderBy(item => item.Subject, StringComparer.Ordinal))
+    {
+        var studies = known[(decision.Group, decision.Subject)];
+        movedStudies += studies.Count;
+
+        Console.WriteLine(
+            $"  {decision.Group}/{Head(decision.Subject)}  исследований {studies.Count}  — {decision.Reason}");
+    }
+
+    var removed = decisions.Select(item => (item.Group, item.Subject)).ToHashSet();
+
+    var kept = current.Studies
+        .Where(study => !removed.Contains((study.Group, study.PseudonymousSubjectId)))
+        .ToList();
+
+    Console.WriteLine();
+    Console.WriteLine($"пациентов выносится: {decisions.Count}, их исследований: {movedStudies}");
+
+    foreach (var group in current.Studies
+        .Select(study => study.Group)
+        .Distinct(StringComparer.Ordinal)
+        .Order(StringComparer.Ordinal))
+    {
+        Console.WriteLine(
+            $"  {group,-28} пациентов {Subjects(current.Studies, group),3} -> {Subjects(kept, group),3}"
+            + $", исследований {Studies(current.Studies, group),3} -> {Studies(kept, group),3}");
+    }
+
+    if (!apply)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Ничего не изменено. Повторить с --apply.");
+
+        return 0;
+    }
+
+    var outcome = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Hydrocephalus",
+        "dataset-исключённые",
+        DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+    Directory.CreateDirectory(outcome);
+
+    File.Copy(
+        Path.Combine(datasetRoot, DatasetManifest.FileName),
+        Path.Combine(outcome, "манифест-до-правки.json"),
+        overwrite: true);
+
+    await File.WriteAllLinesAsync(
+        Path.Combine(outcome, "причины.txt"),
+        [
+            $"Вынесено из набора по таблице решений владельца данных, {DateTime.Now:yyyy-MM-dd}.",
+            "Данные не удалены: каталоги перенесены сюда и могут быть возвращены.",
+            string.Empty,
+            .. decisions
+                .OrderBy(item => item.Subject, StringComparer.Ordinal)
+                .Select(item => $"{item.Group}/{item.Subject}  {item.Reason}"),
+        ],
+        CancellationToken.None);
+
+    foreach (var decision in decisions)
+    {
+        var source = Path.Combine(datasetRoot, decision.Group, decision.Subject);
+
+        if (!Directory.Exists(source))
+        {
+            Console.WriteLine($"  каталога {Head(decision.Subject)} уже нет — пропущен");
+            continue;
+        }
+
+        var destination = Path.Combine(outcome, decision.Group, decision.Subject);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        Directory.Move(source, destination);
+    }
+
+    await (current with { Studies = kept }).WriteAsync(datasetRoot, CancellationToken.None);
+
+    Console.WriteLine();
+    Console.WriteLine("Перенесено. Рядом с вынесенным лежат копия манифеста до правки и причины.");
+    Console.WriteLine("Ссылки папки просмотра на вынесенное теперь ведут в пустоту:");
+    Console.WriteLine("пометки в их именах сохранились, сами каталоги переехали.");
+
+    return 0;
+}
 
 // Возраст и пол — отдельный проход по тем же источникам, без записи файлов.
 //
@@ -430,6 +600,125 @@ static void Discard(string directory)
     {
         Directory.Delete(subject);
     }
+}
+
+/// <summary>Первые восемь знаков псевдонима — столько печатается в отчётах.</summary>
+static string Head(string pseudonym) =>
+    pseudonym.Length <= 8 ? pseudonym : pseudonym[..8];
+
+/// <summary>Сколько различных пациентов группы в этих записях.</summary>
+static int Subjects(IEnumerable<DatasetStudy> studies, string group) =>
+    studies.Where(study => string.Equals(study.Group, group, StringComparison.Ordinal))
+        .Select(study => study.PseudonymousSubjectId)
+        .Distinct(StringComparer.Ordinal)
+        .Count();
+
+/// <summary>Сколько исследований группы в этих записях.</summary>
+static int Studies(IEnumerable<DatasetStudy> studies, string group) =>
+    studies.Count(study => string.Equals(study.Group, group, StringComparison.Ordinal));
+
+/// <summary>
+/// Читает из таблицы решений строки, помеченные к выносу.
+///
+/// Таблица — та самая, которую владелец данных заполнял после просмотра
+/// исследований: разделитель «;», кодировка UTF-8, поля с «;» внутри — в
+/// кавычках. Нужны четыре столбца: группа, псевдоним пациента, пометка и причина.
+/// </summary>
+static List<(string Group, string Subject, string Reason)> ReadDecisions(string path)
+{
+    var lines = File.ReadAllLines(path, Encoding.UTF8);
+
+    if (lines.Length < 2)
+    {
+        return [];
+    }
+
+    var header = SplitRow(lines[0].TrimStart('\uFEFF'));
+
+    int Column(string name) =>
+        header.FindIndex(value => string.Equals(value.Trim(), name, StringComparison.Ordinal));
+
+    var groupAt = Column("группа");
+    var subjectAt = Column("псевдоним пациента");
+    var flagAt = Column("исключено (0/1)");
+    var reasonAt = Column("причина исключения");
+
+    if (groupAt < 0 || subjectAt < 0 || flagAt < 0)
+    {
+        throw new InvalidOperationException(
+            "В таблице нет столбцов «группа», «псевдоним пациента», «исключено (0/1)».");
+    }
+
+    var decisions = new List<(string Group, string Subject, string Reason)>();
+
+    foreach (var line in lines.Skip(1))
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            continue;
+        }
+
+        var cells = SplitRow(line);
+
+        string Cell(int index) =>
+            index >= 0 && index < cells.Count ? cells[index].Trim() : string.Empty;
+
+        if (!string.Equals(Cell(flagAt), "1", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        var reason = Cell(reasonAt);
+
+        decisions.Add((
+            Cell(groupAt),
+            Cell(subjectAt),
+            reason.Length == 0 ? "причина в таблице не указана" : reason));
+    }
+
+    return decisions;
+}
+
+/// <summary>Делит строку CSV по «;», уважая кавычки и удвоенную кавычку внутри них.</summary>
+static List<string> SplitRow(string line)
+{
+    var cells = new List<string>();
+    var cell = new StringBuilder();
+    var quoted = false;
+
+    for (var index = 0; index < line.Length; index++)
+    {
+        var character = line[index];
+
+        if (character == '"')
+        {
+            if (quoted && index + 1 < line.Length && line[index + 1] == '"')
+            {
+                cell.Append('"');
+                index++;
+            }
+            else
+            {
+                quoted = !quoted;
+            }
+
+            continue;
+        }
+
+        if (character == ';' && !quoted)
+        {
+            cells.Add(cell.ToString());
+            cell.Clear();
+
+            continue;
+        }
+
+        cell.Append(character);
+    }
+
+    cells.Add(cell.ToString());
+
+    return cells;
 }
 
 static string Shorten(string message) =>
