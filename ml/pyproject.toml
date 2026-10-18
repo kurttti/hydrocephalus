@@ -23,6 +23,12 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+# Книга регистра для внешнего чтения собирается отдельно от обучения: ни
+# обучению, ни оценке openpyxl не нужен, а выгрузка готовится раз в несколько
+# недель.
+register = [
+    "openpyxl>=3.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -84,6 +90,13 @@ pretty = true
 # проставлены, и строгая проверка их по-прежнему читает.
 [[tool.mypy.overrides]]
 module = ["FastSurferCNN.*", "torch.*", "numpy.*", "onnx", "onnxruntime"]
+ignore_missing_imports = true
+
+# openpyxl подписей не поставляет, и в необязательной группе его в CI нет.
+# Причина та же, что и выше: требовать подписи от окружения, которое пакета не
+# видит, — требовать невозможного.
+[[tool.mypy.overrides]]
+module = ["openpyxl.*"]
 ignore_missing_imports = true
 
 # Наследование от `torch.nn.Module` там, где torch не установлен, выглядит как

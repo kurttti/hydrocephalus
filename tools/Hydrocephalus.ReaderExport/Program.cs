@@ -45,7 +45,7 @@ if (args.Length == 0)
         Использование:
           Hydrocephalus.ReaderExport --out <каталог вне репозитория>
               [--dataset <корень набора>] [--seed <число>] [--key <файл ключа>]
-              [--limit <число исследований>] [--apply]
+              [--limit <число исследований>] [--apply] [--tables-only]
 
           Без --apply печатает состав выгрузки и ничего не пишет.
           Зерно перестановки печатается всегда: без него выгрузку не повторить.
@@ -82,6 +82,10 @@ var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplica
 var applicationRoot = Path.Combine(localData, "Hydrocephalus");
 var datasetRoot = Value(args, "--dataset") ?? Path.Combine(applicationRoot, "dataset");
 var apply = args.Contains("--apply", StringComparer.Ordinal);
+
+// Таблицы правятся чаще снимков: перекопировать из-за опечатки в заголовке
+// три с половиной гигабайта незачем.
+var tablesOnly = args.Contains("--tables-only", StringComparer.Ordinal);
 var today = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
 var keyPath = Value(args, "--key") ?? Path.Combine(
@@ -243,7 +247,7 @@ Console.WriteLine($"серий к копированию: {cases.Sum(item => ite
 Console.WriteLine($"объём копии: {bytes / 1024.0 / 1024 / 1024:F1} ГБ");
 Console.WriteLine();
 
-if (!apply)
+if (!apply && !tablesOnly)
 {
     Console.WriteLine("Это только разбор. Копия пойдёт с --apply; зерно выше нужно сохранить.");
 
@@ -255,7 +259,7 @@ Directory.CreateDirectory(output);
 var images = Path.Combine(output, "снимки");
 var copied = 0L;
 
-foreach (var item in cases)
+foreach (var item in tablesOnly ? [] : cases)
 {
     foreach (var line in item.Series)
     {
@@ -448,7 +452,10 @@ static async Task WriteRegisterAsync(string path, List<ReadingCase> cases)
 
     await using var writer = new StreamWriter(path, append: false, new UTF8Encoding(true));
 
-    await writer.WriteLineAsync(string.Join(';', columns)).ConfigureAwait(false);
+    // Названия столбцов сами содержат точку с запятой («1 первое; 2 повторное»),
+    // и без кавычек таблица разъезжается: заголовок получает больше полей, чем
+    // строки, а Excel молча разносит одно название по трём столбцам.
+    await writer.WriteLineAsync(string.Join(';', columns.Select(Quote))).ConfigureAwait(false);
 
     foreach (var item in cases)
     {
@@ -462,7 +469,7 @@ static async Task WriteRegisterAsync(string path, List<ReadingCase> cases)
         row[5] = item.Study.AgeYears?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
         row[6] = item.Study.Sex ?? string.Empty;
 
-        await writer.WriteLineAsync(string.Join(';', row)).ConfigureAwait(false);
+        await writer.WriteLineAsync(string.Join(';', row.Select(Quote))).ConfigureAwait(false);
     }
 }
 
