@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using FellowOakDicom;
 using Hydrocephalus.Domain.Imaging;
@@ -126,8 +127,11 @@ var salt = await PseudonymSaltStore
 var importOptions = new DicomImportOptions { PseudonymSalt = salt, MaxFileCount = 1_000_000 };
 var scanner = new DicomStudyScanner(importOptions);
 
-// Перестановка воспроизводима по зерну и не зависит от порядка в манифесте:
-// иначе пополнение набора переставило бы коды уже прочитанных исследований.
+// Перестановка воспроизводима по зерну и не зависит от порядка записей в
+// манифесте. Но она **зависит от состава**: добавится исследование — и
+// перемешается весь список, то есть коды сдвинутся у всех. Поэтому в ключ
+// пишется отпечаток состава, а пополнение набора после выдачи выгрузки означает
+// отдельную выгрузку с новыми кодами, а не ту же самую.
 var shuffled = manifest.Studies
     .OrderBy(study => study.PseudonymousStudyId, StringComparer.Ordinal)
     .ToList();
@@ -274,7 +278,7 @@ foreach (var item in tablesOnly ? [] : cases)
 
         foreach (var file in Directory.EnumerateFiles(line.Folder))
         {
-            File.Copy(file, Path.Combine(target, Path.GetFileName(file)), overwrite: true);
+            CopyWithoutDevice(file, Path.Combine(target, Path.GetFileName(file)));
             copied++;
         }
     }
@@ -285,7 +289,19 @@ await WriteRegisterAsync(Path.Combine(output, "регистр.csv"), cases).Conf
 await WriteReadMeAsync(Path.Combine(output, "как-читать.txt"), cases.Count, seed).ConfigureAwait(false);
 
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(keyPath))!);
-await WriteKeyAsync(keyPath, cases, seed).ConfigureAwait(false);
+
+// Ключ — единственное, что связывает коды чтения с группами. Перезапись молча
+// обессмыслила бы уже выданную выгрузку: та же дата, другая перестановка, и
+// прочитанное не с чем сводить.
+if (File.Exists(keyPath))
+{
+    Console.Error.WriteLine("Ключ уже существует: " + keyPath);
+    Console.Error.WriteLine("Перезапись отказана. Задайте другой --key либо уберите прежний ключ сами.");
+
+    return 2;
+}
+
+await WriteKeyAsync(keyPath, cases, seed, datasetRoot).ConfigureAwait(false);
 
 Console.WriteLine($"скопировано файлов: {copied}");
 Console.WriteLine("записаны: снимки, серии.csv, регистр.csv, как-читать.txt");
@@ -301,7 +317,42 @@ static string? Value(string[] arguments, string name)
     return index >= 0 && index < arguments.Length - 1 ? arguments[index + 1] : null;
 }
 
-/// <summary>Аппарат и поле: специалист всё равно их записывает, пусть не вручную.</summary>
+/// <summary>
+/// Копирует файл серии, убирая теги аппарата.
+///
+/// Полного обезличивания от этого не прибавляется: вид снимка при 0,19 Тесла ни
+/// с чем не спутать, а название последовательности выдаёт производителя. Но
+/// явная подпись «SIEMENS Symphony 1,5 Т» в свойствах исследования — это
+/// готовый ответ, который виден, не глядя на анатомию, и его убрать можно.
+/// </summary>
+static void CopyWithoutDevice(string source, string target)
+{
+    DicomTag[] device =
+    [
+        DicomTag.Manufacturer,
+        DicomTag.ManufacturerModelName,
+        DicomTag.MagneticFieldStrength,
+        DicomTag.StationName,
+        DicomTag.DeviceSerialNumber,
+        DicomTag.SoftwareVersions,
+    ];
+
+    try
+    {
+        var file = DicomFile.Open(source);
+
+        file.Dataset.Remove(device);
+        file.Save(target);
+    }
+    catch (DicomDataException)
+    {
+        // Файл, который не разбирается, копируется как есть: потерять срез
+        // хуже, чем оставить в нём подпись аппарата.
+        File.Copy(source, target, overwrite: true);
+    }
+}
+
+/// <summary>Аппарат и поле: нужны ключу, в выгрузку не идут.</summary>
 static string Device(string folder)
 {
     var first = Directory.Exists(folder)
@@ -364,8 +415,7 @@ static async Task WriteSeriesAsync(string path, List<ReadingCase> cases)
         "толщина, мм",
         "шаг, мм",
         "охват, мм",
-        "уровень",
-        "аппарат")).ConfigureAwait(false);
+        "уровень")).ConfigureAwait(false);
 
     foreach (var item in cases)
     {
@@ -383,8 +433,7 @@ static async Task WriteSeriesAsync(string path, List<ReadingCase> cases)
                 geometry is null ? string.Empty : geometry.SliceThicknessMillimetres.ToString("0.##", culture),
                 (geometry?.SliceSpacingMillimetres ?? line.Source.SliceSpacingMillimetres).ToString("0.##", culture),
                 geometry is null ? string.Empty : geometry.CoverageMillimetres.ToString("0", culture),
-                geometry is null ? line.Source.Tier : geometry.Tier.ToString(),
-                Quote(line.Scanner))).ConfigureAwait(false);
+                geometry is null ? line.Source.Tier : geometry.Tier.ToString())).ConfigureAwait(false);
         }
     }
 
@@ -409,19 +458,33 @@ static async Task WriteRegisterAsync(string path, List<ReadingCase> cases)
 {
     // Столбцы — те же, что в задании, и в том же порядке: регистр и задание
     // разъехаться не должны, иначе специалист заполнит не то поле.
+    //
+    // Возраста и пола здесь нет **намеренно**, хотя в манифесте они есть.
+    // Медиана возраста у иНТГ 74 года против 59 у контролей, а 65 лет и старше
+    // только 6 контролей из 26: строка «78, F» даёт читателю сильное
+    // предположение о группе до того, как он откроет снимок. Для анализа
+    // возраст берётся из манифеста по ключу, а читателю он не нужен — в задании
+    // нет ни одной шкалы, где требуется поправка на возраст.
+    //
+    // Код серии — свой у каждого блока, а не один на строку. Индекс, рога и
+    // III желудочек измеряются на аксиальной серии, угол и MTA — на корональной,
+    // Фазекас — на FLAIR. Один столбец «серия измерений» три кода не вместил бы,
+    // а без них нельзя сказать, с какой серии пришло значение, то есть нельзя
+    // ответить на вопрос, ради которого чтение и затевалось: T1 против FLAIR.
+    //
+    // Аппарат, поле, название и толщину серии переписывать не нужно — они уже
+    // в описи серий рядом со снимками, выведенные из тех же файлов.
     string[] columns =
     [
         "код исследования",
         "код специалиста",
         "тип чтения (1 первое; 2 повторное)",
-        "серия измерений",
         "дата чтения",
-        "возраст, полных лет",
-        "пол",
-        "аппарат и модель",
-        "напряжённость поля, Т",
-        "название серии",
-        "толщина среза, мм",
+        "объёмный раздел применим (0/1)",
+        "код серии: аксиальная",
+        "код серии: корональная",
+        "код серии: FLAIR",
+        "код серии: объёмная T1",
         "оценка качества (1 пригодно; 2 ограниченно; 3 непригодно)",
         "ширина передних рогов, мм",
         "поперечник черепа, мм",
@@ -464,22 +527,37 @@ static async Task WriteRegisterAsync(string path, List<ReadingCase> cases)
         Array.Fill(row, string.Empty);
         row[0] = item.Code;
 
-        // Возраст и пол — из манифеста: в файлах этих тегов нет, прочитать их
-        // специалисту негде, а домысливать он не должен.
-        row[5] = item.Study.AgeYears?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-        row[6] = item.Study.Sex ?? string.Empty;
+        // Объёмный раздел задание выполняет только там, где автор отметил
+        // исследование объёмным. Отметка ставится здесь, а не на глаз: уровень
+        // Extended стоит и у серий, которые условию не отвечают, — нужна
+        // неконтрастная T1 с полным охватом.
+        row[4] = item.Series.Any(line =>
+            line.Scanned?.Tier == AcquisitionTier.Extended
+            && line.Weighting == SeriesWeighting.T1
+            && line.Scanned.IsContrastEnhanced == false
+            && line.Scanned.Geometry.CoversVentricles)
+            ? "1"
+            : "0";
 
         await writer.WriteLineAsync(string.Join(';', row.Select(Quote))).ConfigureAwait(false);
     }
 }
 
-static async Task WriteKeyAsync(string path, List<ReadingCase> cases, int seed)
+static async Task WriteKeyAsync(string path, List<ReadingCase> cases, int seed, string datasetRoot)
 {
     await using var writer = new StreamWriter(path, append: false, new UTF8Encoding(true));
 
+    // Отпечаток состава — не украшение: те же зерно и перестановка дают другие
+    // коды, если набор изменился, потому что перемешивается весь список целиком.
+    var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(
+        '|',
+        cases.Select(item => item.Study.PseudonymousStudyId)
+            .OrderBy(id => id, StringComparer.Ordinal)))))[..16];
+
     await writer.WriteLineAsync(string.Create(
         CultureInfo.InvariantCulture,
-        $"# ключ выгрузки для чтения; зерно перестановки {seed}; не передаётся специалисту"))
+        $"# ключ выгрузки для чтения; зерно {seed}; отпечаток состава {fingerprint}; "
+        + $"исследований {cases.Count}; не передаётся специалисту"))
         .ConfigureAwait(false);
 
     await writer.WriteLineAsync(string.Join(
@@ -488,17 +566,29 @@ static async Task WriteKeyAsync(string path, List<ReadingCase> cases, int seed)
         "группа",
         "псевдоним пациента",
         "псевдоним исследования",
-        "производный псевдоним исследования")).ConfigureAwait(false);
+        "производный псевдоним исследования",
+        "аппарат")).ConfigureAwait(false);
 
     foreach (var item in cases)
     {
+        // Аппарат нужен анализу — и остаётся в ключе, а не в выгрузке: все 26
+        // контрольных исследований сняты на SIEMENS Symphony 1,5 Т, а 15 из 25
+        // исследований иНТГ — на чём-то другом. То есть «не Symphony» читается
+        // как «иНТГ» без единой ошибки.
+        var devices = item.Series
+            .Select(line => line.Scanner)
+            .Where(name => name.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal);
+
         await writer.WriteLineAsync(string.Join(
             ';',
             item.Code,
             item.Study.Group,
             item.Study.PseudonymousSubjectId,
             item.Study.PseudonymousStudyId,
-            item.Study.DerivedStudyId ?? string.Empty)).ConfigureAwait(false);
+            item.Study.DerivedStudyId ?? string.Empty,
+            Quote(string.Join(" | ", devices)))).ConfigureAwait(false);
     }
 }
 
@@ -516,8 +606,13 @@ static async Task WriteReadMeAsync(string path, int count, int seed)
         Раскладка:
           снимки\S-0001\SER01\...   файлы DICOM одной серии
           серии.csv                 опись серий: взвешенность, плоскость, срезы,
-                                    толщина, шаг, охват, аппарат
+                                    толщина, шаг, охват
           регистр.csv               таблица результатов: одна строка на чтение
+
+        В регистре у каждого блока измерений свой столбец кода серии: аксиальная
+        (индекс, рога, III желудочек), корональная (угол, MTA, щели), FLAIR
+        (Фазекас) и объёмная T1. Код берётся из описи серий. Без него измерение
+        не сравнить с автоматическим: серий в исследовании бывает десяток.
 
         Порядок работы, определения всех показателей, схемы измерений и коды
         причин пропуска — в задании «ТЗ нейрорадиологу». Регистр и задание
@@ -527,12 +622,8 @@ static async Task WriteReadMeAsync(string path, int count, int seed)
           - в ячейку только число; единицы указаны в названии столбца;
           - «0» значит «признака нет», пустая ячейка — «не оценено»;
           - у каждой пустой ячейки должен быть код причины;
-          - возраст и пол уже внесены: из файлов эти теги удалены, домысливать
-            их не нужно;
-          - код серии в таблице обязателен: без него измерение не сравнить с
-            автоматическим.
-
-        Зерно перестановки {seed} — служебное, для повторяемости выгрузки.
+          - столбец «объёмный раздел применим» заполнен заранее: 0 означает,
+            что подходящей объёмной серии нет и раздел пропускается.
 
         """);
 
