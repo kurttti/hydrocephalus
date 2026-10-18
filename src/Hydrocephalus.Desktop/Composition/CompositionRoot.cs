@@ -495,7 +495,11 @@ public sealed class CompositionRoot : IDisposable
             // здесь, и в конвейере; сняв её только в конвейере, я получил бы
             // измерение в отчёте и пустой экран у врача.
             {
-                evans = AutomaticEvansIndex.Measure(volume, segmentation.Value, series.Weighting, cancellationToken);
+                evans = AutomaticEvansIndex.Measure(
+                    volume,
+                    segmentation.Value,
+                    series.Weighting,
+                    cancellationToken: cancellationToken);
 
                 if (evans.Segments is { } segments && review is not null)
                 {

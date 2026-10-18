@@ -120,12 +120,26 @@ public static class AutomaticEvansIndex
     /// <param name="volume">Объём, на котором построена маска.</param>
     /// <param name="segmentation">Результат сегментации.</param>
     /// <param name="weighting">Взвешенность серии.</param>
+    /// <param name="growFrontalHornsMillimetres">
+    /// Насколько разрешено дорастить концы отрезка передних рогов по яркости
+    /// ликвора, мм на сторону; 0 — не дорастать.
+    ///
+    /// Нужно потому, что на FLAIR модель обрезает передний рог по латеральной
+    /// границе: парная проверка 2026-10-18 показала ширину рогов 0,68–0,77 от
+    /// измеренной по T1 у того же пациента при внутреннем диаметре черепа
+    /// 1,00–1,02 и том же срезе измерения. То есть маска верна по составу, а
+    /// отрезок короток. Дорастание идёт **только по линии измерения и только по
+    /// тёмным отсчётам**, то есть по самому ликвору, и ограничено этим доводом:
+    /// неограниченный рост ушёл бы в сильвиеву щель, как это случилось с
+    /// правилом глубины 2026-10-11.
+    /// </param>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Индекс с отрезками либо причина отказа.</returns>
     public static AutomaticEvansResult Measure(
         IVoxelVolume volume,
         VentricleSegmentationResult segmentation,
         SeriesWeighting weighting,
+        double growFrontalHornsMillimetres = 0,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(volume);
@@ -159,11 +173,18 @@ public static class AutomaticEvansIndex
             return Refused(AutomaticEvansRefusal.InnerSkullNotFound);
         }
 
+        // Дорастание — после поиска черепа, а не до: границы тёмной полосы у
+        // внутренней пластинки ищутся от краёв маски, и удлинённый отрезок
+        // сдвинул бы знаменатель вместе с числителем.
+        var (hornStart, hornEnd) = growFrontalHornsMillimetres > 0
+            ? GrowByIntensity(space, threshold, horns, growFrontalHornsMillimetres)
+            : (horns.Start, horns.End);
+
         var segments = new EvansSegments(
             axes.AxialAcross,
             horns.Plane,
-            space.Position(horns.Start - 0.5, horns.Line, horns.Plane),
-            space.Position(horns.End + 0.5, horns.Line, horns.Plane),
+            space.Position(hornStart - 0.5, horns.Line, horns.Plane),
+            space.Position(hornEnd + 0.5, horns.Line, horns.Plane),
             space.Position(skull.Start - 0.5, skull.Line, horns.Plane),
             space.Position(skull.End + 0.5, skull.Line, horns.Plane));
 
@@ -341,6 +362,52 @@ public static class AutomaticEvansIndex
                 MeasurementQuality.Questionable),
             Segments = segments,
         };
+    }
+
+    /// <summary>
+    /// Продлевает концы отрезка передних рогов по тёмным отсчётам вдоль линии
+    /// измерения.
+    ///
+    /// Порог тот же, которым отделяется тёмная полоса у внутренней пластинки
+    /// черепа: ликвор на T1 и на FLAIR темнее него, а стенка рога и
+    /// перивентрикулярные изменения — ярче. Поэтому рост останавливается на
+    /// настоящей границе рога, а не на границе маски.
+    ///
+    /// Ограничений два, и оба обязательны. Предел на сторону не даёт уйти в
+    /// сильвиеву щель, если рог её касается на этой линии. Остановка на первом
+    /// же ярком отсчёте не даёт перескочить стенку: разрыв не прощается.
+    /// </summary>
+    private static (int Start, int End) GrowByIntensity(
+        PlaneSpace space,
+        double threshold,
+        Horns horns,
+        double limitMillimetres)
+    {
+        var limit = Math.Max(1, (int)Math.Round(limitMillimetres / space.WidthSpacing));
+        var start = horns.Start;
+        var end = horns.End;
+
+        for (var step = 0; step < limit; step++)
+        {
+            if (start - 1 < 0 || space.Value(start - 1, horns.Line, horns.Plane) > threshold)
+            {
+                break;
+            }
+
+            start--;
+        }
+
+        for (var step = 0; step < limit; step++)
+        {
+            if (end + 1 >= space.Width || space.Value(end + 1, horns.Line, horns.Plane) > threshold)
+            {
+                break;
+            }
+
+            end++;
+        }
+
+        return (start, end);
     }
 
     /// <summary>

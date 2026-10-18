@@ -45,6 +45,11 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
     return args.Length == 0 ? 2 : 0;
 }
 
+// Предел дорастания переднего рога по яркости, мм на сторону. Восемь: у
+// промахов 18 октября не хватало 10-14 мм на обе стороны вместе, то есть 5-7 на
+// сторону, и предел оставляет запас, не позволяя уйти в сильвиеву щель.
+const double GrowMillimetres = 8.0;
+
 var outIndex = Array.IndexOf(args, "--out");
 var referenceIndex = Array.IndexOf(args, "--reference");
 var limitIndex = Array.IndexOf(args, "--limit");
@@ -179,11 +184,14 @@ if (opened.Rejection is not null || opened.Weights is not { } weights || opened.
     return 2;
 }
 
-var model = new ModelVentricleSegmentation(
-    new OnnxVentricleSegmentation(weights),
-    manifest.ModelVersion,
-    options: null,
-    acceptedWeightings: [SeriesWeighting.T1, SeriesWeighting.Flair]);
+// Кэш по псевдониму серии: рука «модель» и рука «модель с дорастанием»
+// считают по одной и той же маске, и второй проход сети не нужен.
+var model = new CachingVentricleSegmentation(
+    new ModelVentricleSegmentation(
+        new OnnxVentricleSegmentation(weights),
+        manifest.ModelVersion,
+        options: null,
+        acceptedWeightings: [SeriesWeighting.T1, SeriesWeighting.Flair]));
 
 var threshold = new ThresholdVentricleSegmentation();
 
@@ -254,7 +262,7 @@ foreach (var (studyId, (scan, _)) in planned.OrderBy(item => item.Key, StringCom
                 t1.PseudonymousSeriesId,
                 CancellationToken.None);
 
-            onT1 = Arm(t1Volume, model, t1.Weighting);
+            onT1 = Arm(t1Volume, model, t1.Weighting, t1.PseudonymousSeriesId);
         }
 
         var row = new Row
@@ -265,9 +273,10 @@ foreach (var (studyId, (scan, _)) in planned.OrderBy(item => item.Key, StringCom
             Slices = flair.Geometry.Dimensions.Slices,
             SliceSpacingMillimetres = flair.Geometry.SliceSpacingMillimetres,
             CoverageMillimetres = flair.Geometry.CoverageMillimetres,
-            Threshold = Arm(volume, threshold, flair.Weighting),
-            Trimmed = Arm(volume, trimmed, flair.Weighting),
-            Model = Arm(volume, model, flair.Weighting),
+            Threshold = Arm(volume, threshold, flair.Weighting, flair.PseudonymousSeriesId),
+            Trimmed = Arm(volume, trimmed, flair.Weighting, flair.PseudonymousSeriesId),
+            Model = Arm(volume, model, flair.Weighting, flair.PseudonymousSeriesId),
+            Grown = Arm(volume, model, flair.Weighting, flair.PseudonymousSeriesId, GrowMillimetres),
             ModelOnT1 = onT1,
         };
 
@@ -276,6 +285,7 @@ foreach (var (studyId, (scan, _)) in planned.OrderBy(item => item.Key, StringCom
         Console.WriteLine(
             $"{rows.Count,3}. {studyId[..8]}  эталон {expected:0.0000}  "
             + $"порог {Show(row.Threshold)}  с починкой {Show(row.Trimmed)}  модель {Show(row.Model)}"
+            + $"  дорастание {Show(row.Grown!)}"
             + $"  T1 {(row.ModelOnT1 is null ? "нет серии" : Show(row.ModelOnT1))}"
             + $"  рога {Millimetres(row.Model.WidthMillimetres)}/{Millimetres(row.ModelOnT1?.WidthMillimetres)}"
             + $"  череп {Millimetres(row.Model.DiameterMillimetres)}/{Millimetres(row.ModelOnT1?.DiameterMillimetres)}");
@@ -307,6 +317,7 @@ await File.WriteAllLinesAsync(
 Summarise("пороговый путь как есть", rows, row => row.Threshold);
 Summarise("он же с TrimDepthByVoxel", rows, row => row.Trimmed);
 Summarise("модель на FLAIR", rows, row => row.Model);
+Summarise("модель с дорастанием рога", rows, row => row.Grown!);
 
 Console.WriteLine($"Пофайловый итог: {Path.Combine(output, "results.jsonl")}");
 
@@ -369,10 +380,17 @@ static string Millimetres(double? value) => value is { } millimetres
     : "—";
 
 /// <summary>Считает индекс одним путём на уже загруженном объёме.</summary>
-static ArmResult Arm(IVoxelVolume volume, IVentricleSegmentation segmentation, SeriesWeighting weighting)
+static ArmResult Arm(
+    IVoxelVolume volume,
+    IVentricleSegmentation segmentation,
+    SeriesWeighting weighting,
+    string pseudonymousSeriesId,
+    double grow = 0)
 {
-    var mask = segmentation.Segment(volume, weighting, "pair-check", CancellationToken.None);
-    var measured = AutomaticEvansIndex.Measure(volume, mask, weighting, CancellationToken.None);
+    var mask = segmentation.Segment(volume, weighting, pseudonymousSeriesId, CancellationToken.None);
+    var measured = AutomaticEvansIndex.Measure(
+        volume, mask, weighting, growFrontalHornsMillimetres: grow,
+        cancellationToken: CancellationToken.None);
 
     var grid = volume.Grid;
     var voxel = grid.ColumnSpacingMillimetres * grid.RowSpacingMillimetres
@@ -548,6 +566,9 @@ internal sealed record Row
 
     /// <summary>Модель.</summary>
     public required ArmResult Model { get; init; }
+
+    /// <summary>Модель с дорастанием переднего рога по яркости.</summary>
+    public ArmResult? Grown { get; init; }
 
     /// <summary>
     /// Та же модель по серии T1 того же исследования либо <see langword="null"/>,

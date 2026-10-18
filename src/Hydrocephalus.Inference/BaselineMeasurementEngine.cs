@@ -281,7 +281,8 @@ public sealed class BaselineMeasurementEngine : IInferenceEngine
                     segmentation.Quality)
                 : [];
 
-            var evans = AutomaticEvansIndex.Measure(volume, segmentation, series.Weighting, cancellationToken);
+            var evans = AutomaticEvansIndex.Measure(
+                volume, segmentation, series.Weighting, cancellationToken: cancellationToken);
 
             progress?.Report(new AnalysisProgress(AnalysisStage.FeatureExtraction, 1.0));
 

@@ -45,6 +45,80 @@ public sealed class AutomaticEvansIndexTests
     }
 
     [Fact]
+    public void Growth_by_intensity_recovers_a_horn_the_mask_clipped()
+    {
+        // Рога от 38-го до 61-го отсчёта — 24 мм в маске; ликвор идёт от 34-го
+        // до 65-го — 32 мм. Дорастание обязано дойти до ликвора и остановиться
+        // на мозге.
+        var (volume, segmentation) = Phantom(Ventricles.Both | Ventricles.ClippedMask);
+
+        var result = AutomaticEvansIndex.Measure(
+            volume, segmentation, SeriesWeighting.T1, growFrontalHornsMillimetres: 8);
+
+        Assert.Equal(32.0 / 68.0, result.Biomarker!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void Growth_by_intensity_stops_at_tissue()
+    {
+        // Без ликворного ободка дорастать некуда: за стенкой рога мозг, и
+        // значение обязано остаться прежним. Иначе правило уедет в сильвиеву
+        // щель, как это случилось с правилом глубины 2026-10-11.
+        var (volume, segmentation) = Phantom(Ventricles.Both);
+
+        var result = AutomaticEvansIndex.Measure(
+            volume, segmentation, SeriesWeighting.T1, growFrontalHornsMillimetres: 8);
+
+        Assert.Equal(24.0 / 68.0, result.Biomarker!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void Growth_by_intensity_is_capped_by_the_limit()
+    {
+        // Предел — 2 мм на сторону: 24 мм превращаются в 28, а не в 32.
+        var (volume, segmentation) = Phantom(Ventricles.Both | Ventricles.ClippedMask);
+
+        var result = AutomaticEvansIndex.Measure(
+            volume, segmentation, SeriesWeighting.T1, growFrontalHornsMillimetres: 2);
+
+        Assert.Equal(28.0 / 68.0, result.Biomarker!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void Without_the_argument_nothing_grows()
+    {
+        // Поведение по умолчанию не меняется: прежние числа остаются прежними.
+        var (volume, segmentation) = Phantom(Ventricles.Both | Ventricles.ClippedMask);
+
+        var result = AutomaticEvansIndex.Measure(volume, segmentation, SeriesWeighting.T1);
+
+        Assert.Equal(24.0 / 68.0, result.Biomarker!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void Growth_by_intensity_does_not_move_the_inner_skull()
+    {
+        // Знаменатель ищется от краёв маски, а не от дорощенного отрезка:
+        // иначе дорастание сдвинуло бы и числитель, и знаменатель.
+        var (volume, segmentation) = Phantom(Ventricles.Both | Ventricles.ClippedMask);
+
+        var plain = AutomaticEvansIndex.Measure(volume, segmentation, SeriesWeighting.T1);
+        var grown = AutomaticEvansIndex.Measure(
+            volume, segmentation, SeriesWeighting.T1, growFrontalHornsMillimetres: 8);
+
+        var plainSkull = Distance(plain.Segments!.InnerSkullFirst, plain.Segments.InnerSkullSecond);
+        var grownSkull = Distance(grown.Segments!.InnerSkullFirst, grown.Segments.InnerSkullSecond);
+
+        Assert.Equal(plainSkull, grownSkull, precision: 6);
+    }
+
+    private static double Distance(VoxelPosition first, VoxelPosition second) =>
+        Math.Sqrt(
+            Math.Pow(first.Column - second.Column, 2)
+            + Math.Pow(first.Row - second.Row, 2)
+            + Math.Pow(first.Slice - second.Slice, 2));
+
+    [Fact]
     public void A_mask_holding_one_lateral_ventricle_gives_no_index()
     {
         // Ширина одного рога дала бы индекс около 0.15 — правдоподобное число
@@ -125,9 +199,10 @@ public sealed class AutomaticEvansIndexTests
                 {
                     var offset = (((x * Height) + z) * Length) + y;
                     var ventricle = IsVentricle(ventricles, x, y, z);
+                    var clipped = IsClippedHalo(ventricles, x, y, z);
 
                     labels[offset] = ventricle ? (byte)1 : (byte)0;
-                    voxels[offset] = ventricle ? Csf : Head(x, y, z);
+                    voxels[offset] = ventricle || clipped ? Csf : Head(x, y, z);
                 }
             }
         }
@@ -184,6 +259,16 @@ public sealed class AutomaticEvansIndexTests
         };
     }
 
+    /// <summary>
+    /// Ободок с яркостью ликвора по 4 мм с каждой стороны рогов, не вошедший
+    /// в маску: отсчёты 34–37 и 62–65 на тех же линиях и плоскостях.
+    /// </summary>
+    private static bool IsClippedHalo(Ventricles ventricles, int x, int y, int z) =>
+        ventricles.HasFlag(Ventricles.ClippedMask)
+        && z is >= 25 and <= 35
+        && y is >= 30 and <= 50
+        && (x is >= 34 and <= 37 || x is >= 62 and <= 65);
+
     private static bool IsVentricle(Ventricles ventricles, int x, int y, int z)
     {
         if (z is < 25 or > 35)
@@ -214,6 +299,13 @@ public sealed class AutomaticEvansIndexTests
         Both = 1,
         LeftOnly = 2,
         LateralFragment = 4,
+
+        /// <summary>
+        /// Маска обрезана по бокам: отсчёты с яркостью ликвора есть, а метки
+        /// на них нет. Так ведёт себя модель на FLAIR — парная проверка
+        /// 2026-10-18 дала ширину рогов 0,68–0,77 от измеренной по T1.
+        /// </summary>
+        ClippedMask = 8,
     }
 
     private sealed class TestVolume(SeriesGeometry geometry, VolumeGrid grid, float[] voxels) : IVoxelVolume
