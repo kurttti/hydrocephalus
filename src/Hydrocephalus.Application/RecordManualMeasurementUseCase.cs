@@ -62,13 +62,23 @@ public sealed class RecordManualMeasurementUseCase
     /// </param>
     /// <param name="requestedBy">Кто записывает.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
+    /// <param name="markings">
+    /// Точки, которыми измерение отмечено, либо <see langword="null"/>, если
+    /// разметки нет.
+    ///
+    /// Пишутся той же версией отчёта, что и значение, и это главное их
+    /// свойство: значение получено из этих точек, и в неизменном хранилище они
+    /// остаются связанными навсегда. Разметка в отдельном файле разошлась бы
+    /// с отчётом при первом повторном измерении, и узнать это было бы нельзя.
+    /// </param>
     /// <returns>Новая версия отчёта.</returns>
     /// <exception cref="AccessDeniedException">Если у роли нет права на запись измерения.</exception>
     public async Task<AnalysisReport> ExecuteAsync(
         AnalysisReport report,
         IReadOnlyList<Biomarker> measurements,
         Actor requestedBy,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<MarkedMeasurement>? markings = null)
     {
         ArgumentNullException.ThrowIfNull(report);
         ArgumentNullException.ThrowIfNull(measurements);
@@ -111,10 +121,21 @@ public sealed class RecordManualMeasurementUseCase
             .Concat(measurements)
             .ToList();
 
+        // Разметка того же метода тоже заменяется, а не добавляется второй:
+        // точки и значение обязаны описывать одно измерение.
+        var marked = markings ?? [];
+        var remarked = marked
+            .Select(item => item.MethodCode)
+            .ToHashSet(StringComparer.Ordinal);
+
         var recorded = report with
         {
             CreatedAt = this.timeProvider.GetUtcNow(),
             Biomarkers = biomarkers,
+            Markings = [
+                .. report.Markings.Where(existing => !remarked.Contains(existing.MethodCode)),
+                .. marked,
+            ],
         };
 
         await this.reportStore.StoreAsync(recorded, cancellationToken).ConfigureAwait(false);

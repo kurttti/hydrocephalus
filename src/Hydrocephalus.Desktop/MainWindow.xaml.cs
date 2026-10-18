@@ -265,6 +265,7 @@ public partial class MainWindow : Window
 
             this.openedDirectory = directory;
             this.Show(opened);
+            await this.RestoreMarkingAsync().ConfigureAwait(true);
 
             // Счётчик обновляется после показа: измерение могло быть записано
             // в прошлом исследовании, и число «измерено» уже другое.
@@ -726,6 +727,7 @@ public partial class MainWindow : Window
                 .ConfigureAwait(true);
 
             this.Show(opened);
+            await this.RestoreMarkingAsync().ConfigureAwait(true);
         }
         catch (Exception exception)
         {
@@ -799,6 +801,7 @@ public partial class MainWindow : Window
                 .ConfigureAwait(true);
 
             this.Show(opened);
+            await this.RestoreMarkingAsync().ConfigureAwait(true);
         }
         catch (AccessDeniedException)
         {
@@ -1046,7 +1049,7 @@ public partial class MainWindow : Window
         try
         {
             var report = await composition
-                .RecordMeasurementAsync(measurements, CancellationToken.None)
+                .RecordMeasurementAsync(measurements, CancellationToken.None, this.EvansMarks())
                 .ConfigureAwait(true);
 
             // Записанное больше не предлагается записать: повторное нажатие
@@ -1102,6 +1105,103 @@ public partial class MainWindow : Window
             : EvansOverlay.Marks(this.study.Volume.Grid, this.marking.Points, segments);
 
         axial.Redraw();
+    }
+
+    /// <summary>
+    /// Собирает точки индекса Эванса для записи в отчёт.
+    /// </summary>
+    /// <returns>Разметка либо <see langword="null"/>, если точек нет.</returns>
+    private IReadOnlyList<MarkedMeasurement>? EvansMarks() =>
+        this.marking is { IsComplete: true, PlaneIndex: { } plane }
+            ? [new MarkedMeasurement(
+                LinearBiomarkers.ManualEvansIndexCode,
+                this.marking.AxialAcross,
+                plane,
+                [.. this.marking.Points.Select(Point)])]
+            : null;
+
+    /// <summary>
+    /// Собирает точки угла мозолистого тела для записи в отчёт.
+    /// </summary>
+    /// <returns>Разметка либо <see langword="null"/>, если точек нет.</returns>
+    private IReadOnlyList<MarkedMeasurement>? AngleMarks() =>
+        this.angleMarking is { IsComplete: true, PlaneIndex: { } plane }
+            ? [new MarkedMeasurement(
+                LinearBiomarkers.ManualCallosalAngleCode,
+                this.angleMarking.CoronalAcross,
+                plane,
+                [.. this.angleMarking.Points.Select(Point)])]
+            : null;
+
+    private static MarkedPoint Point(VoxelPosition position) =>
+        new(position.Column, position.Row, position.Slice);
+
+    /// <summary>
+    /// Показывает разметку прошлого измерения, если она записана.
+    ///
+    /// Восстанавливается **только на той серии, где поставлена**: точки — отсчёты
+    /// её сетки, и на другой серии легли бы не на анатомию, а размеры сеток
+    /// двух серий бывают одинаковыми, так что иначе проверить это нечем.
+    ///
+    /// Отрезки не хранятся: они выводятся из точек тем же измерителем, которым
+    /// получено значение. Хранить их значило бы однажды показать отрезок,
+    /// которого измерение не видело.
+    /// </summary>
+    /// <returns>Задача показа.</returns>
+    private async Task RestoreMarkingAsync()
+    {
+        var composition = Current.Composition;
+        var axial = this.AxialSurface();
+
+        if (composition is null || axial is null || this.study is null || this.analysed is null)
+        {
+            return;
+        }
+
+        Infrastructure.Reporting.StoredMarking? stored;
+
+        try
+        {
+            stored = await composition
+                .ReadMarkingAsync(LinearBiomarkers.ManualEvansIndexCode, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (System.IO.IOException)
+        {
+            // Разметка — удобство: не прочиталась, значит её не видно, а
+            // исследование всё равно открыто.
+            return;
+        }
+
+        if (stored is not { } found
+            || found.Marking.MarkedAcross != axial.View.Axis
+            || !string.Equals(
+                found.PseudonymousSeriesId,
+                this.analysed.Analysed.PseudonymousSeriesId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var restored = new ManualEvansMarking(found.Marking.MarkedAcross);
+
+        foreach (var point in found.Marking.Points)
+        {
+            _ = restored.Add(new VoxelPosition(point.Column, point.Row, point.Slice));
+        }
+
+        var result = restored.IsComplete ? restored.Measure(this.study.Volume) : null;
+
+        axial.View.Marking = EvansOverlay.Marks(
+            this.study.Volume.Grid,
+            restored.Points,
+            result?.Segments);
+
+        axial.GoTo(found.Marking.PlaneIndex);
+
+        this.StatusText.Text += string.Create(
+            CultureInfo.CurrentCulture,
+            $" Показана разметка прошлого измерения на срезе {found.Marking.PlaneIndex}.");
     }
 
     private PlaneSurface? AxialSurface() =>
@@ -1243,7 +1343,7 @@ public partial class MainWindow : Window
         try
         {
             var report = await composition
-                .RecordMeasurementAsync(measurements, CancellationToken.None)
+                .RecordMeasurementAsync(measurements, CancellationToken.None, this.AngleMarks())
                 .ConfigureAwait(true);
 
             this.recordedAngle = null;
@@ -1495,6 +1595,18 @@ public partial class MainWindow : Window
 
         /// <summary>Нажатие на изображении: столбец и строка показанного среза.</summary>
         internal event Action<PlaneSurface, int, int>? Pressed;
+
+        /// <summary>
+        /// Листает на заданный срез. Ползунок двигается вместе с видом: иначе
+        /// на экране один срез, а под ним подпись другого.
+        /// </summary>
+        /// <param name="index">Номер среза.</param>
+        internal void GoTo(int index)
+        {
+            this.view.Index = index;
+            this.slider.Value = this.view.Index;
+            this.Redraw();
+        }
 
         internal void Redraw()
         {

@@ -261,4 +261,30 @@ public sealed class DomainInvariantTests
         UpperBound = 0.8,
         ConfidenceLevel = 0.95,
     };
+
+    [Fact]
+    public void A_marking_without_points_is_refused()
+    {
+        // Пустая разметка при чтении выглядела бы как «измерено без точек», а
+        // это другое утверждение.
+        _ = Assert.Throws<DomainRuleViolationException>(() => new MarkedMeasurement(
+            "evans-index-manual",
+            VolumeAxis.AcrossSlices,
+            16,
+            []));
+    }
+
+    [Fact]
+    public void A_marking_keeps_the_order_of_the_points()
+    {
+        // Порядок задаёт ось измерения: сначала череп, потом рога.
+        var marking = new MarkedMeasurement(
+            "evans-index-manual",
+            VolumeAxis.AcrossSlices,
+            16,
+            [new MarkedPoint(1, 2, 16), new MarkedPoint(3, 4, 16)]);
+
+        Assert.Equal(1, marking.Points[0].Column);
+        Assert.Equal(3, marking.Points[1].Column);
+    }
 }

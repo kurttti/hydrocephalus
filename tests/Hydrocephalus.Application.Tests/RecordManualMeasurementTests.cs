@@ -50,6 +50,106 @@ public sealed class RecordManualMeasurementTests
     }
 
     [Fact]
+    public async Task The_points_of_the_measurement_are_stored_with_its_value()
+    {
+        // Значение получено из этих точек, и в неизменном хранилище они обязаны
+        // лежать одной версией: иначе по отчёту нельзя разобрать расхождение с
+        // автоматическим измерением на причину.
+        var store = new RecordingReportStore();
+
+        var recorded = await UseCase(store).ExecuteAsync(
+            Report(),
+            [Measurement(0.34)],
+            Clinician,
+            CancellationToken.None,
+            [Marking("evans-index-manual", 16)]);
+
+        var marking = Assert.Single(recorded.Markings);
+
+        Assert.Equal("evans-index-manual", marking.MethodCode);
+        Assert.Equal(16, marking.PlaneIndex);
+        Assert.Equal(4, marking.Points.Count);
+        Assert.Equal(10, marking.Points[0].Column);
+    }
+
+    [Fact]
+    public async Task Marking_the_same_method_again_replaces_the_points()
+    {
+        // Две разметки одного метода не сказали бы, какая из них дала значение.
+        var store = new RecordingReportStore();
+        var useCase = UseCase(store);
+
+        var first = await useCase.ExecuteAsync(
+            Report(),
+            [Measurement(0.34)],
+            Clinician,
+            CancellationToken.None,
+            [Marking("evans-index-manual", 16)]);
+
+        var second = await useCase.ExecuteAsync(
+            first,
+            [Measurement(0.29)],
+            Clinician,
+            CancellationToken.None,
+            [Marking("evans-index-manual", 20)]);
+
+        var marking = Assert.Single(second.Markings);
+
+        Assert.Equal(20, marking.PlaneIndex);
+    }
+
+    [Fact]
+    public async Task The_marking_of_another_method_is_kept()
+    {
+        // Угол мозолистого тела меряется на другой серии и другой плоскости:
+        // запись индекса его разметку стирать не должна.
+        var store = new RecordingReportStore();
+        var useCase = UseCase(store);
+
+        var first = await useCase.ExecuteAsync(
+            Report(),
+            [Measurement(0.34)],
+            Clinician,
+            CancellationToken.None,
+            [Marking("callosal-angle-manual", 8)]);
+
+        var second = await useCase.ExecuteAsync(
+            first,
+            [Measurement(0.29)],
+            Clinician,
+            CancellationToken.None,
+            [Marking("evans-index-manual", 16)]);
+
+        Assert.Equal(2, second.Markings.Count);
+        Assert.Contains(second.Markings, item => item.MethodCode == "callosal-angle-manual");
+    }
+
+    [Fact]
+    public async Task A_measurement_without_points_records_no_marking()
+    {
+        // Так записывались все измерения до схемы 1.3.0, и пустая разметка
+        // значит «точки не записаны», а не «измерено без точек».
+        var store = new RecordingReportStore();
+
+        var recorded = await UseCase(store).ExecuteAsync(
+            Report(), [Measurement(0.34)], Clinician, CancellationToken.None);
+
+        Assert.Empty(recorded.Markings);
+    }
+
+    private static MarkedMeasurement Marking(string method, int plane) =>
+        new(
+            method,
+            VolumeAxis.AcrossSlices,
+            plane,
+            [
+                new MarkedPoint(10, 20, plane),
+                new MarkedPoint(30, 20, plane),
+                new MarkedPoint(15, 18, plane),
+                new MarkedPoint(25, 18, plane),
+            ]);
+
+    [Fact]
     public async Task The_measurements_already_in_the_report_are_kept()
     {
         // Ручная отметка дописывается, а не заменяет отчёт: объём желудочковой

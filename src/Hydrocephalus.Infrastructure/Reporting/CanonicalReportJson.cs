@@ -32,8 +32,14 @@ public static class CanonicalReportJson
     /// читаемыми — поле новое, а не переименованное, — но серии не называют,
     /// и для них она неизвестна, а не совпадает с выбором ранжирования: выбор
     /// с тех пор менялся.
+    ///
+    /// 1.3.0 добавляет блок <c>markings</c> — точки, которыми врач отметил
+    /// ручное измерение. Без них значение нельзя разобрать на причину
+    /// расхождения с автоматическим: не сошлись точки или не сошёлся метод.
+    /// Прежние отчёты остаются читаемыми и здесь: пустая разметка значит
+    /// «точки не записывались», а не «измерено без точек».
     /// </summary>
-    public const string SchemaVersion = "1.2.0";
+    public const string SchemaVersion = "1.3.0";
 
     /// <summary>
     /// Схема канонического слоя, которой обязан соответствовать каждый
@@ -105,6 +111,7 @@ public static class CanonicalReportJson
         WriteSegmentation(writer, report);
         WriteMeasurement(writer, report);
         WriteAnnotations(writer, report.ClinicianAnnotations);
+        WriteMarkings(writer, report.Markings);
 
         writer.WriteEndObject();
     }
@@ -369,6 +376,36 @@ public static class CanonicalReportJson
             writer.WriteString("pseudonymousAuthorId", annotation.PseudonymousAuthorId);
             writer.WriteString("createdAt", Timestamp(annotation.CreatedAt));
             writer.WriteString("text", annotation.Text);
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndArray();
+    }
+
+    private static void WriteMarkings(
+        Utf8JsonWriter writer,
+        IReadOnlyList<MarkedMeasurement> markings)
+    {
+        writer.WriteStartArray("markings");
+
+        foreach (var marking in markings)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("method", marking.MethodCode);
+            writer.WriteString("markedAcross", marking.MarkedAcross.ToString());
+            writer.WriteNumber("planeIndex", marking.PlaneIndex);
+            writer.WriteStartArray("points");
+
+            foreach (var point in marking.Points)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("column", point.Column);
+                writer.WriteNumber("row", point.Row);
+                writer.WriteNumber("slice", point.Slice);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
             writer.WriteEndObject();
         }
 

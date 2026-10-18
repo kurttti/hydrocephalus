@@ -54,4 +54,13 @@ public sealed record AnalysisReport
     /// ручное исправление не является выводом модели.
     /// </summary>
     public IReadOnlyList<ClinicianAnnotation> ClinicianAnnotations { get; init; } = [];
+
+    /// <summary>
+    /// Точки, которыми врач отметил ручные измерения этой версии отчёта.
+    ///
+    /// Пустой список — «разметки нет», и это утверждение: до схемы 1.3.0 точки
+    /// не записывались вовсе, поэтому у прежних отчётов значение без разметки —
+    /// норма, а не потеря. Зачем они в отчёте — в <see cref="MarkedMeasurement"/>.
+    /// </summary>
+    public IReadOnlyList<MarkedMeasurement> Markings { get; init; } = [];
 }

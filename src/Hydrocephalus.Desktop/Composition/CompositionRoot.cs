@@ -615,11 +615,13 @@ public sealed class CompositionRoot : IDisposable
     /// </summary>
     /// <param name="measurements">Признаки одного измерения.</param>
     /// <param name="cancellationToken">Токен отмены.</param>
+    /// <param name="markings">Точки разметки либо <see langword="null"/>.</param>
     /// <returns>Новая версия отчёта.</returns>
     /// <exception cref="InvalidOperationException">Если исследование не открыто.</exception>
     public async Task<AnalysisReport> RecordMeasurementAsync(
         IReadOnlyList<Domain.Measurements.Biomarker> measurements,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<Domain.Reporting.MarkedMeasurement>? markings = null)
     {
         var current = this.report
             ?? throw new InvalidOperationException(
@@ -627,11 +629,33 @@ public sealed class CompositionRoot : IDisposable
                 + "or the last analysis did not finish.");
 
         this.report = await this.recordMeasurement
-            .ExecuteAsync(current, measurements, this.Actor, cancellationToken)
+            .ExecuteAsync(current, measurements, this.Actor, cancellationToken, markings)
             .ConfigureAwait(false);
 
         return this.report;
     }
+
+    /// <summary>
+    /// Читает последнюю записанную разметку открытого исследования.
+    ///
+    /// Нужно показу: разметка восстанавливается на снимке, чтобы врач видел,
+    /// куда ставил точки в прошлый раз, — проверить постановку задним числом
+    /// иначе нечем. Ищется перебором версий отчёта, потому что повторное
+    /// открытие исследования сохраняет отчёт без ручной отметки.
+    /// </summary>
+    /// <param name="methodCode">Код метода, чью разметку искать.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Разметка либо <see langword="null"/>, если её нет.</returns>
+    public Task<Infrastructure.Reporting.StoredMarking?> ReadMarkingAsync(
+        string methodCode,
+        CancellationToken cancellationToken) =>
+        this.report is { } current
+            ? Infrastructure.Reporting.ReportMarkings.ReadLatestAsync(
+                this.paths.ReportRoot,
+                current.PseudonymousStudyId,
+                methodCode,
+                cancellationToken)
+            : Task.FromResult<Infrastructure.Reporting.StoredMarking?>(null);
 
     /// <summary>
     /// Готовит отчёт к показу, ничего не записывая.

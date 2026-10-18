@@ -68,6 +68,7 @@ public sealed class ReportSchemaTests
     }
 
     [Theory]
+    [InlineData("volumeAxis", typeof(VolumeAxis))]
     [InlineData("seriesWeighting", typeof(SeriesWeighting))]
     [InlineData("imagingPlane", typeof(ImagingPlane))]
     [InlineData("acquisitionTier", typeof(AcquisitionTier))]
