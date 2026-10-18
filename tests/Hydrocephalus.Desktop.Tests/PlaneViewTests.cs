@@ -318,6 +318,72 @@ public sealed class PlaneViewTests
         Assert.Equal(first.Value.Row, second.Value.Row);
     }
 
+    [Fact]
+    public void A_marking_lies_over_the_mask()
+    {
+        // Линия в один воксель под маской не видна, а проверяют постановку
+        // точек именно по ней.
+        var view = View(VolumeAxis.AcrossSlices);
+
+        view.Marking = Mask(Grid, EvansOverlay.MarkedPointLabel);
+
+        var overlay = view.Overlay;
+
+        Assert.NotNull(overlay);
+        Assert.Contains(EvansOverlay.MarkedPointLabel, overlay);
+    }
+
+    [Fact]
+    public void A_marking_shows_even_with_the_overlay_switched_off()
+    {
+        // Выключатель прячет вывод модели. Разметку врача он прятать не должен:
+        // это единственный способ увидеть, куда поставлены точки.
+        var view = View(VolumeAxis.AcrossSlices);
+
+        view.ShowOverlay = false;
+        view.Marking = Mask(Grid, EvansOverlay.MarkedPointLabel);
+
+        var overlay = view.Overlay;
+
+        Assert.NotNull(overlay);
+        Assert.Contains(EvansOverlay.MarkedPointLabel, overlay);
+    }
+
+    [Fact]
+    public void Clearing_the_marking_returns_the_plain_mask()
+    {
+        var view = View(VolumeAxis.AcrossSlices);
+
+        view.Marking = Mask(Grid, EvansOverlay.MarkedPointLabel);
+        view.Marking = null;
+
+        Assert.DoesNotContain(EvansOverlay.MarkedPointLabel, view.Overlay!);
+    }
+
+    [Fact]
+    public void A_marking_announces_a_new_overlay()
+    {
+        var view = View(VolumeAxis.AcrossSlices);
+        var changed = new List<string?>();
+
+        view.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        view.Marking = Mask(Grid, EvansOverlay.MarkedPointLabel);
+
+        Assert.Contains(nameof(PlaneView.Overlay), changed);
+    }
+
+    [Fact]
+    public void A_marking_from_another_grid_is_refused()
+    {
+        // Разметка с другой сетки легла бы со смещением и выглядела бы как
+        // неверно поставленные точки.
+        var view = View(VolumeAxis.AcrossSlices);
+        var other = new VolumeGrid(new VolumeDimensions(5, 5, 5), 1.0, 1.0, 1.0);
+
+        _ = Assert.Throws<ArgumentException>(() => view.Marking = Mask(other));
+    }
+
     private static PlaneView View(VolumeAxis axis) =>
         new(Volume(), Mask(Grid), axis, new WindowLevel(500, 1000));
 

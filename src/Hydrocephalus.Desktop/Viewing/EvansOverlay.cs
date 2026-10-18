@@ -1,3 +1,4 @@
+using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Segmentation;
 using Hydrocephalus.Inference.Measurements;
 using Hydrocephalus.Inference.Segmentation;
@@ -26,6 +27,125 @@ public static class EvansOverlay
 
     /// <summary>Отрезок внутреннего диаметра черепа.</summary>
     public static readonly AnatomicalLabel InnerSkull = new("evans-inner-skull");
+
+    /// <summary>Метка отрезка рогов, отмеренного врачом.</summary>
+    public const byte MarkedHornsLabel = 5;
+
+    /// <summary>Метка внутреннего диаметра черепа, отмеренного врачом.</summary>
+    public const byte MarkedSkullLabel = 6;
+
+    /// <summary>Метка самих отмеченных точек.</summary>
+    public const byte MarkedPointLabel = 7;
+
+    /// <summary>Отрезок рогов, отмеренный врачом.</summary>
+    public static readonly AnatomicalLabel MarkedHorns = new("evans-marked-frontal-horns");
+
+    /// <summary>Внутренний диаметр черепа, отмеренный врачом.</summary>
+    public static readonly AnatomicalLabel MarkedSkull = new("evans-marked-inner-skull");
+
+    /// <summary>Отмеченная точка.</summary>
+    public static readonly AnatomicalLabel MarkedPoint = new("evans-marked-point");
+
+    /// <summary>
+    /// Возвращает слой с разметкой врача: сами нажатые точки и, когда их
+    /// четыре, два полученных отрезка.
+    ///
+    /// Нужен затем, что без него врач не видит, куда поставил точки, — а это
+    /// единственный способ проверить постановку. Число индекса такой проверки
+    /// не даёт: 0,33 выходит и из верно отмеченных рогов, и из точек, съехавших
+    /// на борозду, и из перепутанного порядка нажатий.
+    ///
+    /// Точки рисуются отдельной меткой от отрезков **намеренно**. Отрезок рогов
+    /// не проходит через нажатые точки: обе величины определения поперечные, и
+    /// отрезок рогов проецируется на ось, заданную точками черепа
+    /// (см. `ManualEvansIndex`). Видя и нажатия, и проекцию, врач видит
+    /// и саму поправку на наклон, а не только её результат.
+    ///
+    /// Слой отдельный, а не нарисованный в маске разбора: разбора может не быть
+    /// вовсе — на толстосрезовых сериях сегментация отказывает, и ручное
+    /// измерение для них и сделано.
+    /// </summary>
+    /// <param name="grid">Сетка объёма.</param>
+    /// <param name="points">Нажатые точки в порядке постановки.</param>
+    /// <param name="segments">Полученные отрезки либо <see langword="null"/>.</param>
+    /// <returns>Слой разметки; вне линий и точек он пуст.</returns>
+    public static VoxelMask Marks(
+        VolumeGrid grid,
+        IReadOnlyList<VoxelPosition> points,
+        EvansSegments? segments)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+
+        var dimensions = grid.Dimensions;
+        var labels = new byte[(long)dimensions.Columns * dimensions.Rows * dimensions.Slices];
+
+        if (segments is { } measured)
+        {
+            Line(dimensions, labels, measured.InnerSkullFirst, measured.InnerSkullSecond, MarkedSkullLabel);
+            Line(dimensions, labels, measured.FrontalHornFirst, measured.FrontalHornSecond, MarkedHornsLabel);
+        }
+
+        // Точки рисуются последними: нажатие важнее проведённой через него
+        // линии, и на пересечении должно остаться видно именно его.
+        foreach (var point in points)
+        {
+            Dot(dimensions, labels, point);
+        }
+
+        return new VoxelMask(
+            grid,
+            new LabelMap
+            {
+                Version = "evans-marks-1.0.0",
+                Labels =
+                [
+                    new AnatomicalLabel("unused-1"),
+                    new AnatomicalLabel("unused-2"),
+                    FrontalHorns,
+                    InnerSkull,
+                    MarkedHorns,
+                    MarkedSkull,
+                    MarkedPoint,
+                ],
+            },
+            labels);
+    }
+
+    /// <summary>
+    /// Рисует крест в три отсчёта: одиночный воксель на снимке в полный экран
+    /// теряется, а крест виден и при этом не закрывает то, по чему мерили.
+    /// </summary>
+    private static void Dot(Domain.Imaging.VolumeDimensions dimensions, byte[] labels, VoxelPosition point)
+    {
+        (int Column, int Row)[] cross =
+        [
+            (0, 0),
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+        ];
+
+        // Точка приходит в непрерывных координатах сетки: рисуется воксель,
+        // внутри которого она лежит, как и у концов отрезков.
+        var centreColumn = (int)Math.Round(point.Column);
+        var centreRow = (int)Math.Round(point.Row);
+        var centreSlice = (int)Math.Round(point.Slice);
+
+        foreach (var (column, row) in cross)
+        {
+            var at = (Column: centreColumn + column, Row: centreRow + row, Slice: centreSlice);
+
+            if (at.Column < 0 || at.Column >= dimensions.Columns
+                || at.Row < 0 || at.Row >= dimensions.Rows
+                || at.Slice < 0 || at.Slice >= dimensions.Slices)
+            {
+                continue;
+            }
+
+            labels[Offset(dimensions, at.Column, at.Row, at.Slice)] = MarkedPointLabel;
+        }
+    }
 
     /// <summary>
     /// Возвращает маску разбора с нарисованными отрезками.

@@ -934,6 +934,7 @@ public partial class MainWindow : Window
         if (this.RulerToggle.IsChecked != true || axial is null)
         {
             this.marking = null;
+            this.ShowMarks(null);
             this.RulerText.Visibility = Visibility.Collapsed;
             this.RulerUndo.IsEnabled = false;
             this.RulerReset.IsEnabled = false;
@@ -1077,6 +1078,32 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Кладёт на аксиальный срез разметку врача: нажатые точки и, когда их
+    /// четыре, полученные отрезки.
+    ///
+    /// Без этого проверить постановку точек нечем: число индекса одинаково
+    /// выходит и из верно отмеченных рогов, и из точек на борозде. Отрезки
+    /// рисуются тем же кодом, что и автоматические, и отличаются от них только
+    /// цветом, поэтому на объёмной серии видно сразу оба измерения.
+    /// </summary>
+    /// <param name="segments">Отрезки измерения либо <see langword="null"/>.</param>
+    private void ShowMarks(EvansSegments? segments)
+    {
+        var axial = this.AxialSurface();
+
+        if (axial is null)
+        {
+            return;
+        }
+
+        axial.View.Marking = this.marking is null || this.study is null
+            ? null
+            : EvansOverlay.Marks(this.study.Volume.Grid, this.marking.Points, segments);
+
+        axial.Redraw();
+    }
+
     private PlaneSurface? AxialSurface() =>
         this.surfaces.FirstOrDefault(surface => surface.View.Plane == ImagingPlane.Axial);
 
@@ -1102,6 +1129,9 @@ public partial class MainWindow : Window
 
         if (!this.marking.IsComplete)
         {
+            // Точки показываются сразу, по одной: промах виден на снимке, а не
+            // в числе, которого ещё нет.
+            this.ShowMarks(null);
             this.RulerText.Foreground = NeutralBrush;
             this.RulerText.Text = note is null ? counted : counted + " " + note;
 
@@ -1112,11 +1142,16 @@ public partial class MainWindow : Window
 
         if (result.Refusal is { } refusal)
         {
+            this.ShowMarks(null);
             this.RulerText.Foreground = BlockingBrush;
             this.RulerText.Text = counted + " " + DescribeRefusal(refusal);
 
             return;
         }
+
+        // Отрезки рисуются и тогда, когда значение неправдоподобно: именно в
+        // этом случае врачу и нужно увидеть, куда встали концы.
+        this.ShowMarks(result.Segments);
 
         var index = result.Biomarker!.Value;
 

@@ -28,6 +28,7 @@ public sealed class PlaneView : INotifyPropertyChanged
     private WindowLevel window;
     private bool showOverlay = true;
     private bool showReview;
+    private VoxelMask? marking;
 
     /// <summary>
     /// Создаёт вид.
@@ -118,6 +119,35 @@ public sealed class PlaneView : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Разметка врача: нажатые точки и полученные отрезки, либо
+    /// <see langword="null"/>, если ничего не отмечено.
+    ///
+    /// Показывается **независимо от выключателя оверлея**, и это не обход
+    /// ADR 0007. Выключатель прячет вывод модели, чтобы врач видел исходное
+    /// изображение, а здесь на изображении лежит то, что врач только что
+    /// отметил сам: спрятать это значит отнять единственный способ проверить
+    /// постановку точек. Исходное изображение остаётся доступным — разметка
+    /// снимается сбросом или выключением инструмента.
+    /// </summary>
+    public VoxelMask? Marking
+    {
+        get => this.marking;
+        set
+        {
+            if (value is not null && !value.Fits(this.volume))
+            {
+                throw new ArgumentException(
+                    "The marking does not fit the volume grid.",
+                    nameof(value));
+            }
+
+            this.marking = value;
+            this.Raise(nameof(this.Marking));
+            this.Raise(nameof(this.Overlay));
+        }
+    }
+
     /// <summary>Номер показанного среза.</summary>
     public int Index
     {
@@ -192,12 +222,47 @@ public sealed class PlaneView : INotifyPropertyChanged
                 : this.showReview && this.review is not null ? this.review.ExtractPlane(this.Axis, this.index)
                 : this.mask?.ExtractPlane(this.Axis, this.index);
 
+            // Разметка кладётся поверх: линия в один воксель под маской не
+            // видна, а проверять постановку точек нужно именно по ней.
+            if (this.marking is { } marks)
+            {
+                var drawn = marks.ExtractPlane(this.Axis, this.index);
+
+                plane = Over(plane, drawn);
+            }
+
             // Маска поворачивается тем же преобразованием, что и изображение:
             // иначе оверлей лёг бы зеркально к анатомии.
             return plane is null
                 ? null
                 : DisplayOrientation.Apply(plane, this.rawWidth, this.rawHeight, this.transform);
         }
+    }
+
+    /// <summary>
+    /// Накладывает разметку на срез маски, не меняя исходные массивы.
+    /// </summary>
+    /// <param name="under">Срез маски либо <see langword="null"/>.</param>
+    /// <param name="over">Срез разметки.</param>
+    /// <returns>Срез с разметкой поверх.</returns>
+    private static byte[] Over(byte[]? under, byte[] over)
+    {
+        if (under is null)
+        {
+            return over;
+        }
+
+        var merged = (byte[])under.Clone();
+
+        for (var index = 0; index < merged.Length; index++)
+        {
+            if (over[index] != 0)
+            {
+                merged[index] = over[index];
+            }
+        }
+
+        return merged;
     }
 
     /// <summary>Анатомическая плоскость этого вида.</summary>
