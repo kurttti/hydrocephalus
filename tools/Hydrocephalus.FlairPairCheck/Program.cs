@@ -243,6 +243,20 @@ foreach (var (studyId, (scan, _)) in planned.OrderBy(item => item.Key, StringCom
             flair.PseudonymousSeriesId,
             CancellationToken.None);
 
+        // Та же модель по серии T1 того же исследования: отрезки двух
+        // контрастов должны быть измерены одним кодом в одном прогоне.
+        ArmResult? onT1 = null;
+
+        if (ChooseT1(copy.Study) is { } t1)
+        {
+            var t1Volume = await volumes.LoadAsync(
+                copy.VolumeReference,
+                t1.PseudonymousSeriesId,
+                CancellationToken.None);
+
+            onT1 = Arm(t1Volume, model, t1.Weighting);
+        }
+
         var row = new Row
         {
             StudyId = studyId,
@@ -254,13 +268,17 @@ foreach (var (studyId, (scan, _)) in planned.OrderBy(item => item.Key, StringCom
             Threshold = Arm(volume, threshold, flair.Weighting),
             Trimmed = Arm(volume, trimmed, flair.Weighting),
             Model = Arm(volume, model, flair.Weighting),
+            ModelOnT1 = onT1,
         };
 
         rows.Add(row);
 
         Console.WriteLine(
             $"{rows.Count,3}. {studyId[..8]}  эталон {expected:0.0000}  "
-            + $"порог {Show(row.Threshold)}  с починкой {Show(row.Trimmed)}  модель {Show(row.Model)}");
+            + $"порог {Show(row.Threshold)}  с починкой {Show(row.Trimmed)}  модель {Show(row.Model)}"
+            + $"  T1 {(row.ModelOnT1 is null ? "нет серии" : Show(row.ModelOnT1))}"
+            + $"  рога {Millimetres(row.Model.WidthMillimetres)}/{Millimetres(row.ModelOnT1?.WidthMillimetres)}"
+            + $"  череп {Millimetres(row.Model.DiameterMillimetres)}/{Millimetres(row.ModelOnT1?.DiameterMillimetres)}");
     }
     catch (Exception error) when (error is IOException or InvalidOperationException
         or DomainRuleViolationException)
@@ -346,6 +364,10 @@ static string Show(ArmResult result) => result.Value is { } value
     ? value.ToString("0.0000", CultureInfo.InvariantCulture)
     : "—";
 
+static string Millimetres(double? value) => value is { } millimetres
+    ? millimetres.ToString("0.0", CultureInfo.InvariantCulture)
+    : "—";
+
 /// <summary>Считает индекс одним путём на уже загруженном объёме.</summary>
 static ArmResult Arm(IVoxelVolume volume, IVentricleSegmentation segmentation, SeriesWeighting weighting)
 {
@@ -373,11 +395,25 @@ static ArmResult Arm(IVoxelVolume volume, IVentricleSegmentation segmentation, S
 
     var millilitres = selected * voxel;
 
+    // Сами отрезки, а не только их отношение: индекс — дробь, и занижение
+    // дроби может идти и от числителя, и от знаменателя. Пока записано одно
+    // отношение, различить их нельзя.
+    var width = measured.Segments is { } segments
+        ? PatientSpace.DistanceMillimetres(volume, segments.FrontalHornFirst, segments.FrontalHornSecond)
+        : (double?)null;
+
+    var diameter = measured.Segments is { } found
+        ? PatientSpace.DistanceMillimetres(volume, found.InnerSkullFirst, found.InnerSkullSecond)
+        : (double?)null;
+
     return new ArmResult
     {
         Value = measured.Biomarker?.Value,
         Refusal = measured.Refusal?.ToString(),
         MaskMillilitres = millilitres,
+        WidthMillimetres = width,
+        DiameterMillimetres = diameter,
+        PlaneIndex = measured.Segments?.PlaneIndex,
         Issues = [.. mask.Issues.Select(issue => issue.Code + "/" + issue.Severity
             + (issue.Parameters.TryGetValue("reason", out var reason) ? "/" + reason : string.Empty))],
     };
@@ -397,6 +433,22 @@ static ImagingSeries? ChooseFlair(ImagingStudy study) => study.Series
     .Where(series => series.Geometry.CoversVentricles)
     .OrderByDescending(series => series.Geometry.CoverageMillimetres)
     .ThenBy(series => series.Geometry.SliceSpacingMillimetres)
+    .FirstOrDefault();
+
+/// <summary>
+/// Выбирает серию T1 того же исследования — ту, по которой считался эталон.
+///
+/// Требования те же: аксиальная плоскость, покрытие желудочков, без контраста.
+/// Нужна, чтобы отрезки обоих контрастов были измерены одним кодом в одном
+/// прогоне: сравнивать ширину из прошлой выгрузки с шириной из нынешней нельзя.
+/// </summary>
+static ImagingSeries? ChooseT1(ImagingStudy study) => study.Series
+    .Where(series => series.Weighting == SeriesWeighting.T1)
+    .Where(series => !series.IsContrastEnhanced)
+    .Where(series => series.Geometry.Plane == ImagingPlane.Axial)
+    .Where(series => series.Geometry.CoversVentricles)
+    .OrderByDescending(series => series.Geometry.Tier)
+    .ThenByDescending(series => series.Geometry.CoverageMillimetres)
     .FirstOrDefault();
 
 /// <summary>
@@ -454,6 +506,15 @@ internal sealed record ArmResult
     /// <summary>Объём маски, мл.</summary>
     public double MaskMillilitres { get; init; }
 
+    /// <summary>Ширина передних рогов, мм; <see langword="null"/> при отказе.</summary>
+    public double? WidthMillimetres { get; init; }
+
+    /// <summary>Внутренний диаметр черепа на той же плоскости, мм.</summary>
+    public double? DiameterMillimetres { get; init; }
+
+    /// <summary>Номер плоскости, на которой посчитан индекс.</summary>
+    public int? PlaneIndex { get; init; }
+
     /// <summary>Замечания сегментации.</summary>
     public IReadOnlyList<string> Issues { get; init; } = [];
 }
@@ -487,4 +548,10 @@ internal sealed record Row
 
     /// <summary>Модель.</summary>
     public required ArmResult Model { get; init; }
+
+    /// <summary>
+    /// Та же модель по серии T1 того же исследования либо <see langword="null"/>,
+    /// если пригодной аксиальной T1 в рабочей копии не нашлось.
+    /// </summary>
+    public ArmResult? ModelOnT1 { get; init; }
 }

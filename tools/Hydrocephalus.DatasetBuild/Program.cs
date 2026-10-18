@@ -40,7 +40,10 @@ if (args.Length == 0)
               дополнить манифест возрастом и полом, не трогая файлы набора;
           Hydrocephalus.DatasetBuild --exclude=<таблица.csv> [--apply]
               вынести из набора исследования, помеченные в таблице решений;
-              без --apply только печатает, что будет сделано.
+              без --apply только печатает, что будет сделано;
+          Hydrocephalus.DatasetBuild --add <группа>=<каталог>... [--apply]
+              пополнить существующий набор новыми исследованиями, не пересобирая
+              его; без --apply только печатает, что будет добавлено.
         """);
 
     return 2;
@@ -52,6 +55,7 @@ foreach (var argument in args)
 {
     if (string.Equals(argument, "--overwrite", StringComparison.Ordinal)
         || string.Equals(argument, "--demographics-only", StringComparison.Ordinal)
+        || string.Equals(argument, "--add", StringComparison.Ordinal)
         || string.Equals(argument, "--apply", StringComparison.Ordinal)
         || argument.StartsWith("--exclude=", StringComparison.Ordinal))
     {
@@ -94,6 +98,216 @@ var datasetRoot = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
     "Hydrocephalus",
     "dataset");
+
+// Пополнение существующего набора.
+//
+// Зачем отдельно от сборки. Полная пересборка вернула бы исследования,
+// вынесенные решениями владельца данных, и переписала бы хеши всех файлов, а
+// добавить нужно только новое. Поэтому режим читает существующий манифест,
+// пропускает то, что в наборе уже есть, и дописывает остальное.
+//
+// Исследование считается тем же самым по исходному псевдониму: он выводится из
+// UID источника, то есть не зависит ни от имени папки, ни от того, сколько раз
+// выгрузку копировали.
+if (args.Contains("--add", StringComparer.Ordinal))
+{
+    var before = await DatasetManifest.ReadAsync(datasetRoot, CancellationToken.None);
+
+    if (before is null)
+    {
+        Console.Error.WriteLine("Манифеста рядом с набором нет: пополнять нечего, нужна сборка.");
+
+        return 2;
+    }
+
+    if (groups.Count == 0)
+    {
+        Console.Error.WriteLine("Не задано ни одного <группа>=<каталог>.");
+
+        return 2;
+    }
+
+    var apply = args.Contains("--apply", StringComparer.Ordinal);
+    var options = new DicomImportOptions { PseudonymSalt = salt, MaxFileCount = 1_000_000 };
+    var writer = new StudyImporter(
+        options,
+        new WorkingCopyOptions { RootDirectory = Path.Combine(datasetRoot, ".unused") },
+        TimeProvider.System);
+
+    var have = before.Studies
+        .Select(study => study.PseudonymousStudyId)
+        .ToHashSet(StringComparer.Ordinal);
+
+    var added = new List<DatasetStudy>();
+    var skipped = new List<string>();
+    var problems = new List<string>();
+
+    Console.WriteLine(apply ? "=== Пополнение ===" : "=== Что будет добавлено (--apply не задан) ===");
+
+    foreach (var (group, root) in groups)
+    {
+        var folders = Directory.EnumerateDirectories(root)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        Console.WriteLine($"{group}: каталогов в источнике {folders.Count}");
+
+        for (var index = 0; index < folders.Count; index++)
+        {
+            var number = index + 1;
+            DicomScanResult scan;
+
+            try
+            {
+                scan = await new DicomStudyScanner(options)
+                    .ScanAsync(folders[index], CancellationToken.None);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                problems.Add($"{group}/{number}: разбор не удался ({error.GetType().Name})");
+                continue;
+            }
+
+            if (scan.Studies.Count == 0)
+            {
+                problems.Add($"{group}/{number}: читаемого исследования нет — {scan.DescribeRejections()}");
+                continue;
+            }
+
+            foreach (var study in scan.Studies)
+            {
+                if (have.Contains(study.PseudonymousStudyId))
+                {
+                    skipped.Add($"{group}/{number}: {Head(study.PseudonymousStudyId)} уже в наборе");
+                    continue;
+                }
+
+                var series = study.Series.Count;
+                var age = study.PatientAgeYears;
+                var sex = study.PatientSex;
+
+                Console.WriteLine(
+                    $"  {group}/{number}: пациент {Head(study.PseudonymousSubjectId)}, "
+                    + $"исследование {Head(study.PseudonymousStudyId)}, серий {series}, "
+                    + $"возраст {(age is null ? "—" : age.Value.ToString(CultureInfo.InvariantCulture))}, "
+                    + $"пол {sex ?? "—"}");
+
+                if (!apply)
+                {
+                    continue;
+                }
+
+                var target = Path.Combine(
+                    datasetRoot, group, study.PseudonymousSubjectId, study.PseudonymousStudyId);
+
+                try
+                {
+                    var copy = await writer.WriteDeidentifiedCopyAsync(
+                        scan, study, target, CancellationToken.None);
+
+                    var written = await new DicomStudyScanner(options)
+                        .ScanAsync(target, CancellationToken.None);
+
+                    var derived = written.Studies.SingleOrDefault();
+
+                    added.Add(new DatasetStudy
+                    {
+                        Group = group,
+                        PseudonymousSubjectId = study.PseudonymousSubjectId,
+                        PseudonymousStudyId = study.PseudonymousStudyId,
+                        DerivedSubjectId = derived?.PseudonymousSubjectId,
+                        DerivedStudyId = derived?.PseudonymousStudyId,
+                        AgeYears = study.PatientAgeYears,
+                        Sex = study.PatientSex,
+                        Series = [.. copy.Study.Series.Select(item => new DatasetSeries
+                        {
+                            PseudonymousSeriesId = item.PseudonymousSeriesId,
+                            Weighting = item.Weighting.ToString(),
+                            Tier = item.Geometry.Tier.ToString(),
+                            Slices = item.Geometry.Dimensions.Slices,
+                            SliceSpacingMillimetres = item.Geometry.SliceSpacingMillimetres,
+                        })],
+                        ExcludedSeries = copy.ExcludedSeries.Count,
+                        Files = [.. HashFiles(target)],
+                    });
+
+                    have.Add(study.PseudonymousStudyId);
+                }
+                catch (DomainRuleViolationException error)
+                {
+                    // Прежде всего отказ проверки обезличивания: исследование с
+                    // остаточным идентификатором в набор не попадает.
+                    Discard(target);
+                    problems.Add($"{group}/{number}: {Shorten(error.Message)}");
+                }
+                catch (Exception error) when (error is IOException or InvalidOperationException)
+                {
+                    Discard(target);
+                    problems.Add($"{group}/{number}: запись не удалась ({error.GetType().Name})");
+                }
+            }
+        }
+    }
+
+    Console.WriteLine();
+
+    if (skipped.Count > 0)
+    {
+        Console.WriteLine($"=== Уже были в наборе ({skipped.Count}) ===");
+
+        foreach (var line in skipped)
+        {
+            Console.WriteLine("  " + line);
+        }
+
+        Console.WriteLine();
+    }
+
+    if (problems.Count > 0)
+    {
+        Console.WriteLine($"=== Не вошли ({problems.Count}) ===");
+
+        foreach (var line in problems)
+        {
+            Console.WriteLine("  " + line);
+        }
+
+        Console.WriteLine();
+    }
+
+    if (!apply)
+    {
+        Console.WriteLine("Ничего не изменено. Повторить с --apply.");
+
+        return 0;
+    }
+
+    var all = before.Studies.Concat(added).ToList();
+
+    // Копия манифеста до пополнения: состав выборки меняется, и прежний состав
+    // должен остаться читаемым.
+    var backup = Path.Combine(
+        datasetRoot,
+        $"манифест-до-пополнения-{DateTime.Now:yyyy-MM-dd}.json");
+
+    File.Copy(Path.Combine(datasetRoot, DatasetManifest.FileName), backup, overwrite: true);
+
+    await (before with { Studies = all }).WriteAsync(datasetRoot, CancellationToken.None);
+
+    Console.WriteLine($"добавлено исследований: {added.Count}");
+    Console.WriteLine($"в манифесте стало: {all.Count} (было {before.Studies.Count})");
+
+    foreach (var group in all.Select(study => study.Group).Distinct(StringComparer.Ordinal)
+        .Order(StringComparer.Ordinal))
+    {
+        Console.WriteLine(
+            $"  {group,-28} пациентов {Subjects(all, group),3}, исследований {Studies(all, group),3}");
+    }
+
+    Console.WriteLine("Копия манифеста до пополнения лежит рядом с набором.");
+
+    return 0;
+}
 
 // Вынос исследований из набора по таблице решений владельца данных.
 //
