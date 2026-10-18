@@ -106,6 +106,102 @@ public sealed class ModelVentricleSegmentationTests
     }
 
     [Fact]
+    public void A_weighting_allowed_explicitly_reaches_the_network()
+    {
+        // Расширение состава взвешенностей существует ради проверки модели на
+        // FLAIR: исследований, у которых аксиальна только серия FLAIR, в
+        // выборке восемнадцать, и ни один путь сегментации не может их сверить.
+        var labelling = new FakeLabelling(ventricleVoxels: 400);
+
+        var result = new ModelVentricleSegmentation(
+                labelling,
+                "vinn-axial-2.0.0",
+                options: null,
+                acceptedWeightings: [SeriesWeighting.T1, SeriesWeighting.Flair])
+            .Segment(Volume(), SeriesWeighting.Flair, "series-1");
+
+        Assert.Equal(1, labelling.Calls);
+        Assert.Equal(MeasurementQuality.Questionable, result.Quality);
+        Assert.True(Count(result.Mask) > 0);
+    }
+
+    [Fact]
+    public void A_result_outside_T1_says_so_beside_the_value()
+    {
+        var result = new ModelVentricleSegmentation(
+                new FakeLabelling(ventricleVoxels: 400),
+                "vinn-axial-2.0.0",
+                options: null,
+                acceptedWeightings: [SeriesWeighting.T1, SeriesWeighting.Flair])
+            .Segment(Volume(), SeriesWeighting.Flair, "series-1");
+
+        // Оба замечания сразу: ослабленный режим одного вида и выход за
+        // обученную взвешенность. Второе не заменяет первое.
+        var reasons = result.Issues.Select(issue => issue.Parameters["reason"]).ToList();
+
+        Assert.Contains("ventricleModelSingleAxialView", reasons);
+        Assert.Contains("ventricleModelOutsideT1", reasons);
+        Assert.Equal(
+            "Flair",
+            result.Issues
+                .Single(issue => issue.Parameters["reason"] == "ventricleModelOutsideT1")
+                .Parameters["weighting"]);
+    }
+
+    [Fact]
+    public void A_weighting_left_out_of_the_allowed_set_is_still_refused()
+    {
+        // Разрешение FLAIR не открывает дорогу T2: там ликвор яркий.
+        var labelling = new FakeLabelling(ventricleVoxels: 400);
+
+        var result = new ModelVentricleSegmentation(
+                labelling,
+                "vinn-axial-2.0.0",
+                options: null,
+                acceptedWeightings: [SeriesWeighting.T1, SeriesWeighting.Flair])
+            .Segment(Volume(), SeriesWeighting.T2, "series-1");
+
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+        Assert.Equal(0, labelling.Calls);
+    }
+
+    [Fact]
+    public void A_wider_set_of_weightings_is_visible_in_the_provenance()
+    {
+        // Значение, полученное моделью на FLAIR, не должно смешаться в одной
+        // таблице со значением, полученным на T1: различать их обязана строка
+        // происхождения, попадающая в отчёт.
+        var onlyT1 = new ModelVentricleSegmentation(
+            new FakeLabelling(ventricleVoxels: 400),
+            "vinn-axial-2.0.0");
+
+        var withFlair = new ModelVentricleSegmentation(
+            new FakeLabelling(ventricleVoxels: 400),
+            "vinn-axial-2.0.0",
+            options: null,
+            acceptedWeightings: [SeriesWeighting.T1, SeriesWeighting.Flair]);
+
+        Assert.Equal("ventricles-model/vinn-axial-2.0.0", onlyT1.Provenance);
+        Assert.Equal(
+            "ventricles-model/vinn-axial-2.0.0/outside-t1:Flair",
+            withFlair.Provenance);
+    }
+
+    [Fact]
+    public void By_default_the_model_takes_T1_alone()
+    {
+        // Состав по умолчанию — не подробность реализации: от него зависит, что
+        // получит врач, если довод где-то забыли передать.
+        var labelling = new FakeLabelling(ventricleVoxels: 400);
+
+        var result = Segment(labelling, SeriesWeighting.Flair);
+
+        Assert.Equal(MeasurementQuality.Unreliable, result.Quality);
+        Assert.Equal("ventricleModelNeedsT1", Assert.Single(result.Issues).Parameters["reason"]);
+        Assert.Equal(0, labelling.Calls);
+    }
+
+    [Fact]
     public void A_targeted_block_is_refused_before_the_network_runs()
     {
         // Прицельный блок модель размечает молча и неверно: желудочки в нём

@@ -36,4 +36,18 @@
     <DOTNET_CLI_TELEMETRY_OPTOUT>1</DOTNET_CLI_TELEMETRY_OPTOUT>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!-- Аудит пакетов проверяет прямые зависимости, транзитивные — нет.
+         Причина конкретная: System.Security.Cryptography.Pkcs приходит
+         транзитивно (fo-dicom/PDFsharp) и помечен GHSA-846f-f764-76mx и
+         GHSA-2fmv-rv2c-59x7 во всех доступных версиях, включая новейшую
+         10.0.11 — исправленной аудит не предлагает, и обновить её нечем.
+         При режиме «all» и TreatWarningsAsErrors это ошибка сборки на любом
+         чистом восстановлении: получает её только новый проект, у остальных
+         восстановление лежит в кэше с тех пор, когда предупреждения ещё не
+         было. Прямые зависимости — те, что мы выбираем сами, — проверяются
+         по-прежнему. -->
+    <NuGetAuditMode>direct</NuGetAuditMode>
+  </PropertyGroup>
+
 </Project>

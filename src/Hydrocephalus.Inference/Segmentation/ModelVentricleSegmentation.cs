@@ -44,8 +44,11 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
     /// </summary>
     public const double MinCoverageMillimetres = SeriesGeometry.MinVentricleCoverageMillimetres;
 
+    private static readonly SeriesWeighting[] T1Only = [SeriesWeighting.T1];
+
     private readonly IConformedVolumeLabelling model;
     private readonly BaselineSegmentationOptions options;
+    private readonly HashSet<SeriesWeighting> accepted;
 
     /// <summary>
     /// Создаёт путь модели.
@@ -53,17 +56,49 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
     /// <param name="model">Открытая модель — разметка приведённого куба.</param>
     /// <param name="modelVersion">Версия пакета модели, как её показывают врачу.</param>
     /// <param name="options">Пороги правдоподобия; по умолчанию те же, что у порогового пути.</param>
+    /// <param name="acceptedWeightings">
+    /// Взвешенности, которые модель берёт в работу; по умолчанию одна — T1.
+    ///
+    /// Довод существует ради проверки: исследований, у которых аксиальна только
+    /// серия FLAIR, в выборке восемнадцать, и автоматического эталона для них
+    /// нет ни у одного пути сегментации. Проверить модель на FLAIR можно лишь
+    /// на парах «у того же пациента есть измеренная моделью T1», и для этого
+    /// модели нужно разрешить FLAIR явно. Молчаливого расширения здесь нет: по
+    /// умолчанию остаётся T1, разрешённая иная взвешенность меняет строку
+    /// происхождения и добавляет к каждому результату замечание о выходе за
+    /// пределы обученного распределения.
+    /// </param>
     public ModelVentricleSegmentation(
         IConformedVolumeLabelling model,
         string modelVersion,
-        BaselineSegmentationOptions? options = null)
+        BaselineSegmentationOptions? options = null,
+        IEnumerable<SeriesWeighting>? acceptedWeightings = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelVersion);
 
         this.model = model;
         this.options = options ?? new BaselineSegmentationOptions();
-        this.Provenance = $"{MethodCode}/{modelVersion}";
+        this.accepted = [.. acceptedWeightings ?? T1Only];
+
+        if (this.accepted.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one weighting must be accepted.", nameof(acceptedWeightings));
+        }
+
+        // Расширенный состав взвешенностей виден в происхождении, то есть в
+        // отчёте и в сводке прогона: значение, полученное моделью на FLAIR,
+        // нельзя смешать в одной таблице со значением, полученным на T1.
+        var beyondT1 = this.accepted
+            .Where(weighting => weighting != SeriesWeighting.T1)
+            .Select(weighting => weighting.ToString())
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        this.Provenance = beyondT1.Count == 0
+            ? $"{MethodCode}/{modelVersion}"
+            : $"{MethodCode}/{modelVersion}/outside-t1:{string.Join('+', beyondT1)}";
     }
 
     /// <inheritdoc />
@@ -87,8 +122,9 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
         // Взвешенность проверяется до работы, а не после: модель обучена и
         // проверена на T1, а на T2 ликвор яркий, то есть обратен тому, что она
         // видела. Отдавать такую маску молча нельзя, и подменять путь здесь —
-        // тоже: выбор способа принадлежит вызывающему.
-        if (weighting != SeriesWeighting.T1)
+        // тоже: выбор способа принадлежит вызывающему. Состав разрешённых
+        // взвешенностей задаётся при сборке и по умолчанию равен одной T1.
+        if (!this.accepted.Contains(weighting))
         {
             return this.Refused(grid, NotT1(weighting));
         }
@@ -128,9 +164,16 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
             return this.Refused(grid, TooSmall(millilitres));
         }
 
+        // Замечания сопровождают каждый успешный результат: ослабленный режим
+        // одного вида — всегда, выход за обученную взвешенность — когда серия
+        // не T1. Врач и разбор прогона видят это рядом со значением.
+        QualityIssue[] issues = weighting == SeriesWeighting.T1
+            ? [SingleView()]
+            : [SingleView(), OutsideT1(weighting)];
+
         return new VentricleSegmentationResult(
             Mask(grid, labels, this.model.LabelMapVersion),
-            [SingleView()],
+            issues,
 
             // Достоверность задаётся здесь и остаётся «сомнительно», пока модель
             // не проверена против ручной разметки: ADR 0009 требует этого прямо,
@@ -172,6 +215,22 @@ public sealed class ModelVentricleSegmentation : IVentricleSegmentation
         QualityIssueCode.OutOfDistribution,
         QualityIssueSeverity.Warning,
         ("reason", "ventricleModelSingleAxialView"));
+
+    /// <summary>
+    /// Серия не T1, а модель обучена на T1.
+    ///
+    /// Предупреждение, а не отказ: отказ стоит выше и срабатывает, пока такая
+    /// взвешенность не разрешена явно. Что именно меняется на FLAIR, сказать
+    /// заранее нельзя — тёмен на нём только ликвор, а контраст серого и белого
+    /// обратный T1, и перивентрикулярные изменения при иНТГ лежат как раз на
+    /// границе передних рогов, которую модель обязана найти. Поэтому замечание
+    /// остаётся при любом исходе проверки.
+    /// </summary>
+    private static QualityIssue OutsideT1(SeriesWeighting weighting) => Issue(
+        QualityIssueCode.OutOfDistribution,
+        QualityIssueSeverity.Warning,
+        ("reason", "ventricleModelOutsideT1"),
+        ("weighting", weighting.ToString()));
 
     private static QualityIssue NotT1(SeriesWeighting weighting) => Issue(
         QualityIssueCode.OutOfDistribution,
