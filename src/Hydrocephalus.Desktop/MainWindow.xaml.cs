@@ -958,6 +958,26 @@ public partial class MainWindow : Window
         this.ShowMarkingState("Отметьте два конца внутреннего диаметра черепа — они задают ось, — затем два конца ширины передних рогов.");
     }
 
+    /// <summary>
+    /// Переключает режим «только рога»: разметка начинается заново, потому что
+    /// порядок точек у двух режимов разный — в полном первыми идут концы
+    /// черепа, здесь их нет вовсе.
+    /// </summary>
+    /// <param name="sender">Источник события.</param>
+    /// <param name="e">Событие.</param>
+    private void OnSeededChanged(object sender, RoutedEventArgs e)
+    {
+        if (this.marking is null)
+        {
+            return;
+        }
+
+        this.marking.Reset();
+        this.ShowMarkingState(this.SeededToggle.IsChecked == true
+            ? "Отметьте два конца ширины передних рогов; череп программа отмерит сама."
+            : "Отметьте два конца внутреннего диаметра черепа — они задают ось, — затем два конца ширины передних рогов.");
+    }
+
     private void OnRulerUndo(object sender, RoutedEventArgs e)
     {
         if (this.marking is null)
@@ -1058,10 +1078,14 @@ public partial class MainWindow : Window
             this.RulerRecord.IsEnabled = false;
 
             this.RulerText.Foreground = NeutralBrush;
-            this.RulerText.Text = string.Create(
-                CultureInfo.CurrentCulture,
-                $"Индекс Эванса {measurements[0].Value:0.000} и поворот головы "
-                + $"{measurements[1].Value:0.#}° записаны в отчёт.");
+            this.RulerText.Text = measurements.Count > 1
+                ? string.Create(
+                    CultureInfo.CurrentCulture,
+                    $"Индекс Эванса {measurements[0].Value:0.000} и поворот головы "
+                    + $"{measurements[1].Value:0.#}° записаны в отчёт.")
+                : string.Create(
+                    CultureInfo.CurrentCulture,
+                    $"Индекс Эванса {measurements[0].Value:0.000} записан в отчёт: рога отмечены врачом, череп отмерен программой.");
 
             // Экран результата показывает новую версию: иначе измерение было бы
             // записано, а на экране его бы не было.
@@ -1108,17 +1132,94 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Показывает состояние режима «только рога».
+    ///
+    /// Две точки — это всё, что нужно: знаменатель программа отмеряет сама, и
+    /// записывается такое измерение **своим** кодом метода, потому что по
+    /// способу получения оно не ручное и не автоматическое.
+    /// </summary>
+    /// <param name="note">Пояснение к последнему действию либо <see langword="null"/>.</param>
+    private void ShowSeededState(string? note)
+    {
+        if (this.study is null || this.marking is null)
+        {
+            return;
+        }
+
+        var points = this.marking.Points;
+        var counted = string.Create(
+            CultureInfo.CurrentCulture,
+            $"Отмечено точек: {points.Count} из 2.");
+
+        if (points.Count < 2)
+        {
+            this.ShowMarks(null);
+            this.RulerText.Foreground = NeutralBrush;
+            this.RulerText.Text = note is null ? counted : counted + " " + note;
+
+            return;
+        }
+
+        var result = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            this.study.Volume,
+            points[0],
+            points[1]);
+
+        if (result.Refusal is { } refusal)
+        {
+            this.ShowMarks(null);
+            this.RulerText.Foreground = BlockingBrush;
+            this.RulerText.Text = counted + " " + DescribeSeededRefusal(refusal);
+
+            return;
+        }
+
+        this.ShowMarks(result.Segments);
+
+        var index = result.Biomarker!.Value;
+
+        this.RulerText.Foreground = result.Biomarker.IsOutOfRange ? WarningBrush : NeutralBrush;
+        this.RulerText.Text = string.Create(
+            CultureInfo.CurrentCulture,
+            $"Индекс Эванса {index:0.000}: рога ваши, череп отмерен программой"
+            + $"{(result.Biomarker.IsOutOfRange
+                ? " — вне правдоподобного диапазона, проверьте точки"
+                : " — можно записать в отчёт")}");
+
+        this.recorded = result.Biomarker.IsOutOfRange ? null : [result.Biomarker];
+        this.RulerRecord.IsEnabled = this.recorded is not null;
+    }
+
+    private static string DescribeSeededRefusal(AutomaticEvansRefusal refusal) => refusal switch
+    {
+        AutomaticEvansRefusal.MarkedPointsOnDifferentPlanes => "Точки на разных срезах.",
+        AutomaticEvansRefusal.InnerSkullNotFound => "Граница черепа на этом срезе не найдена.",
+        AutomaticEvansRefusal.AxesNotAligned => "Оси серии не дают аксиальной плоскости.",
+        _ => "Измерить не удалось.",
+    };
+
+    /// <summary>
     /// Собирает точки индекса Эванса для записи в отчёт.
     /// </summary>
     /// <returns>Разметка либо <see langword="null"/>, если точек нет.</returns>
-    private IReadOnlyList<MarkedMeasurement>? EvansMarks() =>
-        this.marking is { IsComplete: true, PlaneIndex: { } plane }
+    private IReadOnlyList<MarkedMeasurement>? EvansMarks()
+    {
+        if (this.marking is not { PlaneIndex: { } plane })
+        {
+            return null;
+        }
+
+        var seeded = this.SeededToggle.IsChecked == true;
+        var enough = seeded ? this.marking.Points.Count >= 2 : this.marking.IsComplete;
+
+        return enough
             ? [new MarkedMeasurement(
-                LinearBiomarkers.ManualEvansIndexCode,
+                seeded ? LinearBiomarkers.SeededEvansIndexCode : LinearBiomarkers.ManualEvansIndexCode,
                 this.marking.AxialAcross,
                 plane,
                 [.. this.marking.Points.Select(Point)])]
             : null;
+    }
 
     /// <summary>
     /// Собирает точки угла мозолистого тела для записи в отчёт.
@@ -1226,6 +1327,13 @@ public partial class MainWindow : Window
         var counted = string.Create(
             CultureInfo.CurrentCulture,
             $"Отмечено точек: {this.marking.Points.Count} из {ManualEvansMarking.RequiredPoints}.");
+
+        if (this.SeededToggle.IsChecked == true)
+        {
+            this.ShowSeededState(note);
+
+            return;
+        }
 
         if (!this.marking.IsComplete)
         {

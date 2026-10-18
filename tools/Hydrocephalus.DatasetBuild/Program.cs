@@ -41,9 +41,10 @@ if (args.Length == 0)
           Hydrocephalus.DatasetBuild --exclude=<таблица.csv> [--apply]
               вынести из набора исследования, помеченные в таблице решений;
               без --apply только печатает, что будет сделано;
-          Hydrocephalus.DatasetBuild --add <группа>=<каталог>... [--apply]
+          Hydrocephalus.DatasetBuild --add <группа>=<каталог>... [--apply] [--reinstate]
               пополнить существующий набор новыми исследованиями, не пересобирая
-              его; без --apply только печатает, что будет добавлено.
+              его; без --apply только печатает, что будет добавлено. Вынесенное
+              прежде не возвращается: для этого нужен --reinstate.
         """);
 
     return 2;
@@ -56,6 +57,7 @@ foreach (var argument in args)
     if (string.Equals(argument, "--overwrite", StringComparison.Ordinal)
         || string.Equals(argument, "--demographics-only", StringComparison.Ordinal)
         || string.Equals(argument, "--add", StringComparison.Ordinal)
+        || string.Equals(argument, "--reinstate", StringComparison.Ordinal)
         || string.Equals(argument, "--apply", StringComparison.Ordinal)
         || argument.StartsWith("--exclude=", StringComparison.Ordinal))
     {
@@ -138,8 +140,21 @@ if (args.Contains("--add", StringComparer.Ordinal))
         .Select(study => study.PseudonymousStudyId)
         .ToHashSet(StringComparer.Ordinal);
 
+    // Вынесенное решением владельца данных лежит рядом с набором и в манифесте
+    // его уже нет. Без этой проверки пополнение из того же источника вернуло бы
+    // исключённого пациента обратно — молча, потому что от манифеста он
+    // действительно отличается только отсутствием. Проверено на источнике
+    // 2026-10-18: утилита предлагала вернуть пациента, вынесенного в тот же
+    // день по качеству снимков.
+    var removed = Removed(Path.Combine(
+        Path.GetDirectoryName(Path.GetFullPath(datasetRoot))!,
+        "dataset-исключённые"));
+
+    var reinstate = args.Contains("--reinstate", StringComparer.Ordinal);
+
     var added = new List<DatasetStudy>();
     var skipped = new List<string>();
+    var reinstated = new List<string>();
     var problems = new List<string>();
 
     Console.WriteLine(apply ? "=== Пополнение ===" : "=== Что будет добавлено (--apply не задан) ===");
@@ -179,6 +194,16 @@ if (args.Contains("--add", StringComparer.Ordinal))
                 if (have.Contains(study.PseudonymousStudyId))
                 {
                     skipped.Add($"{group}/{number}: {Head(study.PseudonymousStudyId)} уже в наборе");
+                    continue;
+                }
+
+                if (!reinstate
+                    && (removed.Contains(study.PseudonymousStudyId)
+                        || removed.Contains(study.PseudonymousSubjectId)))
+                {
+                    reinstated.Add(
+                        $"{group}/{number}: {Head(study.PseudonymousStudyId)} вынесено ранее — "
+                        + "не возвращается без --reinstate");
                     continue;
                 }
 
@@ -261,6 +286,17 @@ if (args.Contains("--add", StringComparer.Ordinal))
         }
 
         Console.WriteLine();
+    }
+
+    if (reinstated.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"=== Вынесены ранее, не возвращаются ({reinstated.Count}) ===");
+
+        foreach (var line in reinstated)
+        {
+            Console.WriteLine("  " + line);
+        }
     }
 
     if (problems.Count > 0)
@@ -817,6 +853,33 @@ static void Discard(string directory)
 }
 
 /// <summary>Первые восемь знаков псевдонима — столько печатается в отчётах.</summary>
+/// <summary>
+/// Псевдонимы всего, что вынесено из набора: имена каталогов в хранилище
+/// вынесенного. Берутся именно каталоги, а не разность манифестов: каталог —
+/// это то, что лежит на диске, и вернуть его можно только сознательно.
+/// </summary>
+static HashSet<string> Removed(string root)
+{
+    var removed = new HashSet<string>(StringComparer.Ordinal);
+
+    if (!Directory.Exists(root))
+    {
+        return removed;
+    }
+
+    foreach (var path in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+    {
+        var name = Path.GetFileName(path);
+
+        if (name.Length == 32 && name.All(Uri.IsHexDigit))
+        {
+            _ = removed.Add(name);
+        }
+    }
+
+    return removed;
+}
+
 static string Head(string pseudonym) =>
     pseudonym.Length <= 8 ? pseudonym : pseudonym[..8];
 

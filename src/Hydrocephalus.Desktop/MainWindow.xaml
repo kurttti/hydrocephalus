@@ -224,6 +224,26 @@
                     <StackPanel Orientation="Horizontal"
                                 VerticalAlignment="Center"
                                 Visibility="{Binding IsChecked, ElementName=RulerToggle, Converter={StaticResource WhenOn}}">
+                        <!-- Режим «только рога»: врач отмечает ширину передних
+                             рогов, а внутренний поперечник черепа программа
+                             отмеряет сама по тёмной полосе кости. Сверка с
+                             ручной линейкой 2026-10-18 показала, что трудная
+                             половина измерения — числитель, а знаменатель
+                             совпадает между контрастами с точностью 1-2 %. -->
+                        <CheckBox x:Name="SeededToggle"
+                                  Content="только _рога"
+                                  Margin="10,0,0,0"
+                                  VerticalAlignment="Center"
+                                  Foreground="#E6E6EA"
+                                  IsChecked="False"
+                                  Checked="OnSeededChanged"
+                                  Unchecked="OnSeededChanged">
+                            <CheckBox.ToolTip>
+                                <TextBlock MaxWidth="420" TextWrapping="Wrap"
+                                           Text="Отметить только два конца ширины передних рогов. Внутренний поперечник черепа на том же срезе программа отмерит сама; записано это будет отдельным методом, не как ручное измерение." />
+                            </CheckBox.ToolTip>
+                        </CheckBox>
+
                         <Button x:Name="RulerUndo"
                                 Content="Отменить точку"
                                 Margin="10,0,0,0"

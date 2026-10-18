@@ -45,6 +45,94 @@ public sealed class AutomaticEvansIndexTests
     }
 
     [Fact]
+    public void The_seeded_index_measures_the_skull_itself_from_the_marked_horns()
+    {
+        // Врач даёт числитель, программа — знаменатель. На фантоме знаменатель
+        // известен: 68 мм, и значение обязано совпасть с полностью
+        // автоматическим, если рога заданы теми же концами.
+        var (volume, segmentation) = Phantom(Ventricles.Both);
+        var automatic = AutomaticEvansIndex.Measure(volume, segmentation, SeriesWeighting.T1);
+
+        var seeded = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            volume,
+            automatic.Segments!.FrontalHornFirst,
+            automatic.Segments.FrontalHornSecond);
+
+        Assert.Null(seeded.Refusal);
+        Assert.Equal(24.0 / 68.0, seeded.Biomarker!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void The_seeded_index_needs_no_segmentation_at_all()
+    {
+        // В этом и смысл: на толстосрезовых T2 сегментация отказывает, а
+        // измерение нужно. Маска сюда не передаётся вовсе.
+        var (volume, _) = Phantom(Ventricles.Both);
+
+        var seeded = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            volume,
+            new VoxelPosition(38, 40, 30),
+            new VoxelPosition(62, 40, 30));
+
+        Assert.Null(seeded.Refusal);
+        Assert.NotNull(seeded.Segments);
+    }
+
+    [Fact]
+    public void The_seeded_index_follows_the_marked_width()
+    {
+        // Числитель — ровно то, что отметил врач: шире отметка, больше индекс.
+        var (volume, _) = Phantom(Ventricles.Both);
+
+        var narrow = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            volume, new VoxelPosition(40, 40, 30), new VoxelPosition(60, 40, 30));
+
+        var wide = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            volume, new VoxelPosition(36, 40, 30), new VoxelPosition(64, 40, 30));
+
+        Assert.Equal(20.0 / 68.0, narrow.Biomarker!.Value, precision: 6);
+        Assert.Equal(28.0 / 68.0, wide.Biomarker!.Value, precision: 6);
+    }
+
+    [Fact]
+    public void The_seeded_index_refuses_points_on_different_planes()
+    {
+        // Две точки на разных срезах описывают косой отрезок, а индекс
+        // определён на одном срезе.
+        var (volume, segmentation) = Phantom(Ventricles.Both);
+        var segments = AutomaticEvansIndex.Measure(volume, segmentation, SeriesWeighting.T1).Segments!;
+
+        // Фантом получен сагиттально: плоскости лежат поперёк той оси, которую
+        // назовёт сам метод, а не поперёк срезов сетки.
+        var second = segments.FrontalHornSecond;
+        var moved = segments.AxialAcross switch
+        {
+            VolumeAxis.AcrossColumns => second with { Column = second.Column + 3 },
+            VolumeAxis.AcrossRows => second with { Row = second.Row + 3 },
+            _ => second with { Slice = second.Slice + 3 },
+        };
+
+        var result = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            volume, segments.FrontalHornFirst, moved);
+
+        Assert.Equal(AutomaticEvansRefusal.MarkedPointsOnDifferentPlanes, result.Refusal);
+    }
+
+    [Fact]
+    public void The_seeded_index_names_its_own_method()
+    {
+        // Ни ручное, ни автоматическое: по способу получения это третий путь, и
+        // сводить его с ними в одну запись нельзя.
+        var (volume, _) = Phantom(Ventricles.Both);
+
+        var result = AutomaticEvansIndex.MeasureFromFrontalHorns(
+            volume, new VoxelPosition(38, 40, 30), new VoxelPosition(62, 40, 30));
+
+        Assert.Equal("evans-index-seeded", result.Biomarker!.Method.Code);
+        Assert.Equal(MeasurementQuality.Questionable, result.Biomarker.Quality);
+    }
+
+    [Fact]
     public void Growth_by_intensity_recovers_a_horn_the_mask_clipped()
     {
         // Рога от 38-го до 61-го отсчёта — 24 мм в маске; ликвор идёт от 34-го

@@ -1,5 +1,6 @@
 using Hydrocephalus.Domain.Imaging;
 using Hydrocephalus.Domain.Measurements;
+using Hydrocephalus.Domain.Segmentation;
 using Hydrocephalus.Inference.Segmentation;
 
 namespace Hydrocephalus.Inference.Measurements;
@@ -23,6 +24,9 @@ public enum AutomaticEvansRefusal
 
     /// <summary>На плоскости рогов не нашлась граница мозга и черепа.</summary>
     InnerSkullNotFound = 5,
+
+    /// <summary>Отмеченные точки рогов лежат на разных плоскостях.</summary>
+    MarkedPointsOnDifferentPlanes = 6,
 }
 
 /// <summary>
@@ -203,6 +207,130 @@ public static class AutomaticEvansIndex
             Segments = segments,
         };
     }
+
+    /// <summary>
+    /// Считает индекс по двум точкам рогов, отмеченным врачом: внутренний
+    /// поперечник черепа на том же срезе программа отмеряет сама.
+    ///
+    /// Зачем. Парная проверка 2026-10-18 и сверка с ручной линейкой 2026-10-18
+    /// показали, что трудная половина измерения — числитель: границу переднего
+    /// рога модель на FLAIR обрезает, а на T2 метод отказывает вовсе, тогда как
+    /// внутренняя пластинка черепа находится по тёмной полосе кости и совпадает
+    /// между контрастами с точностью 1–2 %. Значит человеку разумно отдать рога,
+    /// а знаменатель — программе: это снимает с читателя половину нажатий и ту
+    /// половину разброса, которая приходится на знаменатель.
+    ///
+    /// Взвешенность здесь шире, чем у полностью автоматического пути: T2 тоже
+    /// допускается. Тёмным ликвор должен быть только для поиска **рогов**, а
+    /// рога задаёт врач; кость темнее ткани при любой взвешенности.
+    /// </summary>
+    /// <param name="volume">Объём.</param>
+    /// <param name="first">Первый конец ширины передних рогов.</param>
+    /// <param name="second">Второй конец ширины передних рогов.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Индекс с отрезками либо причина отказа.</returns>
+    public static AutomaticEvansResult MeasureFromFrontalHorns(
+        IVoxelVolume volume,
+        VoxelPosition first,
+        VoxelPosition second,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(volume);
+
+        if (AxesOf(volume.Geometry) is not { } axes)
+        {
+            return Refused(AutomaticEvansRefusal.AxesNotAligned);
+        }
+
+        var plane = PlaneOf(first, axes);
+
+        if (plane != PlaneOf(second, axes))
+        {
+            return Refused(AutomaticEvansRefusal.MarkedPointsOnDifferentPlanes);
+        }
+
+        if (plane < 0 || plane >= volume.Grid.Dimensions.Slices + volume.Grid.Dimensions.Rows)
+        {
+            return Refused(AutomaticEvansRefusal.MarkedPointsOnDifferentPlanes);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Маска здесь не нужна и не используется: череп ищется по яркости,
+        // а рога пришли от врача. Пустая маска стоит лишь потому, что ею
+        // адресуется плоскость.
+        var empty = new VoxelMask(
+            volume.Grid,
+            new LabelMap { Version = "seeded-1.0.0", Labels = [new AnatomicalLabel("unused-1")] },
+            new byte[(long)volume.Grid.Dimensions.Columns
+                * volume.Grid.Dimensions.Rows
+                * volume.Grid.Dimensions.Slices]);
+
+        var space = new PlaneSpace(volume, empty, axes);
+        var threshold = IntensityThresholds.Otsu(volume);
+
+        var across = new[] { Across(first, axes), Across(second, axes) };
+        var line = (int)Math.Round((Line(first, axes) + Line(second, axes)) / 2.0);
+
+        var horns = new Horns(
+            plane,
+            Math.Clamp(line, 0, space.Lines - 1),
+            (int)Math.Round(Math.Min(across[0], across[1])),
+            (int)Math.Round(Math.Max(across[0], across[1])));
+
+        if (InnerSkull(space, threshold, horns, useMask: false) is not { } skull)
+        {
+            return Refused(AutomaticEvansRefusal.InnerSkullNotFound);
+        }
+
+        // Концы рогов остаются там, куда их поставил врач: округление до
+        // отсчёта сетки отняло бы у измерения точность, которой у него нет
+        // причин лишаться.
+        var segments = new EvansSegments(
+            axes.AxialAcross,
+            plane,
+            first,
+            second,
+            space.Position(skull.Start - 0.5, skull.Line, plane),
+            space.Position(skull.End + 0.5, skull.Line, plane));
+
+        var measured = LinearBiomarkers.EvansIndex(
+            volume,
+            segments.AxialAcross,
+            segments.FrontalHornFirst,
+            segments.FrontalHornSecond,
+            segments.InnerSkullFirst,
+            segments.InnerSkullSecond,
+
+            // Половина измерения сделана человеком, половина — методом, который
+            // против ручной разметки не валидирован.
+            MeasurementQuality.Questionable);
+
+        return new AutomaticEvansResult
+        {
+            Biomarker = measured with
+            {
+                Method = measured.Method with { Code = LinearBiomarkers.SeededEvansIndexCode },
+            },
+            Segments = segments,
+        };
+    }
+
+    private static int PlaneOf(VoxelPosition point, Axes axes) =>
+        (int)Math.Round(Component(point, axes.SuperiorInferior));
+
+    private static double Across(VoxelPosition point, Axes axes) =>
+        Component(point, axes.LeftRight);
+
+    private static double Line(VoxelPosition point, Axes axes) =>
+        Component(point, axes.AnteriorPosterior);
+
+    private static double Component(VoxelPosition point, int axis) => axis switch
+    {
+        0 => point.Column,
+        1 => point.Row,
+        _ => point.Slice,
+    };
 
     private static AutomaticEvansResult Refused(AutomaticEvansRefusal reason) => new() { Refusal = reason };
 
